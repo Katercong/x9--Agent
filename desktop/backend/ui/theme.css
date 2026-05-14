@@ -1,0 +1,538 @@
+/* ─────────────────────────────────────────────────────────────────
+ * X9 Design Tokens — light + dark theme
+ * Single source of truth for colors, spacing, radius, shadow, typography.
+ * Pages: append your own component styles after this file is loaded.
+ * Theme switching: set `data-theme="light"` or `"dark"` on <html>.
+ * Default is dark if no attribute is set.
+ * ───────────────────────────────────────────────────────────────── */
+
+/* === DARK (default) === */
+:root,
+:root[data-theme="dark"] {
+  /* Surface */
+  --bg:         #0b0d12;
+  --bg-elev-1:  #11151c;
+  --bg-elev-2:  #171c25;
+  --bg-elev-3:  #1f2530;
+  --bg-hover:   #232a36;
+
+  /* Text */
+  --text:       #e8ecf3;
+  --text-muted: #8b94a7;
+  --text-dim:   #5b6478;
+
+  /* Border */
+  --border:        rgba(255,255,255,0.06);
+  --border-strong: rgba(255,255,255,0.12);
+
+  /* Brand / accent */
+  --accent:       #f59e0b;
+  --accent-hover: #fbbf24;
+  --accent-text:  #1a1a1a;
+
+  /* Semantic */
+  --good: #10b981;
+  --warn: #f59e0b;
+  --bad:  #ef4444;
+  --info: #3b82f6;
+
+  /* Effects */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.35), 0 1px 3px rgba(0,0,0,0.5);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,0.5), 0 4px 12px rgba(0,0,0,0.3);
+  --glow-accent: 0 0 0 1px rgba(245,158,11,0.4), 0 0 24px rgba(245,158,11,0.15);
+  --grain: radial-gradient(ellipse at top left, rgba(245,158,11,0.06), transparent 50%),
+           radial-gradient(ellipse at bottom right, rgba(59,130,246,0.04), transparent 60%);
+}
+
+/* === SYSTEM-LIGHT === when no data-theme attribute and OS prefers light */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --bg:         #f8f9fb;
+    --bg-elev-1:  #ffffff;
+    --bg-elev-2:  #f1f3f7;
+    --bg-elev-3:  #e7eaf1;
+    --bg-hover:   #eef1f5;
+
+    --text:       #1a1f2c;
+    --text-muted: #5a6478;
+    --text-dim:   #8b94a7;
+
+    --border:        rgba(15,23,42,0.07);
+    --border-strong: rgba(15,23,42,0.15);
+
+    --accent:       #d97706;
+    --accent-hover: #b45309;
+    --accent-text:  #ffffff;
+
+    --good: #059669;
+    --warn: #d97706;
+    --bad:  #dc2626;
+    --info: #2563eb;
+
+    --shadow-sm: 0 1px 2px rgba(15,23,42,0.06);
+    --shadow-md: 0 6px 14px rgba(15,23,42,0.08), 0 1px 3px rgba(15,23,42,0.06);
+    --shadow-lg: 0 20px 40px rgba(15,23,42,0.12), 0 6px 12px rgba(15,23,42,0.08);
+    --glow-accent: 0 0 0 1px rgba(217,119,6,0.35), 0 0 20px rgba(217,119,6,0.12);
+    --grain: radial-gradient(ellipse at top left, rgba(217,119,6,0.05), transparent 55%),
+             radial-gradient(ellipse at bottom right, rgba(37,99,235,0.04), transparent 60%);
+  }
+}
+
+/* === EXPLICIT LIGHT === user pressed the toggle */
+:root[data-theme="light"] {
+  --bg:         #f8f9fb;
+  --bg-elev-1:  #ffffff;
+  --bg-elev-2:  #f1f3f7;
+  --bg-elev-3:  #e7eaf1;
+  --bg-hover:   #eef1f5;
+
+  --text:       #1a1f2c;
+  --text-muted: #5a6478;
+  --text-dim:   #8b94a7;
+
+  --border:        rgba(15,23,42,0.07);
+  --border-strong: rgba(15,23,42,0.15);
+
+  --accent:       #d97706;
+  --accent-hover: #b45309;
+  --accent-text:  #ffffff;
+
+  --good: #059669;
+  --warn: #d97706;
+  --bad:  #dc2626;
+  --info: #2563eb;
+
+  --shadow-sm: 0 1px 2px rgba(15,23,42,0.06);
+  --shadow-md: 0 6px 14px rgba(15,23,42,0.08), 0 1px 3px rgba(15,23,42,0.06);
+  --shadow-lg: 0 20px 40px rgba(15,23,42,0.12), 0 6px 12px rgba(15,23,42,0.08);
+  --glow-accent: 0 0 0 1px rgba(217,119,6,0.35), 0 0 20px rgba(217,119,6,0.12);
+  --grain: radial-gradient(ellipse at top left, rgba(217,119,6,0.05), transparent 55%),
+           radial-gradient(ellipse at bottom right, rgba(37,99,235,0.04), transparent 60%);
+}
+
+/* === Shared tokens (no theme dependency) === */
+:root {
+  /* Spacing scale */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+  --sp-8: 64px;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* Type */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable",
+               "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo,
+               Consolas, monospace;
+
+  --fs-xs: 11px;
+  --fs-sm: 12.5px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 19px;
+  --fs-2xl: 24px;
+  --fs-3xl: 32px;
+  --fs-4xl: 44px;
+
+  --lh-tight: 1.25;
+  --lh-base: 1.55;
+  --lh-loose: 1.7;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --t-fast: 120ms;
+  --t-base: 200ms;
+  --t-slow: 320ms;
+}
+
+/* === Reset / base === */
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color var(--t-base) var(--ease-out),
+              color var(--t-base) var(--ease-out);
+}
+
+::selection { background: var(--accent); color: var(--accent-text); }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); }
+
+/* Scrollbar — keep it slim, themed */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 5px;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* === Utility classes used across pages === */
+.x9-container {
+  width: min(1240px, calc(100% - 32px));
+  margin: 0 auto;
+}
+
+.x9-stack { display: grid; gap: var(--sp-3); }
+.x9-row   { display: flex; align-items: center; gap: var(--sp-3); }
+.x9-row.between { justify-content: space-between; }
+
+.x9-card {
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--sp-5);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--t-base) var(--ease-out),
+              box-shadow var(--t-base) var(--ease-out),
+              border-color var(--t-base) var(--ease-out);
+}
+.x9-card.interactive { cursor: pointer; }
+.x9-card.interactive:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.x9-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 2px var(--sp-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.x9-badge.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 35%, transparent); background: color-mix(in srgb, var(--good) 10%, var(--bg-elev-1)); }
+.x9-badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); background: color-mix(in srgb, var(--warn) 10%, var(--bg-elev-1)); }
+.x9-badge.bad  { color: var(--bad);  border-color: color-mix(in srgb, var(--bad) 35%, transparent);  background: color-mix(in srgb, var(--bad) 10%, var(--bg-elev-1)); }
+
+/* Buttons */
+.x9-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--t-fast) var(--ease-out),
+              border-color var(--t-fast) var(--ease-out),
+              transform var(--t-fast) var(--ease-out);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  line-height: 1;
+}
+.x9-btn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.x9-btn:active { transform: scale(0.98); }
+.x9-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.x9-btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.x9-btn.ghost { background: transparent; }
+.x9-btn.ghost:hover { background: var(--bg-elev-2); }
+
+/* Theme toggle (used on landing + dashboard) */
+.theme-toggle {
+  width: 36px; height: 36px;
+  display: inline-grid; place-items: center;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: color var(--t-fast) var(--ease-out),
+              border-color var(--t-fast) var(--ease-out),
+              background-color var(--t-fast) var(--ease-out);
+}
+.theme-toggle:hover { color: var(--accent); border-color: var(--border-strong); }
+.theme-toggle svg { width: 16px; height: 16px; }
+
+/* ─── Language toggle (single-button, globe-icon style) ───────────
+ * Shared across landing / login / admin / dashboard pages. Click
+ * cycles between zh and en; the visible label always shows the
+ * CURRENT language. Tooltip says what the click will do.
+ * Markup:
+ *   <button class="lang-toggle" data-current="zh|en"><svg.../><span class="lang-current">中文</span></button>
+ * ──────────────────────────────────────────────────────────────── */
+.lang-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px 0 9px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  transition: color var(--t-fast) var(--ease-out),
+              border-color var(--t-fast) var(--ease-out),
+              background-color var(--t-fast) var(--ease-out),
+              transform var(--t-fast) var(--ease-out);
+  user-select: none;
+}
+.lang-toggle:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--bg-elev-2);
+}
+.lang-toggle:active { transform: scale(0.96); }
+.lang-toggle .lang-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  transition: color var(--t-fast) var(--ease-out),
+              transform var(--t-slow) var(--ease-out);
+}
+.lang-toggle:hover .lang-icon {
+  color: var(--accent);
+  transform: rotate(12deg);
+}
+.lang-toggle .lang-current {
+  display: inline-block;
+  min-width: 14px;
+  text-align: center;
+  transition: opacity var(--t-fast) var(--ease-out),
+              transform var(--t-fast) var(--ease-out);
+}
+.lang-toggle.swapping .lang-current {
+  opacity: 0;
+  transform: translateY(-3px);
+}
+
+/* Tablet collapsed sidebar — show only the icon */
+@media (max-width: 1100px) and (min-width: 768px) {
+  .sidebar .lang-toggle {
+    padding: 0;
+    width: 32px;
+    justify-content: center;
+  }
+  .sidebar .lang-toggle .lang-current { display: none; }
+}
+
+/* Theme-toggle icon visibility — shows the OPPOSITE of current effective theme,
+   so the icon previews "what clicking will do". Includes system-preference path. */
+.theme-toggle .icon-sun  { display: block; }   /* default: assume dark, show sun */
+.theme-toggle .icon-moon { display: none; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) .theme-toggle .icon-sun  { display: none; }
+  :root:not([data-theme]) .theme-toggle .icon-moon { display: block; }
+}
+:root[data-theme="dark"]  .theme-toggle .icon-sun  { display: block; }
+:root[data-theme="dark"]  .theme-toggle .icon-moon { display: none; }
+:root[data-theme="light"] .theme-toggle .icon-sun  { display: none; }
+:root[data-theme="light"] .theme-toggle .icon-moon { display: block; }
+
+/* ──────────────────────────────────────────────────────────────────
+ * MOBILE RESPONSIVE LAYER
+ * Breakpoints:
+ *   <= 900px : tablet (collapse multi-column layouts to single column)
+ *   <= 640px : phone (compact spacing, larger tap targets, smaller type)
+ * ────────────────────────────────────────────────────────────────── */
+
+/* Tap targets — universal: any interactive control gets a min 36px hit area
+ * on touch devices. We use @media (pointer: coarse) to scope it to touch. */
+@media (pointer: coarse) {
+  button, .x9-btn, .button, input, select, textarea,
+  .tab, a.tab, .nav-link, .entry-row, .entry {
+    min-height: 38px;
+  }
+  input, select, textarea { padding: 10px 12px; font-size: 15px; /* >=16px prevents iOS zoom */ }
+  /* Prevent the iOS auto-zoom on focus by keeping input font-size at 16px+ */
+  input, select, textarea { font-size: 16px; }
+}
+
+/* === Tablet & below === */
+@media (max-width: 900px) {
+  :root {
+    --sp-7: 36px;  /* shrink the giant spacing tokens */
+    --sp-8: 48px;
+  }
+  .x9-container {
+    width: calc(100% - 24px);
+  }
+}
+
+/* === Phone === */
+@media (max-width: 640px) {
+  /* Top bar */
+  .topbar {
+    padding: 10px 12px !important;
+    flex-wrap: wrap;
+    gap: 8px !important;
+  }
+  .topbar .brand strong { font-size: 14px; }
+  .topbar .version { display: none; }
+
+  /* Tabs — horizontal scroll */
+  .tabs {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap !important;
+    scrollbar-width: none;       /* Firefox */
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    flex-shrink: 0;
+    padding: 7px 11px;
+    font-size: 13px;
+  }
+
+  /* Actions row — wrap, smaller, hide non-essential buttons */
+  .actions {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px !important;
+  }
+  .actions button {
+    padding: 7px 10px;
+    font-size: 12.5px;
+  }
+  .actions #current-user { display: none; }
+  /* "Manual re-run pipeline" is a heavy action; keep it but compact */
+
+  /* Main content padding */
+  main { padding: 12px !important; }
+
+  /* Dashboard stat cards — 2 columns instead of 4 */
+  .grid-4 {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 8px !important;
+  }
+  .card { padding: 12px !important; }
+  .card p { font-size: 18px !important; }
+
+  /* Tables already wrap in .table-scroll which gives horizontal scroll —
+     just make sure the wrapper takes full width and shows scrollbar hint */
+  .table-scroll {
+    margin: 0 -12px;            /* edge-to-edge on phone */
+    width: calc(100% + 24px);
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+  }
+  table { min-width: 0 !important; font-size: 12.5px; }
+  th, td { padding: 8px 10px !important; }
+  th { font-size: 10.5px; letter-spacing: 0.04em; }
+
+  /* Sticky header still useful but reduce z-index issues */
+  .recommendation-table .label-row th { height: auto; padding: 9px 8px !important; }
+  .recommendation-table .filter-row { display: none; }
+  /* (Filters can be re-enabled via a "Filters" button later; on phone the
+     dense filter row is unusable. Hiding it gives clean data view.) */
+
+  /* Toast — full-width with 12px margin */
+  .toast {
+    left: 12px !important;
+    right: 12px !important;
+    transform: none !important;
+    width: calc(100% - 24px);
+    max-width: none;
+    text-align: center;
+  }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Floating popovers (bio / time / etc.) should not blow past the screen */
+  .bio-popover, .time-popover {
+    width: calc(100vw - 24px) !important;
+    max-width: 360px;
+    left: 12px !important;
+    right: 12px;
+  }
+
+  /* Page heading */
+  .page-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .page-head h2 { font-size: 18px; }
+
+  /* Sort control compact */
+  .sort-control { font-size: 11px; }
+  .sort-control select { width: 130px; height: 34px; }
+
+  /* Generic theme.css containers */
+  .x9-container { width: calc(100% - 24px); }
+  .x9-card { padding: var(--sp-4); border-radius: var(--radius-md); }
+
+  /* Landing — tighter hero */
+  .hero { padding: 56px 0 36px !important; }
+  .hero h1 { font-size: clamp(26px, 9vw, 36px) !important; }
+  .hero p.sub { font-size: 15px !important; }
+  .stats {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 12px !important;
+    padding: var(--sp-3) !important;
+  }
+  .stat .v { font-size: 20px; }
+  .stat .l { font-size: 10px; }
+  .section { padding: var(--sp-6) 0 !important; }
+  .section-head h2 { font-size: 22px !important; }
+
+  /* Landing nav collapses to logo + theme toggle */
+  .nav .nav-links .nav-link { display: none; }
+  .nav .nav-links .nav-link:last-of-type { display: inline-block; } /* keep "Login" */
+
+  /* Login layout stacks already at 880px; tighten further */
+  .auth { padding: var(--sp-4) !important; }
+  .intro h1 { font-size: 26px !important; }
+
+  /* Admin */
+  .admin-header { padding: 12px 16px !important; flex-wrap: wrap; }
+  .admin-header h1 { font-size: 14px !important; }
+  .admin-header .header-actions { width: 100%; justify-content: flex-end; }
+}
+
+/* === Very narrow phones (< 380px) === */
+@media (max-width: 380px) {
+  .actions #btn-language { display: none; }
+  .actions #btn-download-extension { display: none; }
+  /* Keep refresh + pipeline + theme + logout */
+}
+
+/* === Tap-friendly: bigger row hit area in tables on touch === */
+@media (pointer: coarse) {
+  tbody tr td { padding-top: 12px; padding-bottom: 12px; }
+}

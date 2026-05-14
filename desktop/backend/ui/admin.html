@@ -1,0 +1,1024 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>X9 管理员数据看板</title>
+    <link rel="stylesheet" href="/ui/theme.css" />
+    <script>
+      // Pre-paint: lock in explicit choice; otherwise let CSS follow OS.
+      (function () {
+        var t = localStorage.getItem("x9-theme");
+        if (t === "dark" || t === "light") {
+          document.documentElement.setAttribute("data-theme", t);
+        }
+      })();
+    </script>
+    <style>
+      header.admin-header {
+        min-height: 60px;
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 14px;
+        padding: 0 22px;
+        border-bottom: 1px solid var(--border);
+        background: color-mix(in srgb, var(--bg-elev-1) 80%, transparent);
+        backdrop-filter: blur(12px) saturate(140%);
+        -webkit-backdrop-filter: blur(12px) saturate(140%);
+        position: sticky; top: 0; z-index: 5;
+      }
+      .admin-header .brand {
+        display: inline-flex; align-items: center; gap: 10px;
+        font-size: 16px; font-weight: 700; letter-spacing: -0.01em;
+      }
+      .admin-header .brand::before {
+        content: "X9";
+        display: inline-grid; place-items: center;
+        width: 26px; height: 26px;
+        background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+        color: var(--accent-text);
+        border-radius: 7px; font-weight: 800; font-size: 11px;
+        box-shadow: var(--glow-accent);
+      }
+      .admin-header .header-actions { display: flex; align-items: center; gap: 10px; }
+
+      main { padding: 24px; max-width: 1480px; margin: 0 auto; }
+      h1 { font-size: var(--fs-xl); margin: 0; letter-spacing: -0.01em; }
+      h2 { font-size: var(--fs-lg); margin: var(--sp-6) 0 var(--sp-3); font-weight: 600; letter-spacing: -0.01em; }
+      h3 { font-size: var(--fs-md); margin: 0 0 var(--sp-2); font-weight: 600; }
+      .subtle { color: var(--text-muted); font-size: var(--fs-sm); }
+
+      .grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--sp-3); }
+      .card {
+        border: 1px solid var(--border);
+        background: var(--bg-elev-1);
+        border-radius: var(--radius-lg);
+        padding: var(--sp-4) var(--sp-5);
+        box-shadow: var(--shadow-sm);
+        transition: transform var(--t-base) var(--ease-out),
+                    border-color var(--t-base) var(--ease-out),
+                    box-shadow var(--t-base) var(--ease-out);
+      }
+      .card:hover {
+        transform: translateY(-2px);
+        border-color: var(--border-strong);
+        box-shadow: var(--shadow-md);
+      }
+      .card span {
+        display: block; color: var(--text-muted);
+        font-size: var(--fs-xs); text-transform: uppercase;
+        letter-spacing: 0.06em; font-weight: 600;
+      }
+      .card strong {
+        display: block; margin-top: 6px;
+        font-size: 26px; font-weight: 700; letter-spacing: -0.02em;
+      }
+
+      .section-head {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: var(--sp-3); margin: var(--sp-6) 0 var(--sp-3);
+      }
+      .section-head h2 { margin: 0; }
+      .scope-badge {
+        border: 1px solid color-mix(in srgb, var(--info) 35%, transparent);
+        background: color-mix(in srgb, var(--info) 12%, var(--bg-elev-1));
+        color: var(--info);
+        border-radius: var(--radius-pill);
+        padding: 5px 12px;
+        font-size: var(--fs-xs);
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+      }
+
+      .business-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); align-items: start; margin-top: var(--sp-4); }
+      .business-grid .wide { grid-column: 1 / -1; }
+      .compact-table th, .compact-table td { padding: 8px 10px; }
+      .number { text-align: right; font-variant-numeric: tabular-nums; }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--bg-elev-1);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        overflow: hidden;
+        box-shadow: var(--shadow-sm);
+      }
+      th, td {
+        text-align: left;
+        border-bottom: 1px solid var(--border);
+        padding: 11px 14px;
+        font-size: var(--fs-sm);
+        vertical-align: middle;
+      }
+      th {
+        color: var(--text-muted);
+        background: var(--bg-elev-2);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-size: var(--fs-xs);
+        font-weight: 600;
+      }
+      tbody tr {
+        transition: background-color var(--t-fast) var(--ease-out);
+      }
+      tbody tr:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+      tr:last-child td { border-bottom: 0; }
+
+      button, a.button {
+        border: 1px solid var(--border);
+        background: var(--bg-elev-2);
+        color: var(--text);
+        border-radius: var(--radius-sm);
+        padding: 8px 12px;
+        cursor: pointer; text-decoration: none;
+        font: inherit; font-size: var(--fs-sm); font-weight: 500;
+        transition: background-color var(--t-fast) var(--ease-out),
+                    border-color var(--t-fast) var(--ease-out),
+                    transform var(--t-fast) var(--ease-out);
+      }
+      button:not(:disabled):hover, a.button:hover {
+        background: var(--bg-hover);
+        border-color: var(--border-strong);
+      }
+      button:active { transform: scale(0.98); }
+      button.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: var(--accent-text);
+        font-weight: 600;
+        box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 30%, transparent);
+      }
+      button.primary:not(:disabled):hover {
+        background: var(--accent-hover);
+        border-color: var(--accent-hover);
+        box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 40%, transparent);
+      }
+      button.danger {
+        border-color: color-mix(in srgb, var(--bad) 45%, var(--border));
+        color: var(--bad);
+        background: color-mix(in srgb, var(--bad) 8%, var(--bg-elev-2));
+      }
+      button.danger:hover {
+        background: color-mix(in srgb, var(--bad) 15%, var(--bg-elev-2));
+        border-color: var(--bad);
+      }
+
+      input, select {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--bg-elev-2);
+        color: var(--text);
+        padding: 9px 11px;
+        font: inherit; font-size: var(--fs-sm);
+        transition: border-color var(--t-fast) var(--ease-out),
+                    box-shadow var(--t-fast) var(--ease-out);
+      }
+      input:focus, select:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+      }
+
+      .toolbar { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin: var(--sp-3) 0; }
+      .two-col { display: grid; grid-template-columns: 1.35fr .65fr; gap: var(--sp-4); align-items: start; }
+      .panel {
+        border: 1px solid var(--border);
+        background: var(--bg-elev-1);
+        border-radius: var(--radius-lg);
+        padding: var(--sp-4) var(--sp-5);
+        box-shadow: var(--shadow-sm);
+      }
+      .actions-cell { display: flex; gap: 6px; flex-wrap: wrap; }
+      .panel-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: var(--sp-3);
+      }
+      .panel-head h2 { margin: 0; }
+      .settings-stack { display: grid; gap: var(--sp-4); }
+      .config-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: var(--sp-3);
+      }
+      .config-item {
+        min-width: 0;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg-elev-2);
+        padding: var(--sp-3);
+      }
+      .config-item span {
+        display: block;
+        color: var(--text-muted);
+        font-size: var(--fs-xs);
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .config-item strong {
+        display: block;
+        margin-top: 5px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-pill);
+        padding: 3px 9px;
+        font-size: var(--fs-xs);
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .status-pill.ok {
+        border-color: color-mix(in srgb, var(--good) 45%, var(--border));
+        color: var(--good);
+        background: color-mix(in srgb, var(--good) 10%, transparent);
+      }
+      .status-pill.warn {
+        border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+        color: var(--warn);
+        background: color-mix(in srgb, var(--warn) 10%, transparent);
+      }
+      .status-pill.bad {
+        border-color: color-mix(in srgb, var(--bad) 45%, var(--border));
+        color: var(--bad);
+        background: color-mix(in srgb, var(--bad) 10%, transparent);
+      }
+      .gmail-diagnostics {
+        display: grid;
+        gap: 8px;
+      }
+      .gmail-diagnostic {
+        border: 1px solid var(--border);
+        border-left-width: 3px;
+        border-radius: var(--radius-md);
+        background: var(--bg-elev-2);
+        padding: 10px 12px;
+      }
+      .gmail-diagnostic strong { display: block; margin-bottom: 3px; }
+      .gmail-diagnostic span { color: var(--text-muted); font-size: var(--fs-sm); }
+      .gmail-diagnostic.info { border-left-color: var(--info); }
+      .gmail-diagnostic.warn { border-left-color: var(--warn); }
+      .gmail-diagnostic.error { border-left-color: var(--bad); }
+      .table-wrap { overflow-x: auto; }
+      .message-ok { color: var(--good); }
+      .message-bad { color: var(--bad); }
+      #status {
+        color: var(--warn);
+        min-height: 20px;
+        padding: var(--sp-2) 0;
+        font-size: var(--fs-sm);
+      }
+
+      /* Language toggle pill (shared design with sidebar/login/landing) */
+      .lang-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 32px;
+        padding: 0 12px 0 9px;
+        background: transparent;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-pill);
+        color: var(--text-muted);
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+        transition: color var(--t-fast) var(--ease-out),
+                    border-color var(--t-fast) var(--ease-out),
+                    background-color var(--t-fast) var(--ease-out),
+                    transform var(--t-fast) var(--ease-out);
+      }
+      .lang-toggle:hover {
+        color: var(--text);
+        border-color: var(--border-strong);
+        background: var(--bg-elev-2);
+      }
+      .lang-toggle:active { transform: scale(0.96); }
+      .lang-toggle .lang-icon {
+        width: 14px; height: 14px;
+        color: var(--text-dim);
+        flex-shrink: 0;
+        transition: color var(--t-fast) var(--ease-out),
+                    transform var(--t-slow) var(--ease-out);
+      }
+      .lang-toggle:hover .lang-icon { color: var(--accent); transform: rotate(12deg); }
+      .lang-toggle .lang-current {
+        display: inline-block;
+        min-width: 14px;
+        text-align: center;
+        transition: opacity var(--t-fast) var(--ease-out),
+                    transform var(--t-fast) var(--ease-out);
+      }
+      .lang-toggle.swapping .lang-current { opacity: 0; transform: translateY(-3px); }
+
+      @media (max-width: 980px) {
+        .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .config-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .two-col, .business-grid { grid-template-columns: 1fr; }
+        .business-grid .wide { grid-column: auto; }
+        header.admin-header { align-items: flex-start; flex-direction: column; padding: 14px 18px; }
+      }
+      @media (max-width: 640px) {
+        .panel-head { flex-direction: column; }
+        .config-grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="admin-header">
+      <div style="display:flex;align-items:center;gap:18px;">
+        <span class="brand">X9 管理员</span>
+        <h1 style="font-size:var(--fs-md);font-weight:500;color:var(--text-muted);">数据看板</h1>
+      </div>
+      <div class="header-actions">
+        <span id="user" class="subtle"></span>
+        <button id="logout" type="button" data-i18n="auth.logout">退出</button>
+        <button id="lang-toggle" class="lang-toggle" type="button" title="切换中英文" aria-label="切换中英文">
+          <svg class="lang-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M2 12h20"/>
+            <path d="M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z"/>
+          </svg>
+          <span class="lang-current">中</span>
+        </button>
+        <button id="btn-theme-toggle" class="theme-toggle" type="button" title="切换主题" aria-label="Toggle theme">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>
+        </button>
+      </div>
+    </header>
+    <main>
+      <div class="grid" id="cards"></div>
+
+      <section id="business-dashboard">
+        <div class="section-head">
+          <h2>业务看板</h2>
+          <span id="business-scope" class="scope-badge">-</span>
+        </div>
+        <div class="grid" id="business-cards"></div>
+        <div class="business-grid">
+          <section class="panel">
+            <h3>业务状态</h3>
+            <table class="compact-table">
+              <thead><tr><th>状态</th><th class="number">数量</th></tr></thead>
+              <tbody id="business-status"></tbody>
+            </table>
+          </section>
+          <section class="panel">
+            <h3>产品方向</h3>
+            <table class="compact-table">
+              <thead><tr><th>产品</th><th class="number">数量</th></tr></thead>
+              <tbody id="business-products"></tbody>
+            </table>
+          </section>
+          <section class="panel">
+            <h3>优先级</h3>
+            <table class="compact-table">
+              <thead><tr><th>优先级</th><th class="number">数量</th></tr></thead>
+              <tbody id="business-priorities"></tbody>
+            </table>
+          </section>
+          <section class="panel">
+            <h3>BD 跟进</h3>
+            <table class="compact-table">
+              <thead><tr><th>负责人</th><th class="number">推荐</th><th class="number">待联系</th><th class="number">已推进</th></tr></thead>
+              <tbody id="business-owners"></tbody>
+            </table>
+          </section>
+          <section class="panel wide">
+            <h3>部门业务汇总</h3>
+            <table class="compact-table">
+              <thead><tr><th>部门</th><th class="number">达人</th><th class="number">推荐</th><th class="number">待联系</th><th class="number">已建联</th><th class="number">待回复</th><th class="number">已寄样</th><th class="number">已发布</th></tr></thead>
+              <tbody id="business-departments"></tbody>
+            </table>
+          </section>
+        </div>
+      </section>
+
+      <section id="super-admin-settings" hidden>
+        <div class="section-head">
+          <h2>超级管理员设置</h2>
+          <button id="refresh-system-settings" type="button">刷新设置</button>
+        </div>
+        <div class="grid" id="system-settings-cards"></div>
+        <section class="panel settings-stack" id="gmail-authorization-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Gmail 登录授权</h2>
+              <p class="subtle">用于建联邮件发件授权，超级管理员统一查看 OAuth 配置和已绑定账号。</p>
+            </div>
+            <div class="toolbar" style="margin:0;">
+              <button id="refresh-gmail-auth" type="button">刷新 Gmail</button>
+              <button id="connect-gmail-admin" class="primary" type="button">连接 Gmail</button>
+            </div>
+          </div>
+          <div id="gmail-auth-message" class="subtle"></div>
+          <div class="config-grid" id="gmail-auth-cards"></div>
+          <div id="gmail-diagnostics" class="gmail-diagnostics"></div>
+          <div class="table-wrap">
+            <table class="compact-table">
+              <thead>
+                <tr>
+                  <th>Gmail 账号</th>
+                  <th>归属用户</th>
+                  <th>部门</th>
+                  <th>状态</th>
+                  <th>最近使用</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="gmail-accounts"></tbody>
+            </table>
+          </div>
+        </section>
+        <details class="panel">
+          <summary>系统配置 JSON</summary>
+          <pre id="system-settings-json"></pre>
+        </details>
+      </section>
+
+      <section id="user-management">
+      <h2>账号审核与权限</h2>
+      <div class="two-col">
+        <section>
+          <div class="toolbar">
+            <button id="refresh-users" type="button">刷新账号</button>
+            <span id="status" class="subtle"></span>
+          </div>
+          <table>
+            <thead>
+              <tr><th>用户名</th><th>姓名</th><th>角色</th><th>部门</th><th>状态</th><th>操作</th></tr>
+            </thead>
+            <tbody id="users"></tbody>
+          </table>
+        </section>
+        <aside class="panel">
+          <h3>新增账号</h3>
+          <div class="toolbar">
+            <input id="new-username" placeholder="用户名" />
+            <input id="new-password" type="password" placeholder="初始密码" />
+            <select id="new-role">
+              <option value="department_user">部门用户</option>
+              <option value="department_admin">部门管理员</option>
+              <option value="company_admin">公司管理员</option>
+              <option value="super_admin">超级管理员</option>
+            </select>
+            <select id="new-department">
+              <option value="cross_border">跨境部</option>
+              <option value="foreign_trade">外贸部</option>
+            </select>
+            <button id="create-user" class="primary" type="button">创建</button>
+          </div>
+          <h3>修改自己的密码</h3>
+          <div class="toolbar">
+            <input id="old-password" type="password" placeholder="旧密码" />
+            <input id="new-self-password" type="password" placeholder="新密码" />
+            <button id="change-password" type="button">修改密码</button>
+          </div>
+        </aside>
+      </div>
+      </section>
+
+      <h2>部门对比</h2>
+      <table>
+        <thead><tr><th>部门</th><th>达人数据</th><th>已推荐</th><th>待审核</th><th>插件记录</th></tr></thead>
+        <tbody id="departments"></tbody>
+      </table>
+      <h2>推荐队列分布</h2>
+      <table>
+        <thead><tr><th>队列</th><th>数量</th></tr></thead>
+        <tbody id="queues"></tbody>
+      </table>
+      <h2>插件在线记录</h2>
+      <table>
+        <thead><tr><th>部门</th><th>Worker</th><th>版本</th><th>TikTok</th><th>最近心跳</th></tr></thead>
+        <tbody id="extensions"></tbody>
+      </table>
+    </main>
+    <script>
+      const API = "/api/local";
+      let currentUser = null;
+      const fmt = (n) => Number(n || 0).toLocaleString("zh-CN");
+      const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
+      const ADMIN_ROLES = ["department_admin", "company_admin", "super_admin"];
+      const productLabel = (code) => ({
+        feminine_care: "女性护理",
+        pet_care: "宠物护理",
+        home_care: "家居护理",
+        adult_care: "成人护理",
+        mom_baby: "母婴",
+        health_mask: "健康口罩",
+        general_lifestyle: "泛生活",
+        feminine_care_daily_liner: "日用护垫",
+        period_care_pad: "经期护理垫",
+        "未填写": "未填写",
+      }[code] || code || "未填写");
+      const roleLabel = (role) => ({
+        super_admin: "超级管理员",
+        company_admin: "公司管理员",
+        admin: "公司管理员",
+        department_admin: "部门管理员",
+        department_user: "部门用户",
+      }[role] || role || "-");
+      const statusLabel = (u) => {
+        if (!u.is_active) return u.approval_status === "rejected" ? "已拒绝" : "禁用";
+        if (u.approval_status === "pending") return "待审核";
+        return "启用";
+      };
+
+      async function api(path, opts) {
+        const r = await fetch(API + path, opts);
+        const payload = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          if (r.status === 401 || r.status === 403) window.location.href = "/login";
+          throw new Error(payload.detail || `${path} ${r.status}`);
+        }
+        return payload;
+      }
+
+      async function boot() {
+        const me = await api("/auth/me");
+        currentUser = me.user;
+        if (!currentUser || !ADMIN_ROLES.includes(currentUser.role)) {
+          window.location.href = "/login";
+          return;
+        }
+        document.getElementById("user").textContent = `${currentUser.display_name || currentUser.username} (${roleLabel(currentUser.role)})`;
+        if (currentUser.must_change_password) document.getElementById("status").textContent = "首次登录建议立即修改默认密码。";
+        configureUserManagement();
+        const jobs = [loadDashboard()];
+        if (currentUser.can_manage_users) jobs.push(loadUsers());
+        if (currentUser.role === "super_admin") {
+          handleGmailReturn();
+          jobs.push(loadSystemSettings(), loadGmailAuthorization());
+        }
+        await Promise.all(jobs);
+      }
+
+      function configureUserManagement() {
+        const panel = document.getElementById("user-management");
+        if (!currentUser.can_manage_users) {
+          panel.hidden = true;
+          return;
+        }
+        const roles = currentUser.role === "super_admin"
+          ? [
+              ["department_user", "部门用户"],
+              ["department_admin", "部门管理员"],
+              ["company_admin", "公司管理员"],
+              ["super_admin", "超级管理员"],
+            ]
+          : [
+              ["department_user", "部门用户"],
+              ["department_admin", "部门管理员"],
+            ];
+        document.getElementById("new-role").innerHTML = roles
+          .map(([value, label]) => `<option value="${value}">${label}</option>`)
+          .join("");
+      }
+
+      async function loadDashboard() {
+        const overview = await api("/admin/overview");
+        document.getElementById("cards").innerHTML = [
+          ["总达人", overview.total_creators],
+          ["今日采集", overview.today_creators],
+          ["已推荐", overview.recommended],
+          ["待审核", overview.pending_review],
+          ["已建联", overview.outreach_sent],
+        ].map(([label, value]) => `<div class="card"><span>${label}</span><strong>${fmt(value)}</strong></div>`).join("");
+        document.getElementById("queues").innerHTML = Object.entries(overview.queue_counts || {})
+          .sort((a, b) => b[1] - a[1])
+          .map(([name, count]) => `<tr><td>${esc(name)}</td><td>${fmt(count)}</td></tr>`).join("");
+        const departments = await api("/admin/departments");
+        document.getElementById("departments").innerHTML = (departments.items || []).map((row) => `
+          <tr><td>${esc(row.name)}</td><td>${fmt(row.creator_count)}</td><td>${fmt(row.recommended)}</td><td>${fmt(row.pending_review)}</td><td>${fmt(row.extension_count)}</td></tr>
+        `).join("");
+        const extensions = await api("/admin/extensions");
+        document.getElementById("extensions").innerHTML = (extensions.items || []).map((row) => `
+          <tr><td>${esc(row.department_code)}</td><td>${esc(row.worker_id)}</td><td>${esc(row.extension_version)}</td><td>${esc(row.tiktok_login_status)}</td><td>${esc(row.last_heartbeat_at)}</td></tr>
+        `).join("") || `<tr><td colspan="5" class="subtle">暂无插件记录</td></tr>`;
+        await loadBusinessDashboard();
+      }
+
+      function simpleRows(items, labelFn = (v) => v, limit = 8) {
+        const rows = (items || []).filter((row) => Number(row.count || 0) > 0).slice(0, limit);
+        return rows.map((row) => `<tr><td>${esc(labelFn(row.name))}</td><td class="number">${fmt(row.count)}</td></tr>`).join("")
+          || `<tr><td colspan="2" class="subtle">暂无数据</td></tr>`;
+      }
+
+      async function loadBusinessDashboard() {
+        const data = await api("/admin/business-dashboard");
+        const summary = data.summary || {};
+        document.getElementById("business-scope").textContent = data.scope?.type === "company"
+          ? "公司视图 · 全公司"
+          : `部门管理员视图 · ${data.scope?.name || currentUser.department_name || "-"}`;
+        document.getElementById("business-cards").innerHTML = [
+          ["推荐线索", summary.recommended],
+          ["待联系", summary.pending_contact],
+          ["已推进", summary.contacted],
+          ["待回复", summary.pending_reply],
+          ["近 7 天新增", summary.recent_collections_7d],
+          ["未分配推荐", summary.unassigned_recommended],
+          ["已发邮件", summary.outreach_sent],
+          ["已寄样", summary.sample_sent],
+          ["视频已发布", summary.video_published],
+          ["可联系达人", summary.contactable],
+        ].map(([label, value]) => `<div class="card"><span>${label}</span><strong>${fmt(value)}</strong></div>`).join("");
+        document.getElementById("business-status").innerHTML = simpleRows(data.business_status);
+        document.getElementById("business-products").innerHTML = simpleRows(data.products, productLabel);
+        document.getElementById("business-priorities").innerHTML = simpleRows(data.priorities);
+        document.getElementById("business-owners").innerHTML = (data.owners || []).map((row) => `
+          <tr>
+            <td>${esc(row.owner)}</td>
+            <td class="number">${fmt(row.recommended)}</td>
+            <td class="number">${fmt(row.pending_contact)}</td>
+            <td class="number">${fmt((row.contacted || 0) + (row.pending_reply || 0) + (row.sample_sent || 0) + (row.video_published || 0))}</td>
+          </tr>
+        `).join("") || `<tr><td colspan="4" class="subtle">暂无负责人数据</td></tr>`;
+        document.getElementById("business-departments").innerHTML = (data.departments || []).map((row) => `
+          <tr>
+            <td>${esc(row.name)}</td>
+            <td class="number">${fmt(row.creator_count)}</td>
+            <td class="number">${fmt(row.recommended)}</td>
+            <td class="number">${fmt(row.pending_contact)}</td>
+            <td class="number">${fmt(row.contacted)}</td>
+            <td class="number">${fmt(row.pending_reply)}</td>
+            <td class="number">${fmt(row.sample_sent)}</td>
+            <td class="number">${fmt(row.video_published)}</td>
+          </tr>
+        `).join("") || `<tr><td colspan="8" class="subtle">暂无部门数据</td></tr>`;
+      }
+
+      async function loadSystemSettings() {
+        if (currentUser.role !== "super_admin") return;
+        const section = document.getElementById("super-admin-settings");
+        section.hidden = false;
+        const data = await api("/admin/system-settings");
+        document.getElementById("system-settings-json").textContent = JSON.stringify(data, null, 2);
+        const cards = [
+          ["服务", data.app?.service],
+          ["系统版本", data.app?.system_version],
+          ["环境", data.app?.env],
+          ["后端端口", data.app?.backend_port],
+          ["数据库", data.database?.url],
+          ["远程 API", data.database?.remote_api_url],
+          ["远程表", data.database?.remote_table],
+          ["AI 模型", data.ai?.openai_model],
+          ["AI Key", data.ai?.openai_configured ? "已配置" : "未配置"],
+          ["Gmail OAuth", data.gmail?.configured ? "已配置" : "未配置"],
+          ["Gmail 授权", `${fmt(data.gmail?.account_count || 0)} 个账号`],
+        ];
+        document.getElementById("system-settings-cards").innerHTML = cards
+          .map(([label, value]) => `<div class="card"><span>${esc(label)}</span><strong>${esc(value || "-")}</strong></div>`)
+          .join("");
+      }
+
+      function gmailSourceLabel(source) {
+        return ({
+          user_file: "自定义 JSON",
+          embedded: "环境变量",
+          none: "未配置",
+        }[source] || source || "-");
+      }
+
+      function diagnosticLevelLabel(level) {
+        return ({
+          error: "错误",
+          warn: "提醒",
+          info: "信息",
+        }[level] || "信息");
+      }
+
+      function renderStatusPill(text, tone = "ok") {
+        return `<span class="status-pill ${esc(tone)}">${esc(text)}</span>`;
+      }
+
+      function fmtDateTime(value) {
+        if (!value) return "-";
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return String(value);
+        return d.toLocaleString("zh-CN", { hour12: false });
+      }
+
+      function handleGmailReturn() {
+        const params = new URLSearchParams(window.location.search);
+        if (!params.has("gmail")) return;
+        const msg = document.getElementById("gmail-auth-message");
+        const ok = params.get("gmail") === "ok";
+        const email = params.get("email") || "";
+        const err = params.get("msg") || "授权未完成";
+        if (msg) {
+          msg.dataset.gmailReturn = "1";
+          msg.className = ok ? "subtle message-ok" : "subtle message-bad";
+          msg.textContent = ok ? `Gmail 授权成功：${email || "已连接"}` : `Gmail 授权失败：${err}`;
+        }
+        params.delete("gmail");
+        params.delete("email");
+        params.delete("msg");
+        const query = params.toString();
+        window.history.replaceState({}, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+      }
+
+      async function loadGmailAuthorization() {
+        if (currentUser.role !== "super_admin") return;
+        const [status, accountData] = await Promise.all([
+          api("/outreach/gmail/status"),
+          api("/outreach/gmail/accounts"),
+        ]);
+        const accounts = accountData.items || status.accounts || [];
+        const connectBtn = document.getElementById("connect-gmail-admin");
+        const msg = document.getElementById("gmail-auth-message");
+        const blockingCodes = new Set(["gmail_libraries_missing", "client_id_missing"]);
+        const hasBlockingIssue = (status.diagnostics || []).some((item) => item.level === "error" && blockingCodes.has(item.code));
+        if (connectBtn) {
+          connectBtn.disabled = !status.configured || hasBlockingIssue;
+          connectBtn.title = status.configured && !hasBlockingIssue ? "打开 Google 授权" : "请先处理 Gmail 配置诊断";
+        }
+        if (msg && !msg.dataset.gmailReturn) {
+          msg.className = status.configured && !hasBlockingIssue ? "subtle" : "subtle message-bad";
+          msg.textContent = status.configured && !hasBlockingIssue
+            ? "Gmail 已可授权；这里管理的是发件授权，不替代系统账号登录。"
+            : "Gmail 授权还不能打开，请先处理下面的配置诊断。";
+        }
+        const originCount = (status.javascript_origins || []).length;
+        const originState = originCount
+          ? (status.origin_match ? "已匹配" : (status.current_origin ? "需配置" : "跳转授权不需要"))
+          : "未限制";
+        document.getElementById("gmail-auth-cards").innerHTML = [
+          ["OAuth 客户端", status.configured ? "已配置" : "未配置"],
+          ["配置来源", gmailSourceLabel(status.configured_source)],
+          ["授权账号", `${fmt(accounts.length)} 个`],
+          ["默认账号", status.email || "-"],
+          ["当前来源", status.current_origin || "浏览器跳转授权"],
+          ["来源校验", originState],
+          ["回调地址", status.redirect_uri_callback || status.redirect_uri || "-"],
+          ["权限范围", (status.scopes || []).length ? `${status.scopes.length} 项` : "-"],
+        ].map(([label, value]) => `
+          <div class="config-item">
+            <span>${esc(label)}</span>
+            <strong title="${esc(value || "-")}">${esc(value || "-")}</strong>
+          </div>
+        `).join("");
+        const diagnostics = status.diagnostics || [];
+        document.getElementById("gmail-diagnostics").innerHTML = diagnostics.length
+          ? diagnostics.map((item) => {
+              const level = ["error", "warn", "info"].includes(item.level) ? item.level : "info";
+              return `
+                <div class="gmail-diagnostic ${level}">
+                  <strong>${esc(diagnosticLevelLabel(level))} · ${esc(item.message || item.code || "-")}</strong>
+                  <span>${esc(item.action || "")}</span>
+                </div>
+              `;
+            }).join("")
+          : `<div class="gmail-diagnostic info"><strong>诊断正常</strong><span>OAuth 配置没有发现阻塞项。</span></div>`;
+        document.getElementById("gmail-accounts").innerHTML = accounts.map((account) => `
+          <tr data-account="${esc(account.id)}">
+            <td>
+              <strong>${esc(account.email || "-")}</strong>
+              <div class="subtle">${esc(account.label || account.display_name || "")}</div>
+            </td>
+            <td>${esc(account.user_id || "共享")}</td>
+            <td>${esc(account.department_code || "全局")}</td>
+            <td>${account.is_default ? renderStatusPill("默认", "ok") : renderStatusPill("已授权", "ok")}</td>
+            <td>${esc(fmtDateTime(account.last_used_at || account.created_at))}</td>
+            <td><div class="actions-cell">
+              ${account.is_default ? "" : `<button data-gmail-action="default" type="button">设为默认</button>`}
+              <button class="danger" data-gmail-action="remove" type="button">删除授权</button>
+            </div></td>
+          </tr>
+        `).join("") || `<tr><td colspan="6" class="subtle">暂无 Gmail 授权账号</td></tr>`;
+      }
+
+      async function loadUsers() {
+        if (!currentUser.can_manage_users) return;
+        const r = await api("/auth/users");
+        document.getElementById("users").innerHTML = (r.items || []).map((u) => `
+          <tr data-user="${esc(u.id)}">
+            <td>${esc(u.username || u.identity)}</td>
+            <td>${esc(u.display_name)}</td>
+            <td>${esc(roleLabel(u.role))}</td>
+            <td>${esc(u.department_name || "-")}</td>
+            <td>${esc(statusLabel(u))}</td>
+            <td><div class="actions-cell">
+              ${u.approval_status !== "active" ? `<button data-action="approve">通过</button>` : ""}
+              ${u.approval_status !== "rejected" ? `<button class="danger" data-action="reject">拒绝</button>` : ""}
+              ${currentUser.role === "super_admin" ? `<button data-action="reset">重置密码</button>` : ""}
+            </div></td>
+          </tr>
+        `).join("") || `<tr><td colspan="6" class="subtle">暂无用户</td></tr>`;
+      }
+
+      document.getElementById("users").addEventListener("click", async (event) => {
+        const btn = event.target.closest("button[data-action]");
+        if (!btn) return;
+        const id = btn.closest("tr")?.dataset.user;
+        if (!id) return;
+        const status = document.getElementById("status");
+        try {
+          if (btn.dataset.action === "approve") await api(`/auth/users/${encodeURIComponent(id)}/approve`, { method: "POST" });
+          if (btn.dataset.action === "reject") await api(`/auth/users/${encodeURIComponent(id)}/reject`, { method: "POST" });
+          if (btn.dataset.action === "reset") {
+            const password = prompt("输入新密码（至少 6 位）");
+            if (!password) return;
+            await api(`/auth/users/${encodeURIComponent(id)}/reset-password`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ new_password: password, must_change_password: true }),
+            });
+          }
+          status.textContent = "已更新账号。";
+          await loadUsers();
+        } catch (err) {
+          status.textContent = err.message;
+        }
+      });
+
+      document.getElementById("create-user").addEventListener("click", async () => {
+        const role = document.getElementById("new-role").value;
+        const username = document.getElementById("new-username").value.trim();
+        const password = document.getElementById("new-password").value;
+        const department = document.getElementById("new-department").value;
+        const status = document.getElementById("status");
+        if (!username || !password) return;
+        try {
+          await api("/auth/users", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              username,
+              password,
+              role,
+              department_code: ["department_user", "department_admin"].includes(role) ? department : null,
+              is_active: true,
+              approval_status: "active",
+            }),
+          });
+          document.getElementById("new-username").value = "";
+          document.getElementById("new-password").value = "";
+          status.textContent = "账号已创建。";
+          await loadUsers();
+        } catch (err) {
+          status.textContent = err.message;
+        }
+      });
+
+      document.getElementById("change-password").addEventListener("click", async () => {
+        const oldPassword = document.getElementById("old-password").value;
+        const newPassword = document.getElementById("new-self-password").value;
+        const status = document.getElementById("status");
+        try {
+          await api("/auth/change-password", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+          });
+          status.textContent = "密码已修改。";
+          document.getElementById("old-password").value = "";
+          document.getElementById("new-self-password").value = "";
+        } catch (err) {
+          status.textContent = err.message;
+        }
+      });
+
+      document.getElementById("gmail-accounts").addEventListener("click", async (event) => {
+        const btn = event.target.closest("button[data-gmail-action]");
+        if (!btn) return;
+        const row = btn.closest("tr");
+        const id = row?.dataset.account;
+        if (!id) return;
+        const email = row.querySelector("strong")?.textContent || "";
+        const msg = document.getElementById("gmail-auth-message");
+        try {
+          if (btn.dataset.gmailAction === "default") {
+            await api(`/outreach/gmail/accounts/${encodeURIComponent(id)}/default`, { method: "POST" });
+            if (msg) {
+              delete msg.dataset.gmailReturn;
+              msg.className = "subtle message-ok";
+              msg.textContent = `已设为默认发件账号：${email}`;
+            }
+          }
+          if (btn.dataset.gmailAction === "remove") {
+            if (!confirm(`确定删除这个 Gmail 授权账号？\n${email}`)) return;
+            await api(`/outreach/gmail/accounts/${encodeURIComponent(id)}`, { method: "DELETE" });
+            if (msg) {
+              delete msg.dataset.gmailReturn;
+              msg.className = "subtle message-ok";
+              msg.textContent = `已删除 Gmail 授权：${email}`;
+            }
+          }
+          await Promise.all([loadSystemSettings(), loadGmailAuthorization()]);
+        } catch (err) {
+          if (msg) {
+            delete msg.dataset.gmailReturn;
+            msg.className = "subtle message-bad";
+            msg.textContent = err.message;
+          }
+        }
+      });
+
+      document.getElementById("refresh-gmail-auth").addEventListener("click", async () => {
+        const msg = document.getElementById("gmail-auth-message");
+        if (msg) {
+          delete msg.dataset.gmailReturn;
+          msg.className = "subtle";
+          msg.textContent = "";
+        }
+        await Promise.all([loadSystemSettings(), loadGmailAuthorization()]);
+      });
+      document.getElementById("connect-gmail-admin").addEventListener("click", () => {
+        const url = `${API}/outreach/gmail/connect?return_to=${encodeURIComponent("/admin/")}&label=${encodeURIComponent("super-admin")}`;
+        window.location.href = url;
+      });
+      document.getElementById("refresh-users").addEventListener("click", loadUsers);
+      document.getElementById("refresh-system-settings").addEventListener("click", loadSystemSettings);
+      document.getElementById("logout").addEventListener("click", async () => {
+        await fetch(`${API}/auth/logout`, { method: "POST" }).catch(() => undefined);
+        window.location.href = "/login";
+      });
+
+      // Theme toggle — flips the EFFECTIVE theme. Effective = explicit choice
+      // if set, else system preference.
+      const themeBtn = document.getElementById("btn-theme-toggle");
+      if (themeBtn) {
+        themeBtn.addEventListener("click", () => {
+          const explicit = document.documentElement.getAttribute("data-theme");
+          const systemDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+          const effective = explicit || (systemDark ? "dark" : "light");
+          const next = effective === "dark" ? "light" : "dark";
+          document.documentElement.setAttribute("data-theme", next);
+          localStorage.setItem("x9-theme", next);
+        });
+      }
+      window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
+        if (!localStorage.getItem("x9-theme")) {
+          document.documentElement.removeAttribute("data-theme");
+        }
+      });
+
+      // ─── Language switcher (admin) ───────────────────────────────
+      // Translate the header chrome (logout, brand). Body content keys
+      // are added incrementally; until then the body stays Chinese, but
+      // the preference is persisted to the shared key so other pages
+      // (dashboard, login, landing) respect it immediately.
+      const I18N_ADMIN = {
+        "zh-CN": {
+          "auth.logout": "退出",
+          "admin.brand": "X9 管理员",
+          "admin.subtitle": "数据看板",
+          "doc.title": "X9 管理员数据看板",
+        },
+        "en": {
+          "auth.logout": "Logout",
+          "admin.brand": "X9 Admin",
+          "admin.subtitle": "Operations dashboard",
+          "doc.title": "X9 admin dashboard",
+        },
+      };
+      const LANG_KEY = "x9_ui_language";
+      let currentAdminLang = localStorage.getItem(LANG_KEY) === "en" ? "en" : "zh-CN";
+      function tAdmin(k) { return I18N_ADMIN[currentAdminLang]?.[k] ?? I18N_ADMIN["zh-CN"][k] ?? k; }
+      function applyAdminI18n() {
+        document.documentElement.lang = currentAdminLang === "en" ? "en" : "zh-CN";
+        document.title = tAdmin("doc.title");
+        document.querySelectorAll("[data-i18n]").forEach((el) => {
+          el.textContent = tAdmin(el.getAttribute("data-i18n"));
+        });
+        const brandEl = document.querySelector(".admin-header .brand");
+        if (brandEl) brandEl.textContent = tAdmin("admin.brand");
+        const subEl = document.querySelector(".admin-header h1");
+        if (subEl) subEl.textContent = tAdmin("admin.subtitle");
+        const btn = document.getElementById("lang-toggle");
+        if (btn) {
+          const label = btn.querySelector(".lang-current");
+          if (label) label.textContent = currentAdminLang === "en" ? "EN" : "中";
+          const tip = currentAdminLang === "en" ? "切换到中文" : "Switch to English";
+          btn.title = tip;
+          btn.setAttribute("aria-label", tip);
+        }
+      }
+      document.getElementById("lang-toggle")?.addEventListener("click", (e) => {
+        const btn = e.currentTarget;
+        btn.classList.add("swapping");
+        setTimeout(() => {
+          currentAdminLang = currentAdminLang === "en" ? "zh-CN" : "en";
+          localStorage.setItem(LANG_KEY, currentAdminLang === "en" ? "en" : "zh");
+          applyAdminI18n();
+          btn.classList.remove("swapping");
+        }, 120);
+      });
+      applyAdminI18n();
+
+      boot().catch((err) => { document.body.innerHTML = `<main style="padding:24px;color:var(--bad)">${esc(err.message)}</main>`; });
+    </script>
+  </body>
+</html>

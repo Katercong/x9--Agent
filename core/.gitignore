@@ -1,0 +1,10 @@
+# Sensitive: do not commit
+.api_key
+.bootstrap_admin_key_FIRST_USE_ONLY.txt
+.local_keys_backup.txt
+__pycache__/
+app/__pycache__/
+database.db
+database.db-shm
+database.db-wal
+exports/

@@ -1,0 +1,5 @@
+本地两份 key 备份在哪
+F:\Claude_Project\Database\.local_keys_backup.txt
+
+如果以后两份都丢了
+兜底还在：双击 reset_key.bat zhang（或 liao）—— 控制台直接打印新 token，撤销所有旧 key。
