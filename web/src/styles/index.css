@@ -1,0 +1,97 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --sidebar-bg: #1f1f2e;
+    --sidebar-hover: #2a2a3d;
+    --accent-orange: #f97316;
+    --accent-orange-bg: #fef3eb;
+    --brand: #3370ff;
+    --good: #16a34a;
+    --warn: #f5a623;
+    --bad: #ef4444;
+    --muted: #86909c;
+    --line: #e5e6eb;
+    --soft: #f7f7f9;
+  }
+
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--soft);
+    color: #1f2329;
+    font-size: 13px;
+    font-feature-settings: 'tnum';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  * { box-sizing: border-box; }
+
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+  }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #d4d7de; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #b8bcc6; }
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-line rounded-lg shadow-card;
+  }
+  .card-body {
+    @apply p-4;
+  }
+  .kpi-icon {
+    @apply flex items-center justify-center rounded-full shrink-0;
+  }
+  .pill {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xxs font-medium;
+  }
+  .pill-good { @apply bg-green-50 text-green-700; }
+  .pill-warn { @apply bg-amber-50 text-amber-700; }
+  .pill-bad { @apply bg-red-50 text-red-700; }
+  .pill-info { @apply bg-blue-50 text-blue-700; }
+  .pill-muted { @apply bg-gray-100 text-gray-600; }
+
+  .table-x9 {
+    @apply w-full text-xs;
+  }
+  .table-x9 thead th {
+    @apply text-left font-medium text-muted px-3 py-2 border-b border-line bg-white;
+  }
+  .table-x9 tbody td {
+    @apply px-3 py-2 border-b border-line/60;
+  }
+  .table-x9 tbody tr:hover {
+    @apply bg-soft;
+  }
+
+  .btn {
+    @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border border-line bg-white text-gray-700 hover:bg-soft transition-colors;
+  }
+  .btn-primary {
+    @apply bg-brand-500 text-white border-brand-500 hover:bg-brand-600 hover:border-brand-600;
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent hover:bg-soft;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 px-2 py-1 rounded text-xs bg-white border border-line text-gray-700 hover:bg-soft cursor-pointer;
+  }
+
+  .sec-title {
+    @apply text-sm font-semibold text-gray-800 mb-3;
+  }
+}
