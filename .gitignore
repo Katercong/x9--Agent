@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Node
+node_modules/
+*.log
+*.tsbuildinfo
+
+# 环境/密钥(永远不能提交)
+.env
+.env.shared
+.env.*
+.api_key
+*.local_keys_backup.txt
+gmail_client_secret.json
+gmail_token_*.json
+
+# 本地数据(各自保留,不进 git)
+core/database.db
+core/database.db.*
+desktop/data/creators.sqlite
+desktop/data/*.sqlite-journal
+*.bak
+*.frozen_*
+/core/*.db
+/core/*.db.*
+~$*.xlsx
+
+# 备份目录
+/backup/
+/.tools/
+
+# Local accounts, exports, generated datasets
+/账号密码管理/
+/scrapers/output/
+/core/exports/
+/desktop/logs/
+/desktop/data/
+/core/*.zip
+/infra/scripts/*.zip
+/extension-archive/*.zip
+/web/dist/
+/web/dist-deploy/
+/web/vite.config.js
+/web/vite.config.d.ts
+/core/app/static/web-preview/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+.claude/
+*.swp
+
+# 日志
+logs/
+*.err.log
+*.out.log

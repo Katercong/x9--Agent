@@ -1,0 +1,2804 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>X9 跨境数据库 · 产品 / 达人 / 建联</title>
+<style>
+  :root {
+    --bg:#f7f7f9;
+    --panel:#fff;
+    --border:#e5e6eb;
+    --text:#1f2329;
+    --muted:#86909c;
+    --accent:#3370ff;
+    --accent-soft:#eef2ff;
+    --warn:#f5a623;
+    --good:#16a34a;
+    --bad:#ef4444;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,Segoe UI,Roboto,"Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); font-size:13px; }
+  header { display:flex; align-items:center; padding:10px 16px; background:#fff; border-bottom:1px solid var(--border); position:sticky; top:0; z-index:10; }
+  header h1 { font-size:15px; margin:0 16px 0 0; }
+  nav button { padding:6px 12px; margin-right:6px; border:1px solid var(--border); background:#fff; border-radius:6px; cursor:pointer; font-size:13px; }
+  nav button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  nav button:hover:not(.active) { background:var(--accent-soft); }
+  .stats { margin-left:auto; display:flex; gap:14px; color:var(--muted); font-size:12px; align-items:center; }
+  .stats b { color:var(--text); margin-right:2px; }
+  .who { padding:3px 10px; background:var(--accent-soft); border-radius:14px; font-size:12px; color:var(--accent); cursor:pointer; }
+  .who.admin { background:#fff7e6; color:#d46b08; }
+  main { padding:14px 16px; }
+  .toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; align-items:center; }
+  .toolbar input[type=text], .toolbar select { padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px; }
+  .toolbar input[type=text] { min-width:200px; }
+  .toolbar .right { margin-left:auto; }
+  table { width:100%; background:var(--panel); border-collapse:collapse; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  th, td { padding:8px 10px; text-align:left; border-bottom:1px solid var(--border); vertical-align:top; }
+  th { background:#fafbfc; font-weight:600; font-size:12px; color:#4e5969; }
+  /* sticky 表头在临界滚动位置会被前一行"穿透"，关掉避免错位（数据少时不需要） */
+  tr:hover { background:#fafbfc; cursor:pointer; }
+  .pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; line-height:18px; }
+  .pill-tier-S { background:#fff1eb; color:#d4380d; }
+  .pill-tier-A { background:#fff7e6; color:#d46b08; }
+  .pill-tier-B { background:#e6f4ff; color:#1677ff; }
+  .pill-tier-C { background:#f6ffed; color:#389e0d; }
+  .pill-tier-D { background:#f5f5f5; color:#666; }
+  .pill-status { background:#f0f5ff; color:#1677ff; }
+  .pill-main { background:#fff1f0; color:#cf1322; font-weight:bold; }
+  .img-thumb { width:36px; height:36px; object-fit:cover; border-radius:4px; border:1px solid var(--border); }
+  .imgs { display:flex; gap:4px; }
+  .empty { padding:40px; text-align:center; color:var(--muted); }
+  .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.4); display:none; align-items:center; justify-content:center; z-index:100; }
+  .modal-bg.show { display:flex; }
+  .modal { background:#fff; border-radius:10px; max-width:1000px; width:96%; max-height:92vh; overflow:auto; padding:20px; }
+  .modal h2 { margin:0 0 12px; font-size:16px; }
+  .modal-close { float:right; cursor:pointer; color:var(--muted); font-size:20px; line-height:1; }
+  .field { display:grid; grid-template-columns:140px 1fr; gap:8px; margin-bottom:8px; align-items:start; }
+  .field label { color:var(--muted); padding-top:6px; font-size:12px; }
+  .field input, .field textarea, .field select { width:100%; padding:6px 8px; border:1px solid var(--border); border-radius:5px; font:inherit; }
+  .field textarea { min-height:60px; font-family:inherit; }
+  .field-arr { display:flex; flex-direction:column; gap:4px; }
+  .field-arr input { width:100%; }
+  .modal .actions { margin-top:14px; display:flex; gap:8px; justify-content:flex-end; }
+  .btn { padding:7px 14px; border:1px solid var(--border); background:#fff; border-radius:6px; cursor:pointer; font:inherit; }
+  .btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .btn-primary:hover { filter:brightness(1.1); }
+  .gallery { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; max-height:280px; overflow:auto; padding:6px; border:1px dashed var(--border); border-radius:6px; }
+  .gallery img { width:80px; height:80px; object-fit:cover; border-radius:4px; border:1px solid var(--border); cursor:pointer; }
+  .meta { font-size:11px; color:var(--muted); margin-top:4px; }
+  .timeline { margin-top:8px; border-left:2px solid var(--border); padding-left:14px; }
+  .timeline-item { padding:6px 0; }
+  .timeline-item .when { color:var(--muted); font-size:11px; }
+  .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  details summary { cursor:pointer; padding:6px 0; font-weight:600; font-size:12px; color:#4e5969; }
+  .tag-list span { display:inline-block; padding:1px 7px; margin:2px 3px 2px 0; background:#f5f6f7; border-radius:3px; font-size:11px; }
+  a.handle-link { color:var(--accent); text-decoration:none; }
+  a.handle-link:hover { text-decoration:underline; }
+
+  .biz-head { display:flex; align-items:flex-end; justify-content:space-between; gap:14px; margin-bottom:12px; }
+  .biz-title h2 { margin:0; font-size:20px; letter-spacing:0; }
+  .biz-title .meta { font-size:12px; margin-top:6px; }
+  .biz-kpis { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px; margin-bottom:12px; }
+  .biz-kpi { background:#fff; border:1px solid var(--border); border-left:4px solid var(--accent); border-radius:8px; padding:12px; min-height:92px; }
+  .biz-kpi.good { border-left-color:var(--good); }
+  .biz-kpi.warn { border-left-color:var(--warn); }
+  .biz-kpi.bad { border-left-color:var(--bad); }
+  .biz-kpi-label { color:var(--muted); font-size:12px; margin-bottom:8px; }
+  .biz-kpi-value { font-size:26px; font-weight:700; line-height:1; }
+  .biz-kpi-sub { color:var(--muted); font-size:12px; margin-top:8px; line-height:1.4; }
+  .biz-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; align-items:start; }
+  .biz-panel { background:#fff; border:1px solid var(--border); border-radius:8px; padding:12px; }
+  .biz-panel-title { display:flex; align-items:center; justify-content:space-between; gap:8px; color:#4e5969; font-weight:600; margin-bottom:10px; }
+  .biz-wide { grid-column:1 / -1; }
+  .biz-bar-row { display:grid; grid-template-columns:116px 1fr 42px; gap:8px; align-items:center; margin:7px 0; }
+  .biz-bar-name { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .biz-bar-track { height:18px; background:#f1f4f9; border-radius:4px; overflow:hidden; }
+  .biz-bar-fill { height:100%; background:var(--accent); border-radius:4px; }
+  .biz-bar-fill.good { background:var(--good); }
+  .biz-bar-fill.warn { background:var(--warn); }
+  .biz-bar-value { text-align:right; font-weight:600; font-size:12px; }
+  .biz-actions { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
+  .biz-action { border:1px solid var(--border); border-radius:8px; padding:10px; background:#fafbfc; }
+  .biz-action.good { border-color:#b7eb8f; background:#f6ffed; }
+  .biz-action.warn { border-color:#ffe58f; background:#fffbe6; }
+  .biz-action.bad { border-color:#ffccc7; background:#fff1f0; }
+  .biz-action b { display:block; font-size:18px; margin-bottom:4px; }
+  .biz-action span { color:var(--muted); font-size:12px; }
+  .biz-alert { margin-bottom:10px; padding:9px 12px; border:1px solid #d6e4ff; background:#f0f5ff; color:#1d39c4; border-radius:8px; font-size:12px; }
+  .biz-alert.warn { border-color:#ffe58f; background:#fffbe6; color:#ad6800; }
+  .biz-table td, .biz-table th { font-size:12px; }
+  @media (max-width: 1000px) {
+    .biz-kpis { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .biz-grid { grid-template-columns:1fr; }
+    .biz-wide { grid-column:auto; }
+  }
+  @media (max-width: 640px) {
+    .biz-head { align-items:flex-start; flex-direction:column; }
+    .biz-kpis, .biz-actions { grid-template-columns:1fr; }
+    .biz-bar-row { grid-template-columns:92px 1fr 36px; }
+  }
+
+  /* ========== Floating AI Assistant ========== */
+  #ai-fab {
+    position:fixed; bottom:24px; right:24px; width:56px; height:56px;
+    border-radius:28px; background:var(--accent); color:#fff;
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    box-shadow:0 4px 16px rgba(51,112,255,0.4); z-index:90;
+    font-size:26px; transition:transform .15s, box-shadow .15s;
+    user-select:none;
+  }
+  #ai-fab:hover { transform:scale(1.08); box-shadow:0 6px 20px rgba(51,112,255,0.5); }
+  #ai-fab.has-msg::after {
+    content:''; position:absolute; top:-2px; right:-2px;
+    width:14px; height:14px; background:#ef4444; border:2px solid #fff;
+    border-radius:50%;
+  }
+  #ai-panel {
+    position:fixed; bottom:90px; right:24px; width:380px; height:560px;
+    background:#fff; border:1px solid var(--border); border-radius:12px;
+    box-shadow:0 12px 36px rgba(0,0,0,0.15);
+    display:flex; flex-direction:column; z-index:91; overflow:hidden;
+  }
+  #ai-panel.hidden, #ai-fab.hidden { display:none !important; }
+  .ai-pane-header {
+    padding:10px 14px; background:var(--accent); color:#fff;
+    display:flex; align-items:center; gap:8px;
+  }
+  .ai-pane-header .title { font-weight:600; flex:1; }
+  .ai-pane-header button {
+    background:rgba(255,255,255,0.15); color:#fff; border:none;
+    padding:4px 10px; border-radius:4px; cursor:pointer; font-size:12px;
+  }
+  .ai-pane-header button:hover { background:rgba(255,255,255,0.25); }
+  .ai-pane-status {
+    padding:6px 14px; background:#fafbfc; border-bottom:1px solid var(--border);
+    font-size:11px; color:var(--muted);
+  }
+  .ai-pane-status.warn { background:#fff7e6; color:#d46b08; }
+  .ai-pane-msgs {
+    flex:1; overflow-y:auto; padding:10px 12px; background:#fff;
+  }
+  .ai-pane-input {
+    border-top:1px solid var(--border); padding:8px;
+    display:flex; gap:6px; align-items:flex-end;
+  }
+  .ai-pane-input textarea {
+    flex:1; padding:8px; border:1px solid var(--border); border-radius:5px;
+    font:inherit; resize:none; min-height:38px; max-height:120px; font-size:13px;
+  }
+  .ai-pane-input button {
+    padding:9px 14px; background:var(--accent); color:#fff;
+    border:none; border-radius:5px; cursor:pointer; font:inherit;
+  }
+  .ai-pane-input button:disabled { background:#ccc; cursor:not-allowed; }
+  .ai-msg-user {
+    margin:8px 0; display:flex; justify-content:flex-end;
+  }
+  .ai-msg-user > div {
+    max-width:80%; padding:7px 11px; background:var(--accent); color:#fff;
+    border-radius:12px 12px 2px 12px; white-space:pre-wrap; font-size:13px;
+  }
+  .ai-msg-bot {
+    margin:8px 0; display:flex; align-items:flex-start; gap:6px;
+  }
+  .ai-msg-bot .icon { font-size:18px; margin-top:4px; flex-shrink:0; }
+  .ai-msg-bot > .body {
+    max-width:84%; padding:7px 11px; background:#f5f6f7;
+    border-radius:12px 12px 12px 2px; font-size:13px; line-height:1.55;
+  }
+  .ai-msg-bot .body code { background:#e5e6eb; padding:0 4px; border-radius:3px; font-size:12px; }
+  .ai-msg-bot .body pre {
+    background:#1f2329; color:#fff; padding:8px; border-radius:5px;
+    overflow-x:auto; margin:5px 0; font-size:11px;
+  }
+  /* Action button rendered from special markdown links */
+  .ai-action-btn {
+    display:inline-flex; align-items:center; gap:4px;
+    padding:3px 9px; margin:2px 3px 2px 0;
+    background:var(--accent-soft); color:var(--accent); border-radius:11px;
+    font-size:12px; text-decoration:none; cursor:pointer; font-weight:500;
+  }
+  .ai-action-btn:hover { background:var(--accent); color:#fff; text-decoration:none; }
+</style>
+</head>
+<body>
+<!-- 登录浮层 -->
+<div id="login-overlay" style="display:none;position:fixed;inset:0;background:rgba(255,255,255,0.96);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:28px;width:420px;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+    <h2 style="margin:0 0 8px;font-size:18px;">登录 X9 数据库</h2>
+    <div class="meta" style="margin-bottom:14px">输入你的个人 API Key（管理员通过"用户管理"签发给你）</div>
+    <input id="login-input" type="password" placeholder="X-API-Key" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;font-size:13px;margin-bottom:10px;">
+    <div id="login-err" style="color:var(--bad);font-size:12px;min-height:18px;margin-bottom:8px;"></div>
+    <button class="btn btn-primary" style="width:100%" onclick="doLogin()">登录</button>
+    <div class="meta" style="margin-top:10px">第一次使用？管理员的初始 Key 在项目根目录 <code>.api_key</code> 文件里。</div>
+  </div>
+</div>
+<header>
+  <h1>X9 跨境数据库</h1>
+  <nav>
+    <button data-view="business" class="active">业务看板</button>
+    <button data-view="products">产品 <span id="nav-products-count">…</span></button>
+    <button data-view="creators">达人 <span id="nav-creators-count">…</span></button>
+    <button data-view="leads">🕷️ Lead 池</button>
+    <button data-view="outreach">建联流水</button>
+    <button data-view="dashboard">概览</button>
+    <button data-view="hotkw">🔥 TK 热搜</button>
+    <button data-view="agent">🤖 AI 助手</button>
+    <button data-view="settings">设置</button>
+  </nav>
+  <div class="stats" id="stats"></div>
+  <div id="who-badge" class="who" onclick="logout()" title="点击登出"></div>
+</header>
+<main>
+  <div id="view-business" class="view">
+    <div class="biz-head">
+      <div class="biz-title">
+        <h2>业务数据看板</h2>
+        <div class="meta">产品、达人线索、建联进度、热搜机会与待推进事项</div>
+      </div>
+      <button class="btn" onclick="loadBusinessDashboard()">刷新</button>
+    </div>
+    <div id="biz-alert" class="biz-alert">正在加载业务统计...</div>
+    <div id="biz-kpis" class="biz-kpis"></div>
+    <div class="biz-grid">
+      <div class="biz-panel">
+        <div class="biz-panel-title">产品结构 <span class="meta" id="biz-products-total"></span></div>
+        <div id="biz-products-chart"></div>
+      </div>
+      <div class="biz-panel">
+        <div class="biz-panel-title">达人线索质量 <span class="meta" id="biz-leads-total"></span></div>
+        <div id="biz-leads-chart"></div>
+      </div>
+      <div class="biz-panel">
+        <div class="biz-panel-title">建联进度 <span class="meta" id="biz-outreach-total"></span></div>
+        <div id="biz-outreach-chart"></div>
+      </div>
+      <div class="biz-panel">
+        <div class="biz-panel-title">团队分配 <span class="meta" id="biz-owner-total"></span></div>
+        <div id="biz-owner-chart"></div>
+      </div>
+      <div class="biz-panel">
+        <div class="biz-panel-title">热搜机会 <span class="meta" id="biz-keyword-total"></span></div>
+        <div id="biz-keyword-chart"></div>
+      </div>
+      <div class="biz-panel">
+        <div class="biz-panel-title">需要推进</div>
+        <div id="biz-actions" class="biz-actions"></div>
+      </div>
+      <div class="biz-panel biz-wide">
+        <div class="biz-panel-title">优先跟进线索 <span class="meta">按推荐分排序，不展示完整邮箱</span></div>
+        <table class="biz-table">
+          <thead><tr><th>达人</th><th>Fit</th><th>推荐分</th><th>品类</th><th>优先级</th><th>邮箱</th></tr></thead>
+          <tbody id="biz-top-leads"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="view-products" class="view" style="display:none">
+    <div class="toolbar">
+      <input id="p-search" type="text" placeholder="搜 SKU / 名称 / 系列">
+      <select id="p-cat"><option value="">全部类目</option></select>
+      <select id="p-main"><option value="">全部</option><option value="1">仅主推</option><option value="0">非主推</option></select>
+      <button class="btn" id="p-reload">刷新</button>
+      <div class="right">
+        <button class="btn btn-primary" id="p-new">+ 新增 SKU</button>
+      </div>
+    </div>
+    <table id="t-products">
+      <thead><tr>
+        <th>SKU</th><th>名称</th><th>类目/子类</th><th>规格</th><th>价格(USD)</th>
+        <th>主推</th><th>匹配等级</th><th>图片</th><th>更新时间</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="view-creators" class="view" style="display:none">
+    <div class="toolbar">
+      <input id="c-search" type="text" placeholder="搜 handle / 备注">
+      <select id="c-tier"><option value="">全部等级</option><option>S</option><option>A</option><option>B</option><option>C</option><option>D</option></select>
+      <select id="c-status">
+        <option value="">全部状态</option>
+        <option value="prospect">候选</option>
+        <option value="contacted">已建联</option>
+        <option value="confirmed">已确认</option>
+        <option value="sample_shipped">已寄样</option>
+        <option value="sample_delivered">样品签收</option>
+        <option value="video_published">视频已发布</option>
+        <option value="ad_authorized">已授权</option>
+        <option value="ad_running">广告投放中</option>
+        <option value="dropped">放弃</option>
+      </select>
+      <select id="c-owner"><option value="">全部对接人</option></select>
+      <button class="btn" id="c-reload">刷新</button>
+      <div class="right">
+        <button class="btn btn-primary" id="c-new">+ 新增达人</button>
+      </div>
+    </div>
+    <!-- 3.1.2 + 3.1.3: 高级筛选行 -->
+    <div class="toolbar" style="margin-top:-4px">
+      <select id="c-followers-range">
+        <option value="">全部粉丝量</option>
+        <option value="0:1000">＜1K（D 级）</option>
+        <option value="1000:500000">⭐ 中腰部 KOC (1K-50W)</option>
+        <option value="1000:10000">1K-1W</option>
+        <option value="10000:100000">1W-10W (C级)</option>
+        <option value="100000:300000">10W-30W (B级)</option>
+        <option value="300000:1000000">30W-100W (A级)</option>
+        <option value="1000000:99999999">＞100W (S级)</option>
+      </select>
+      <select id="c-engagement">
+        <option value="">全部互动率</option>
+        <option value="0.01">≥1%</option>
+        <option value="0.03">≥3%</option>
+        <option value="0.05">≥5%</option>
+        <option value="0.1">≥10%</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;padding:6px 10px;border:1px solid var(--border);border-radius:6px">
+        <input type="checkbox" id="c-exclude-competitor" checked> 排除竞品合作
+      </label>
+      <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;padding:6px 10px;border:1px solid var(--border);border-radius:6px">
+        <input type="checkbox" id="c-exclude-blacklist" checked> 排除黑名单
+      </label>
+      <button class="btn" onclick="aiAction('#run-query:creators_blacklisted')" title="查看所有黑名单达人">查看黑名单</button>
+      <button class="btn" onclick="aiAction('#run-query:creators_mid_tier_koc')" title="一键命名查询：中腰部 KOC">⭐ 中腰部 KOC</button>
+    </div>
+    <table id="t-creators">
+      <thead><tr>
+        <th>Handle</th><th>等级</th><th>粉丝</th><th>30d GMV</th><th>PPS</th>
+        <th>当前状态</th><th>店铺/对接人</th><th>近期日期</th><th>备注</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="view-leads" class="view" style="display:none">
+    <div class="toolbar">
+      <input id="ld-search" type="text" placeholder="搜 handle / 名称">
+      <select id="ld-platform">
+        <option value="">全平台</option>
+        <option value="tiktok">TikTok</option>
+        <option value="instagram">Instagram</option>
+        <option value="youtube">YouTube</option>
+      </select>
+      <select id="ld-fit-level">
+        <option value="">全部 fit</option>
+        <option value="S">S 级</option>
+        <option value="A">A 级</option>
+        <option value="B">B 级</option>
+        <option value="C">C 级</option>
+      </select>
+      <select id="ld-category">
+        <option value="">全部品类</option>
+        <option value="feminine_care">女性护理</option>
+        <option value="pet_care">宠物</option>
+        <option value="home_care">家居</option>
+        <option value="adult_care">成人护理</option>
+        <option value="mom_baby">母婴</option>
+        <option value="health_mask">健康/口罩</option>
+        <option value="general_lifestyle">生活方式</option>
+      </select>
+      <select id="ld-has-email">
+        <option value="">邮箱不限</option>
+        <option value="1">仅有邮箱</option>
+        <option value="0">仅无邮箱</option>
+      </select>
+      <button class="btn" id="ld-reload">刷新</button>
+      <div class="right">
+        <span id="ld-count" class="pill" style="background:#f0f5ff;color:#1d39c4">— 条</span>
+      </div>
+    </div>
+    <div id="ld-empty" style="display:none;padding:24px;background:#fffbe6;border:1px solid #ffe58f;border-radius:8px;margin-bottom:12px">
+      <b>📭 Lead 池暂无数据</b><br>
+      <span style="color:#666;font-size:12px">廖爬虫开始灌数据后这里会自动显示。手动测试可调：<code style="background:#fff;padding:2px 6px;border-radius:3px">POST /api/v1/data/creator_leads/bulk</code></span>
+    </div>
+    <table id="t-leads">
+      <thead><tr>
+        <th>平台</th><th>Handle</th><th>名称</th><th>粉丝</th><th>Fit</th>
+        <th>Priority</th><th>主品类</th><th>邮箱</th><th>状态</th><th>采集时间</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="view-outreach" class="view" style="display:none">
+    <div class="toolbar">
+      <button class="btn" id="o-reload">刷新</button>
+    </div>
+    <table id="t-outreach">
+      <thead><tr>
+        <th>日期</th><th>店铺</th><th>对接人</th><th>达人</th><th>状态</th>
+        <th>样品数</th><th>佣金</th><th>视频链接</th><th>授权码</th><th>备注</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="view-dashboard" class="view" style="display:none">
+    <div class="grid-2">
+      <div class="panel">
+        <details open><summary>产品分布</summary><div id="d-cat"></div></details>
+      </div>
+      <div class="panel">
+        <details open><summary>达人状态分布</summary><div id="d-status"></div></details>
+      </div>
+      <div class="panel">
+        <details open><summary>达人等级分布</summary><div id="d-tier"></div></details>
+      </div>
+    </div>
+  </div>
+
+  <div id="view-agent" class="view" style="display:none">
+    <div style="max-width:900px;margin:0 auto;display:flex;flex-direction:column;height:calc(100vh - 96px)">
+      <div id="agent-header" style="padding:12px;background:var(--accent-soft);border-radius:8px;margin-bottom:12px;display:flex;align-items:center;gap:10px">
+        <span style="font-size:24px">🤖</span>
+        <div style="flex:1">
+          <div style="font-weight:600">AI 项目管理员</div>
+          <div class="meta" id="agent-status">加载中…</div>
+        </div>
+        <button class="btn" onclick="resetChat()">清空对话</button>
+      </div>
+      <div id="agent-messages" style="flex:1;overflow-y:auto;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;margin-bottom:10px"></div>
+      <div style="display:flex;gap:8px;align-items:flex-end">
+        <textarea id="agent-input" placeholder="比如：怎么给新人加管理员权限？/ 廖那边连不上怎么办？/ schema.creator 都有哪些字段？" style="flex:1;padding:10px;border:1px solid var(--border);border-radius:6px;resize:vertical;min-height:60px;font:inherit"></textarea>
+        <button class="btn btn-primary" id="agent-send-btn" onclick="sendAgent()" style="padding:14px 22px">发送</button>
+      </div>
+      <div class="meta" style="margin-top:6px">Enter 发送 · Shift+Enter 换行 · 不会执行任何写操作，只回答和引导</div>
+    </div>
+  </div>
+
+  <div id="view-hotkw" class="view" style="display:none">
+    <div class="toolbar">
+      <span class="meta" id="hotkw-status">加载中…</span>
+      <div class="right" style="display:flex;gap:6px">
+        <button class="btn" onclick="loadHotKw()">🔄 立即刷新</button>
+        <button class="btn" onclick="openManualAddKw()" title="手动录入一条/多条热搜关键词">＋ 手动添加</button>
+        <button class="btn btn-primary" onclick="openSuggestKw()" title="让 LLM 头脑风暴 N 个建议关键词">🧠 AI 推荐</button>
+        <button class="btn" onclick="runScrapeManual()" title="立即触发一次 demo 抓取（廖的真实爬虫上线后改成调他的接口）">▶ 立即抓取</button>
+        <button class="btn" onclick="runEnrichAll()" title="让 AI 把待分类关键词分一遍">🤖 AI 分析未分类</button>
+      </div>
+    </div>
+    <div class="grid-2" style="margin-bottom:12px">
+      <div class="panel" style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px">📊 总体</div>
+        <div id="hotkw-totals"></div>
+      </div>
+      <div class="panel" style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px">📁 类目分布</div>
+        <div id="hotkw-by-cat"></div>
+      </div>
+    </div>
+    <div class="grid-2" style="margin-bottom:12px">
+      <div class="panel" style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px">🚀 增长率 Top 8</div>
+        <table style="font-size:12px"><thead><tr><th>关键词</th><th>类目</th><th>搜索量</th><th>增长</th></tr></thead><tbody id="hotkw-rising"></tbody></table>
+      </div>
+      <div class="panel" style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px">📈 搜索量 Top 8</div>
+        <table style="font-size:12px"><thead><tr><th>关键词</th><th>类目</th><th>搜索量</th><th>增长</th></tr></thead><tbody id="hotkw-volume"></tbody></table>
+      </div>
+    </div>
+    <details style="margin-bottom:10px"><summary>🕘 最近抓取走计</summary>
+      <table style="font-size:12px;margin-top:6px"><thead><tr><th>开始时间</th><th>来源</th><th>状态</th><th>新增/更新/失败</th></tr></thead><tbody id="hotkw-runs"></tbody></table>
+    </details>
+  </div>
+
+  <div id="view-settings" class="view" style="display:none">
+    <div id="users-section">
+      <h3 style="margin-top:0">用户和 Key 管理 <span class="meta" id="users-section-meta">（仅管理员可见）</span></h3>
+      <div id="users-list">加载中…</div>
+    </div>
+    <h3 style="margin-top:24px;border-top:1px solid var(--border);padding-top:18px">AI 功能模型分配</h3>
+    <div class="meta" style="margin-bottom:10px">
+      每个 AI 功能可以独立绑一个 Provider + 模型。不绑就走"全局活跃 Provider"兜底（适合先跑通；之后想给某个功能换更好的模型，单独绑就行，不影响其他）。
+    </div>
+    <div id="features-list">加载中…</div>
+
+    <h3 style="margin-top:24px;border-top:1px solid var(--border);padding-top:18px">LLM 配置中心</h3>
+    <div class="meta" style="margin-bottom:12px">
+      所有 AI 任务（话术生成 / 内容分析 / ……）都从这里统一选 Provider 和 Key。
+      只有「已设置 Key」的 Provider 才能激活；同一时间只有 1 个 Provider 是 Active。
+      Key 在响应里始终是脱敏的（前 4 位 + ****** + 末 4 位），原始 Key 仅本机 SQLite 保存。
+    </div>
+    <div id="llm-list">加载中…</div>
+
+    <details style="margin-top:18px">
+      <summary>＋ 添加自定义 Provider (OpenAI 兼容协议，比如 Moonshot / 智谱 / 通义)</summary>
+      <div id="new-provider-form" style="padding:10px;border:1px solid var(--border);border-radius:6px;margin-top:6px"></div>
+    </details>
+
+    <h3 style="margin-top:24px;border-top:1px solid var(--border);padding-top:18px">📢 钉钉通知（schema 变更广播）</h3>
+    <div class="meta" style="margin-bottom:10px">
+      数据库 schema 改动（建表 / 加列 / 删表 / 删列）会自动推送到这里配置的钉钉群机器人。<br>
+      钉钉机器人配置：群设置 → 机器人 → 自定义 → 安全设置：<b>关键词</b>填 <code>X9</code>（推荐）或<b>加签</b>填密钥到 secret。
+    </div>
+    <div id="webhooks-list">加载中…</div>
+    <div style="margin-top:10px;padding:10px;border:1px dashed var(--border);border-radius:6px;background:#fafbfc">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <input id="wh-name" placeholder="名字 (例: liao_dingtalk)" style="flex:1;min-width:160px">
+        <input id="wh-url" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." style="flex:2;min-width:280px">
+        <input id="wh-keyword" placeholder="关键词 (推荐 X9)" value="X9" style="width:130px">
+        <input id="wh-secret" placeholder="加签密钥 (可选)" style="width:170px">
+        <button class="btn btn-primary" onclick="addWebhook()">＋ 添加</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- Floating AI Assistant (visible on all tabs except 设置 has its own duplicate handling) -->
+<div id="ai-fab" class="hidden" onclick="toggleAiPanel()" title="🤖 AI 助手 - 项目咨询和操作引导">🤖</div>
+<div id="ai-panel" class="hidden">
+  <div class="ai-pane-header">
+    <span style="font-size:18px">🤖</span>
+    <span class="title">AI 项目助手</span>
+    <button onclick="document.querySelector('nav button[data-view=agent]').click(); toggleAiPanel()" title="全屏对话">⛶</button>
+    <button onclick="resetChat()" title="清空">🗑</button>
+    <button onclick="toggleAiPanel()" title="关闭">×</button>
+  </div>
+  <div class="ai-pane-status" id="ai-pane-status">就绪</div>
+  <div class="ai-pane-msgs" id="ai-pane-msgs"></div>
+  <div class="ai-pane-input">
+    <textarea id="ai-pane-input" placeholder="问任何关于这个系统的事..." rows="1"></textarea>
+    <button id="ai-pane-send" onclick="sendAi(true)">发送</button>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-bg">
+  <div class="modal" id="modal-body">
+    <span class="modal-close" id="modal-close">×</span>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<script>
+const API = {
+  businessSummary: () => fetch('/api/business-summary').then(async r => {
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+    return j;
+  }),
+  stats: () => fetch('/api/stats').then(r => r.json()),
+  cats:  () => fetch('/api/categories').then(r => r.json()),
+  products: (p) => fetch('/api/products?' + new URLSearchParams(p)).then(r => r.json()),
+  product:  (sku) => fetch('/api/products/' + encodeURIComponent(sku)).then(r => r.json()),
+  saveProduct: (sku, body) => fetch('/api/products/' + encodeURIComponent(sku), {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)}).then(r => r.json()),
+  newProduct:  (body) => fetch('/api/products', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)}).then(r => r.json()),
+  creators: (p) => fetch('/api/creators?' + new URLSearchParams(p)).then(r => r.json()),
+  creator:  (id) => fetch('/api/creators/' + id).then(r => r.json()),
+  saveCreator: (id, body) => fetch('/api/creators/' + id, {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)}).then(r => r.json()),
+  newCreator:  (body) => fetch('/api/creators', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)}).then(r => r.json()),
+  outreach: (p) => fetch('/api/outreach?' + new URLSearchParams(p)).then(r => r.json()),
+
+  // Agent (AI 项目管理员)
+  agentInfo: () => fetch('/api/v1/agent/info', {headers: authHeaders()}).then(r => r.json()),
+  agentChat: (body) => fetch('/api/v1/agent/chat', {method:'POST', headers: authHeaders(), body: JSON.stringify(body)}).then(async r => {
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+    return j;
+  }),
+
+  // 热搜实时仪表盘
+  hotKwDashboard: () => fetch('/api/v1/keywords/dashboard').then(r => r.json()),
+  hotKwTrend: (id) => fetch('/api/v1/keywords/' + id + '/trend?days=30').then(r => r.json()),
+  hotKwEnrich: (body) => fetch('/api/v1/ai/keywords/enrich', {method:'POST', headers: authHeaders(), body: JSON.stringify(body||{})}).then(async r => {
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+    return j;
+  }),
+
+  // Title optimizer (任务 2.2.2)
+  titleInfo: () => fetch('/api/v1/ai/title/info', {headers: authHeaders()}).then(r => r.json()),
+  optimizeTitle: (body) => fetch('/api/v1/ai/optimize_title', {method:'POST', headers: authHeaders(), body: JSON.stringify(body)}).then(async r => {
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+    return j;
+  }),
+
+  // Auth
+  whoami:      () => fetch('/api/v1/auth/whoami', {headers: authHeaders()}).then(r => r.ok ? r.json() : null),
+  authUsers:   () => fetch('/api/v1/auth/users', {headers: authHeaders()}).then(r => r.json()),
+  authNewUser: (body) => fetch('/api/v1/auth/users', {method:'POST', headers: authHeaders(), body: JSON.stringify(body)}).then(r => r.json()),
+  authPatchUser: (id, body) => fetch('/api/v1/auth/users/' + id, {method:'PATCH', headers: authHeaders(), body: JSON.stringify(body)}).then(r => r.json()),
+  authDelUser: (id) => fetch('/api/v1/auth/users/' + id, {method:'DELETE', headers: authHeaders()}).then(r => r.json()),
+  authListKeys:(uid) => fetch('/api/v1/auth/users/' + uid + '/keys', {headers: authHeaders()}).then(r => r.json()),
+  authIssueKey:(uid, body) => fetch('/api/v1/auth/users/' + uid + '/keys', {method:'POST', headers: authHeaders(), body: JSON.stringify(body||{})}).then(r => r.json()),
+  authRevokeKey:(kid) => fetch('/api/v1/auth/keys/' + kid, {method:'DELETE', headers: authHeaders()}).then(r => r.json()),
+
+  // LLM feature binding (which provider+model each AI feature uses)
+  llmFeatures:    () => fetch('/api/v1/llm/features').then(r => r.json()),
+  llmFeatureBind: (code, body) => fetch('/api/v1/llm/features/' + encodeURIComponent(code), {method:'PUT', headers: authHeaders(), body: JSON.stringify(body)}).then(r => r.json()),
+  llmFeatureUnbind: (code) => fetch('/api/v1/llm/features/' + encodeURIComponent(code) + '/binding', {method:'DELETE', headers: authHeaders()}).then(r => r.json()),
+
+  // LLM provider management — writes need the X-API-Key (we read it from localStorage)
+  llmList:     () => fetch('/api/v1/llm/providers').then(r => r.json()),
+  llmGet:      (code) => fetch('/api/v1/llm/providers/' + encodeURIComponent(code)).then(r => r.json()),
+  llmUpdate:   (code, body) => fetch('/api/v1/llm/providers/' + encodeURIComponent(code), {method:'PUT', headers: authHeaders(), body: JSON.stringify(body)}).then(r => r.json()),
+  llmCreate:   (body) => fetch('/api/v1/llm/providers', {method:'POST', headers: authHeaders(), body: JSON.stringify(body)}).then(r => r.json()),
+  llmActivate: (code) => fetch('/api/v1/llm/providers/' + encodeURIComponent(code) + '/activate', {method:'POST', headers: authHeaders()}).then(r => r.json()),
+  llmTest:     (code) => fetch('/api/v1/llm/providers/' + encodeURIComponent(code) + '/test', {method:'POST', headers: authHeaders()}).then(r => r.json()),
+  llmClearKey: (code) => fetch('/api/v1/llm/providers/' + encodeURIComponent(code) + '/key', {method:'DELETE', headers: authHeaders()}).then(r => r.json()),
+};
+
+// X-API-Key — 这是当前登录用户的个人 token，存在浏览器 localStorage。
+// 服务端每次请求都会重新校验 token + 用户身份 + 角色，前端只是"携带凭证"。
+function getServerApiKey() {
+  return localStorage.getItem('x9_server_api_key') || '';
+}
+function setServerApiKey(k) { localStorage.setItem('x9_server_api_key', k); }
+function authHeaders() {
+  const h = {'Content-Type':'application/json'};
+  const k = getServerApiKey();
+  if (k) h['X-API-Key'] = k;
+  return h;
+}
+
+// ---------- Login / Logout ----------
+let CURRENT_USER = null;
+
+async function checkLogin() {
+  const k = getServerApiKey();
+  try {
+    const me = await API.whoami();
+    if (!me) { showLogin(k ? 'Key invalid, please sign in again' : ''); return false; }
+    CURRENT_USER = me;
+    hideLogin();
+    renderWhoami();
+    return true;
+  } catch (e) {
+    showLogin('登录失败: ' + e);
+    return false;
+  }
+}
+
+function showLogin(err) {
+  $('#login-overlay').style.display = 'flex';
+  $('#login-err').textContent = err || '';
+  setTimeout(() => $('#login-input').focus(), 50);
+}
+function hideLogin() {
+  $('#login-overlay').style.display = 'none';
+}
+async function doLogin() {
+  const v = $('#login-input').value.trim();
+  if (!v) { $('#login-err').textContent = '请输入 Key'; return; }
+  setServerApiKey(v);
+  $('#login-input').value = '';
+  const ok = await checkLogin();
+  if (ok) {
+    loadStats();
+    const view = $$('nav button.active')[0]?.dataset.view || 'business';
+    if (view === 'business') loadBusinessDashboard();
+    if (view === 'products') loadProducts();
+    if (view === 'creators') loadCreators();
+  }
+}
+function logout() {
+  if (!confirm('确认登出？')) return;
+  localStorage.removeItem('x9_server_api_key');
+  CURRENT_USER = null;
+  hideAiFab();
+  showLogin();
+}
+function renderWhoami() {
+  const b = $('#who-badge');
+  if (!b || !CURRENT_USER) return;
+  const dn = CURRENT_USER.display_name || CURRENT_USER.username;
+  b.textContent = `${dn} · ${CURRENT_USER.role}`;
+  b.classList.toggle('admin', CURRENT_USER.role === 'admin');
+  b.title = `username: ${CURRENT_USER.username}\nkey: ${CURRENT_USER.key_prefix}…\n点击登出`;
+  // 登录后让悬浮 AI FAB 出现 + 拉一次 info
+  showAiFab();
+  loadAgentHistory();
+  refreshAgentInfo();
+}
+
+// 让 Enter 键在登录框生效
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && $('#login-overlay').style.display === 'flex') doLogin();
+});
+
+const $ = (sel, el=document) => el.querySelector(sel);
+const $$ = (sel, el=document) => [...el.querySelectorAll(sel)];
+
+// ---------- Tabs ----------
+$$('nav button').forEach(b => b.addEventListener('click', () => {
+  $$('nav button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  const v = b.dataset.view;
+  $$('.view').forEach(x => x.style.display = 'none');
+  $('#view-' + v).style.display = '';
+  if (v === 'business') loadBusinessDashboard();
+  if (v === 'products') loadProducts();
+  if (v === 'creators') loadCreators();
+  if (v === 'leads') loadLeads();
+  if (v === 'outreach') loadOutreach();
+  if (v === 'dashboard') loadDashboard();
+  if (v === 'settings') loadSettings();
+  if (v === 'agent') loadAgent();
+  if (v === 'hotkw') startHotKw();
+  else stopHotKw();
+}));
+
+// ---------- Header stats ----------
+async function loadStats() {
+  const s = await API.stats();
+  $('#stats').innerHTML =
+    `<span><b>${s.products_total}</b> 产品</span>` +
+    `<span><b>${s.creators_total}</b> 达人</span>` +
+    `<span><b>${s.outreach_total}</b> 建联事件</span>`;
+  // 同步更新 nav 上的计数
+  const np = document.getElementById('nav-products-count');
+  const nc = document.getElementById('nav-creators-count');
+  if (np) np.textContent = '(' + s.products_total + ')';
+  if (nc) nc.textContent = '(' + s.creators_total + ')';
+  // populate filter dropdowns
+  const cats = await API.cats();
+  $('#p-cat').innerHTML = '<option value="">全部类目</option>' +
+    cats.map(c => `<option value="${c.code}">${c.name_zh}</option>`).join('');
+  const owners = new Set();
+  const cr = await API.creators({limit: 200});
+  cr.items.forEach(c => c.owner_bd && owners.add(c.owner_bd));
+  $('#c-owner').innerHTML = '<option value="">全部对接人</option>' +
+    [...owners].map(o => `<option>${o}</option>`).join('');
+}
+
+// ---------- Products ----------
+async function loadProducts() {
+  const params = {};
+  const q = $('#p-search').value.trim(); if (q) params.q = q;
+  const c = $('#p-cat').value;            if (c) params.category = c;
+  const m = $('#p-main').value;           if (m !== '') params.is_main_push = m;
+  const data = await API.products(params);
+  const tbody = $('#t-products tbody');
+  tbody.innerHTML = '';
+  if (!data.items.length) { tbody.innerHTML = '<tr><td colspan=9 class="empty">无数据</td></tr>'; return; }
+  for (const p of data.items) {
+    const price = p.price_tiktok ? '$' + p.price_tiktok.toFixed(2) : '<span style="color:#999">-</span>';
+    const match = (p.creator_match_levels || []).map(t => `<span class="pill pill-tier-${t}">${t}</span>`).join(' ');
+    const imgs = (p.images || []).slice(0, 5).map(im => `<img class="img-thumb" loading="lazy" src="${im.url}" alt="">`).join('');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><b>${p.sku_code}</b></td>
+      <td><div>${p.name_en || ''}</div><div class="meta">${p.name_zh || ''}</div></td>
+      <td>${p.category_name || ''} / ${p.subcategory || ''}</td>
+      <td>${p.size_label || ''} · ${p.pcs_per_pack || '-'} pcs</td>
+      <td>${price}</td>
+      <td>${p.is_main_push ? '<span class="pill pill-main">' + (p.tier || '主推') + '</span>' : ''}</td>
+      <td>${match}</td>
+      <td><div class="imgs">${imgs}</div></td>
+      <td class="meta">${(p.updated_at || '').slice(0, 16)}</td>`;
+    tr.addEventListener('click', () => openProduct(p.sku_code));
+    tbody.appendChild(tr);
+  }
+}
+$('#p-search').addEventListener('input', debounce(loadProducts, 250));
+$('#p-cat').addEventListener('change', loadProducts);
+$('#p-main').addEventListener('change', loadProducts);
+$('#p-reload').addEventListener('click', loadProducts);
+$('#p-new').addEventListener('click', () => openProductForm(null));
+
+async function openProduct(sku) {
+  const p = await API.product(sku);
+  openProductForm(p);
+}
+
+function openProductForm(p) {
+  const isNew = !p;
+  const get = k => (p && p[k]) ?? '';
+  const arr = k => (p && p[k]) || [];
+  const html = `
+    <h2>${isNew ? '新增产品' : p.sku_code + ' · ' + (p.name_zh || p.name_en || '')}</h2>
+    ${!isNew ? `
+    <div style="margin:0 0 12px;padding:8px 12px;background:#fafbfc;border-radius:6px;border:1px solid var(--border)">
+      <button class="btn btn-primary" onclick="optimizeTitleFor(${p.id})" style="font-size:12px">🔍 用 TK 热搜优化标题</button>
+      <span class="meta" style="margin-left:10px">基于平台热搜关键词 + 产品卖点生成 5 条候选标题</span>
+    </div>` : ''}
+    <div class="grid-2">
+      <div>
+        ${textField('SKU', 'sku_code', get('sku_code'), !isNew)}
+        ${textField('英文名', 'name_en', get('name_en'))}
+        ${textField('中文名', 'name_zh', get('name_zh'))}
+        ${selectField('类目', 'category_code',
+            ['female_care:女性护理','adult_care:成人护理','pet:宠物用品','baby:母婴','home_care:家居护理','mask:口罩'],
+            (p && p.category_code) || '')}
+        ${textField('子类', 'subcategory', get('subcategory'))}
+        ${textField('系列', 'series', get('series'))}
+        ${textField('规格', 'size_label', get('size_label'))}
+        ${numberField('PCS/包', 'pcs_per_pack', get('pcs_per_pack'))}
+        ${numberField('包/件', 'packs_per_case', get('packs_per_case'))}
+      </div>
+      <div>
+        ${numberField('TikTok 价 (USD)', 'price_tiktok', get('price_tiktok'), .01)}
+        ${numberField('Temu 价 (USD)', 'price_temu', get('price_temu'), .01)}
+        ${numberField('eBay 价 (USD)', 'price_ebay', get('price_ebay'), .01)}
+        ${numberField('独立站价 (USD)', 'price_independent', get('price_independent'), .01)}
+        ${textField('定位', 'positioning_zh', get('positioning_zh'))}
+        ${selectField('主推等级', 'tier',
+            ['1号主推:1号主推','2号主推:2号主推','3号主推:3号主推','常规:常规'], get('tier'))}
+        ${selectField('主推?', 'is_main_push', ['1:是','0:否'], String(get('is_main_push') ?? 0))}
+        ${textField('TK_Content key', 'tk_content_key', get('tk_content_key'))}
+        ${textField('Amazon URL', 'amazon_url', get('amazon_url'))}
+        ${textField('短链', 'short_url', get('short_url'))}
+        ${numberField('默认佣金率', 'commission_rate_default', get('commission_rate_default'), .01)}
+      </div>
+    </div>
+    <details open><summary>卖点 / 痛点 / 场景</summary>
+      ${arrField('英文卖点', 'selling_points_en', arr('selling_points_en'))}
+      ${arrField('中文卖点', 'selling_points_zh', arr('selling_points_zh'))}
+      ${arrField('痛点(中)', 'pain_points_zh', arr('pain_points_zh'))}
+      ${arrField('场景(英)', 'scenarios_en', arr('scenarios_en'))}
+      ${arrField('场景(中)', 'scenarios_zh', arr('scenarios_zh'))}
+      ${textareaField('目标人群(英)', 'target_audience_en', get('target_audience_en'))}
+      ${textareaField('目标人群(中)', 'target_audience_zh', get('target_audience_zh'))}
+      ${textareaField('达人画像', 'creator_persona_zh', get('creator_persona_zh'))}
+      ${arrField('匹配等级(S/A/B/C/D)', 'creator_match_levels', arr('creator_match_levels'))}
+    </details>
+    <details><summary>AI 文案词库 (用于自动化生成)</summary>
+      ${arrField('vocabulary_en', 'vocabulary_en', arr('vocabulary_en'))}
+      ${arrField('creative_angles_en', 'creative_angles_en', arr('creative_angles_en'))}
+      ${arrField('safe_scenes_en', 'safe_scenes_en', arr('safe_scenes_en'))}
+      ${textField('focus_zh', 'focus_zh', get('focus_zh'))}
+      ${textField('proof', 'proof', get('proof'))}
+    </details>
+    ${p && p.images && p.images.length ? `
+    <details open><summary>素材图 (${p.images.length} 张)</summary>
+      <div class="gallery">
+        ${p.images.slice(0, 60).map(im => `<img loading="lazy" src="${im.url}" title="${im.kind || ''}: ${im.caption || ''}" onclick="window.open('${im.url}','_blank')">`).join('')}
+      </div>
+      <div class="meta">仅显示前 60 张；按图片归类规则从 实习生/A社媒 拉取</div>
+    </details>` : ''}
+    <div class="actions">
+      <button class="btn" id="m-cancel">取消</button>
+      <button class="btn btn-primary" id="m-save">${isNew ? '创建' : '保存'}</button>
+    </div>`;
+  showModal(html);
+  $('#m-cancel').addEventListener('click', closeModal);
+  $('#m-save').addEventListener('click', async () => {
+    const body = collectFields($('#modal-content'));
+    body.is_main_push = parseInt(body.is_main_push) || 0;
+    if (isNew) {
+      await API.newProduct(body);
+    } else {
+      await API.saveProduct(p.sku_code, body);
+    }
+    closeModal();
+    loadProducts();
+  });
+}
+
+// ---------- Creators ----------
+async function loadCreators() {
+  // 基础筛选 (走 /api/creators 旧端点)
+  const params = {};
+  const q = $('#c-search').value.trim(); if (q) params.q = q;
+  const t = $('#c-tier').value; if (t) params.tier = t;
+  const s = $('#c-status').value; if (s) params.status = s;
+  const o = $('#c-owner').value; if (o) params.owner = o;
+  params.limit = 500;   // 拉够多再客户端过滤
+  const data = await API.creators(params);
+
+  // 客户端二次过滤（新增筛选项）
+  const followersRange = $('#c-followers-range').value;  // 'min:max'
+  const minEng = parseFloat($('#c-engagement').value || '0');
+  const excludeCompetitor = $('#c-exclude-competitor').checked;
+  const excludeBlacklist = $('#c-exclude-blacklist').checked;
+
+  let competitorIds = new Set();
+  if (excludeCompetitor) {
+    try {
+      const collabs = await fetch('/api/v1/data/creator_competitor_collabs?limit=1000').then(r => r.json());
+      collabs.items.forEach(c => competitorIds.add(c.creator_id));
+    } catch(e) { /* 表可能还没建好 */ }
+  }
+
+  const filtered = data.items.filter(c => {
+    if (followersRange) {
+      const [mn, mx] = followersRange.split(':').map(Number);
+      const f = c.followers || 0;
+      if (f < mn || f > mx) return false;
+    }
+    if (minEng && (!c.engagement_rate || c.engagement_rate < minEng)) return false;
+    if (excludeCompetitor && competitorIds.has(c.id)) return false;
+    if (excludeBlacklist && c.excluded) return false;
+    return true;
+  });
+
+  const tbody = $('#t-creators tbody');
+  tbody.innerHTML = '';
+  // 顶部计数
+  if (filtered.length !== data.items.length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan=9 class="meta" style="padding:6px 10px;background:#fafbfc">
+      显示 <b>${filtered.length}</b> / 总 ${data.items.length} 条（已应用客户端筛选）</td>`;
+    tbody.appendChild(tr);
+  }
+  if (!filtered.length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan=9 class="empty">无符合条件的达人</td>';
+    tbody.appendChild(tr);
+    return;
+  }
+  for (const c of filtered) {
+    const tr = document.createElement('tr');
+    if (c.excluded) tr.style.opacity = '0.55';
+    const engPill = c.engagement_rate ? `<span class="pill" style="background:#fff7e6;color:#d46b08">📊 ${(c.engagement_rate*100).toFixed(1)}%</span>` : '';
+    const exPill = c.excluded ? `<span class="pill" style="background:#fff1f0;color:#cf1322">已排除</span>` : '';
+    tr.innerHTML = `
+      <td><a class="handle-link" href="${c.profile_url || '#'}" target="_blank" onclick="event.stopPropagation()">@${c.handle}</a> ${exPill}</td>
+      <td><span class="pill pill-tier-${c.tier || 'D'}">${c.tier || '?'}</span></td>
+      <td>${c.followers_raw || (c.followers ? c.followers.toLocaleString() : '-')} ${engPill}</td>
+      <td>${c.gmv_30d_usd ? '$' + Math.round(c.gmv_30d_usd).toLocaleString() : '-'}</td>
+      <td>${c.pps || '-'}</td>
+      <td><span class="pill pill-status">${statusLabel(c.current_status)}</span></td>
+      <td>${c.store_assigned || '-'}<div class="meta">${c.owner_bd || ''}</div></td>
+      <td class="meta">${c.last_contact_date || ''}</td>
+      <td class="meta">${(c.notes || '').slice(0, 40)}</td>`;
+    tr.addEventListener('click', () => openCreator(c.id));
+    tbody.appendChild(tr);
+  }
+}
+['c-search','c-tier','c-status','c-owner','c-followers-range','c-engagement',
+ 'c-exclude-competitor','c-exclude-blacklist'].forEach(id => $('#'+id).addEventListener('change', loadCreators));
+$('#c-search').addEventListener('input', debounce(loadCreators, 250));
+$('#c-reload').addEventListener('click', loadCreators);
+$('#c-new').addEventListener('click', () => openCreatorForm(null));
+
+// ---------- Lead 池 (廖爬虫接收层) ----------
+async function loadLeads() {
+  const params = new URLSearchParams();
+  const q = $('#ld-search').value.trim(); if (q) params.set('q', q);
+  const platform = $('#ld-platform').value; if (platform) params.set('platform', platform);
+  const fitLevel = $('#ld-fit-level').value; if (fitLevel) params.set('fit_level', fitLevel);
+  const cat = $('#ld-category').value; if (cat) params.set('primary_product_category', cat);
+  const hasEmail = $('#ld-has-email').value; if (hasEmail !== '') params.set('has_email', hasEmail);
+  params.set('limit', '500');
+
+  const r = await fetch('/api/v1/data/tk_creators?' + params.toString(), {
+    headers: { 'X-API-Key': localStorage.getItem('x9_server_api_key') || '' }
+  });
+  if (!r.ok) {
+    $('#ld-count').textContent = '加载失败';
+    return;
+  }
+  const data = await r.json();
+  const items = data.items || [];
+  $('#ld-count').textContent = `${data.total || items.length} 条`;
+  $('#ld-empty').style.display = (data.total === 0) ? '' : 'none';
+
+  // 按 priority_score 降序
+  items.sort((a, b) => (b.priority_score || 0) - (a.priority_score || 0));
+
+  const tbody = $('#t-leads tbody');
+  tbody.innerHTML = '';
+  for (const c of items) {
+    const tr = document.createElement('tr');
+    const fmtFollowers = (n) => {
+      if (!n) return '—';
+      if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+      if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+      return String(n);
+    };
+    const fitBadge = c.fit_level ? `<span class="pill" style="background:${
+      c.fit_level === 'S' ? '#fff1f0;color:#cf1322' :
+      c.fit_level === 'A' ? '#fffbe6;color:#d48806' :
+      c.fit_level === 'B' ? '#f6ffed;color:#389e0d' :
+      '#f0f5ff;color:#1d39c4'};font-weight:600">${c.fit_level}</span>` : '—';
+    tr.innerHTML = `
+      <td>${c.platform || ''}</td>
+      <td><b>@${c.handle || ''}</b></td>
+      <td>${c.display_name || '—'}</td>
+      <td>${fmtFollowers(c.followers_count)} <span style="color:#999;font-size:11px">${c.followers_raw || ''}</span></td>
+      <td>${fitBadge}</td>
+      <td>${c.priority_score || 0}</td>
+      <td>${c.primary_product_category || '—'}</td>
+      <td>${c.has_email ? `📧 <span style="font-size:11px;color:#666">${(c.email || '').slice(0, 28)}</span>` : '—'}</td>
+      <td>${c.current_status || '—'}</td>
+      <td style="font-size:11px;color:#666">${(c.collected_at || '').slice(0, 16) || '—'}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+['ld-platform','ld-fit-level','ld-category','ld-has-email'].forEach(id =>
+  $('#'+id).addEventListener('change', loadLeads));
+$('#ld-search').addEventListener('input', debounce(loadLeads, 250));
+$('#ld-reload').addEventListener('click', loadLeads);
+
+const STATUS_OPTS = [
+  ['prospect','候选'],['contacted','已建联'],['confirmed','已确认'],
+  ['sample_shipped','已寄样'],['sample_delivered','样品签收'],
+  ['video_published','视频已发布'],['ad_authorized','已授权'],
+  ['ad_running','广告投放中'],['dropped','放弃']
+];
+const statusLabel = code => (STATUS_OPTS.find(s => s[0] === code) || [code, code])[1];
+
+async function openCreator(id) {
+  const c = await API.creator(id);
+  // 补一下竞品合作记录
+  try {
+    const r = await fetch('/api/v1/data/creator_competitor_collabs?creator_id=' + id + '&limit=20').then(r => r.json());
+    c.competitor_collabs = r.items || [];
+  } catch (e) { c.competitor_collabs = []; }
+  openCreatorForm(c);
+}
+
+function openCreatorForm(c) {
+  const isNew = !c;
+  const get = k => (c && c[k]) ?? '';
+  const arr = k => (c && c[k]) || [];
+  const html = `
+    <h2>${isNew ? '新增达人' : '@' + c.handle}</h2>
+    <div class="grid-2">
+      <div>
+        ${textField('Handle (不带 @)', 'handle', get('handle'), !isNew)}
+        ${selectField('平台', 'platform',
+            ['tiktok:TikTok','instagram:Instagram','youtube:YouTube'], get('platform') || 'tiktok')}
+        ${textField('主页 URL', 'profile_url', get('profile_url'))}
+        ${textField('显示名', 'display_name', get('display_name'))}
+        ${textField('国家', 'country', get('country'))}
+        ${arrField('内容标签', 'category_tags', arr('category_tags'))}
+        ${numberField('粉丝数', 'followers', get('followers'))}
+        ${textField('粉丝原值', 'followers_raw', get('followers_raw'))}
+        ${selectField('等级', 'tier',
+            ['S:S','A:A','B:B','C:C','D:D'], get('tier'))}
+      </div>
+      <div>
+        ${numberField('30d GMV (USD)', 'gmv_30d_usd', get('gmv_30d_usd'))}
+        ${numberField('平均播放量', 'avg_views', get('avg_views'))}
+        ${numberField('PPS 分', 'pps', get('pps'), .1)}
+        ${numberField('样品评分', 'sample_score', get('sample_score'), .1)}
+        ${numberField('预估发布率', 'post_rate_est', get('post_rate_est'), .01)}
+        ${selectField('当前状态', 'current_status',
+            STATUS_OPTS.map(([k,v]) => k+':'+v), get('current_status') || 'prospect')}
+        ${textField('店铺', 'store_assigned', get('store_assigned'))}
+        ${textField('对接人', 'owner_bd', get('owner_bd'))}
+        ${textField('Email', 'email', get('email'))}
+        ${textField('WhatsApp', 'whatsapp', get('whatsapp'))}
+        ${textField('IG handle', 'instagram_handle', get('instagram_handle'))}
+        ${textField('首联日期', 'first_contact_date', get('first_contact_date'))}
+        ${textField('最近触达', 'last_contact_date', get('last_contact_date'))}
+        ${textareaField('备注', 'notes', get('notes'))}
+      </div>
+    </div>
+    ${!isNew ? `
+    <div style="margin:14px 0;padding:10px;background:#fafbfc;border-radius:6px;border:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <b style="font-size:13px">⚙ 操作：</b>
+        <button class="btn btn-primary" onclick="generateOutreachFor(${c.id})">📝 生成邀约话术</button>
+        <button class="btn" onclick="logCompetitor(${c.id})" title="记录该达人与某竞品合作">＋ 记录竞品合作</button>
+        ${c.excluded
+          ? `<button class="btn" style="color:var(--good)" onclick="toggleExcluded(${c.id}, 0)">恢复（取消排除）</button>`
+          : `<button class="btn" style="color:var(--bad)" onclick="toggleExcluded(${c.id}, 1)">排除该达人</button>`}
+      </div>
+      ${c.excluded ? `<div class="meta" style="margin-top:6px;color:var(--bad)">已排除：${escapeHtml(c.excluded_reason || '')}</div>` : ''}
+    </div>` : ''}
+
+    ${c && c.competitor_collabs && c.competitor_collabs.length ? `
+    <details open><summary style="color:var(--bad)">⚠ 竞品合作记录 (${c.competitor_collabs.length})</summary>
+      <div class="timeline" style="border-left-color:var(--bad)">
+        ${c.competitor_collabs.map(cc => `
+          <div class="timeline-item">
+            <div class="when">${cc.detected_at || cc.created_at?.slice(0,10) || ''} · 置信度 ${cc.confidence || 1.0}</div>
+            <div><span class="pill" style="background:#fff1f0;color:#cf1322">竞品 #${cc.competitor_brand_id}</span></div>
+            ${cc.evidence_url ? `<div class="meta"><a href="${cc.evidence_url}" target="_blank">${cc.evidence_url}</a></div>` : ''}
+            <div class="meta">${escapeHtml(cc.notes || '')}　<a href="#" onclick="removeCollab(${cc.id}, ${c.id});return false" style="color:var(--bad)">删除此条</a></div>
+          </div>`).join('')}
+      </div>
+    </details>` : ''}
+
+    ${c && c.outreach && c.outreach.length ? `
+    <details open><summary>建联流水 (${c.outreach.length})</summary>
+      <div class="timeline">
+        ${c.outreach.map(o => `
+          <div class="timeline-item">
+            <div class="when">${o.event_date || ''} · ${o.bd_owner || ''} · ${o.store_name || ''}</div>
+            <div><span class="pill pill-status">${statusLabel(o.status)}</span> ${o.remark || ''}</div>
+            ${o.video_url ? `<div class="meta"><a href="${o.video_url}" target="_blank">${o.video_url}</a></div>` : ''}
+            ${o.ad_auth_code ? `<div class="meta">授权码: ${o.ad_auth_code}</div>` : ''}
+          </div>`).join('')}
+      </div>
+    </details>` : ''}
+    <div class="actions">
+      <button class="btn" id="m-cancel">取消</button>
+      <button class="btn btn-primary" id="m-save">${isNew ? '创建' : '保存'}</button>
+    </div>`;
+  showModal(html);
+  $('#m-cancel').addEventListener('click', closeModal);
+  $('#m-save').addEventListener('click', async () => {
+    const body = collectFields($('#modal-content'));
+    if (isNew) await API.newCreator(body);
+    else await API.saveCreator(c.id, body);
+    closeModal();
+    loadCreators();
+  });
+}
+
+// ---------- Creator actions: 排除 / 竞品 / 生成话术 ----------
+async function toggleExcluded(creatorId, target) {
+  let reason = '';
+  if (target === 1) {
+    reason = prompt('排除原因（必填，例：质量不佳 / 假粉 / 内容不匹配 / 已合作 X 竞品）：');
+    if (!reason) return;
+  }
+  const body = {excluded: target, excluded_reason: target ? reason : null};
+  const r = await fetch('/api/v1/data/creators/' + creatorId, {
+    method: 'PATCH', headers: authHeaders(), body: JSON.stringify(body)
+  }).then(r => r.json());
+  if (r.detail) { alert('修改失败: ' + r.detail); return; }
+  closeModal();
+  loadCreators();
+}
+
+async function logCompetitor(creatorId) {
+  // 先拉竞品列表给用户选
+  const brands = await fetch('/api/v1/data/competitor_brands?limit=200').then(r => r.json());
+  if (!brands.items || !brands.items.length) {
+    alert('还没有竞品数据。可以让管理员先 POST /api/v1/data/competitor_brands/bulk 加几个');
+    return;
+  }
+  const opts = brands.items.map(b => `${b.id}: ${b.display_name} (${b.code}, ${b.category_scope})`).join('\n');
+  const choice = prompt(`输入竞品 ID（从下面挑一个）：\n\n${opts}`);
+  if (!choice) return;
+  const competitor_brand_id = parseInt(choice.split(':')[0]);
+  if (!competitor_brand_id) { alert('ID 格式错误'); return; }
+  const evidence = prompt('证据 URL（可选，达人发布的合作视频/帖子链接）：') || '';
+  const r = await fetch('/api/v1/data/creator_competitor_collabs/bulk', {
+    method: 'POST', headers: authHeaders(),
+    body: JSON.stringify({items: [{
+      creator_id: creatorId,
+      competitor_brand_id: competitor_brand_id,
+      evidence_url: evidence,
+      detected_at: new Date().toISOString().slice(0, 10),
+      confidence: 1.0,
+      detection_source: 'manual',
+    }]})
+  }).then(r => r.json());
+  if (r.errors && r.errors.length) { alert('保存失败: ' + JSON.stringify(r.errors)); return; }
+  alert('✓ 已记录竞品合作');
+  closeModal();
+  openCreator(creatorId);
+}
+
+async function removeCollab(collabId, creatorId) {
+  if (!confirm('删除这条竞品合作记录？（如果是误录可以删，达人会立即解除"竞品合作"标记）')) return;
+  const r = await fetch('/api/v1/data/creator_competitor_collabs/' + collabId, {
+    method: 'DELETE', headers: authHeaders(),
+  }).then(r => r.json());
+  if (r.detail) { alert('删除失败: ' + r.detail); return; }
+  closeModal();
+  openCreator(creatorId);
+}
+
+async function generateOutreachFor(creatorId) {
+  // 拉全部 44 个 SKU（不再过滤 is_main_push）
+  const products = await API.products({limit: 200});
+  if (!products.items || !products.items.length) { alert('数据库没有产品'); return; }
+
+  // 按类目分组
+  const grouped = {};
+  for (const p of products.items) {
+    const cat = p.category_name || '未分类';
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(p);
+  }
+
+  showModal(`
+    <h2 style="margin:0 0 8px">📝 生成邀约话术 — 达人 #${creatorId}</h2>
+    <div class="meta" style="margin-bottom:10px">从 <b>${products.items.length}</b> 个 SKU 里勾选要推的产品（可多选）</div>
+    <div style="display:flex;gap:14px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+      <label style="font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px">
+        <input type="checkbox" id="gen-only-main"> 仅显示主推 (19 个)
+      </label>
+      <label style="font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px">
+        <input type="checkbox" id="gen-select-all"> 全选当前显示
+      </label>
+      <button class="btn" type="button" onclick="autoSelectProducts(${creatorId})" title="按廖 lead 池字段自动勾选最匹配的 1-3 个产品">🤖 智能推荐</button>
+      <span class="meta" id="gen-selected-count" style="margin-left:auto">已选 0 个</span>
+    </div>
+    <div id="gen-fit-signals" style="margin:6px 0;font-size:11px;color:#4e5969"></div>
+    <div id="gen-products" style="max-height:42vh;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;background:#fafbfc"></div>
+
+    <div class="grid-2" style="margin-top:14px">
+      <div class="field">
+        <label>渠道</label>
+        <select id="gen-channel">
+          <option value="auto" selected>🤖 自动（有邮箱用 email，否则 TT 私信）</option>
+          <option value="tiktok_dm">TikTok 私信 (≤220 字)</option>
+          <option value="email">邮件 (250-400 字)</option>
+          <option value="whatsapp">WhatsApp (80-150 字)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>语言</label>
+        <select id="gen-language">
+          <option value="">自动（按达人国家）</option>
+          <option value="en">English</option>
+          <option value="zh">中文</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label>话术家族</label>
+      <select id="gen-family">
+        <option value="auto" selected>自动判断（按产品/达人类目）</option>
+        <option value="feminine">feminine 女性护理</option>
+        <option value="pet">pet 宠物</option>
+        <option value="general">general 通用（母婴 / 成人 / 家居）</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>写入 outbox</label>
+      <select id="gen-queue">
+        <option value="1" selected>是（推荐 — 方便后续在 outbox 里标"已复制""已发"）</option>
+        <option value="0">否（仅生成预览，不入队）</option>
+      </select>
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" onclick="doGenerateOutreach(${creatorId})">📝 生成</button>
+    </div>
+  `);
+
+  function renderProducts() {
+    const onlyMain = $('#gen-only-main').checked;
+    const list = $('#gen-products');
+    list.innerHTML = Object.entries(grouped).map(([cat, items]) => {
+      const filtered = onlyMain ? items.filter(p => p.is_main_push) : items;
+      if (!filtered.length) return '';
+      return `
+        <div style="margin-bottom:8px">
+          <div style="font-weight:600;font-size:12px;color:#4e5969;margin:6px 0 4px;padding-bottom:3px;border-bottom:1px solid var(--border)">
+            ${escapeHtml(cat)} <span class="meta">(${filtered.length})</span>
+          </div>
+          ${filtered.map(p => `
+            <label style="display:flex;align-items:center;gap:6px;padding:3px 4px;cursor:pointer;font-size:12px;border-radius:3px" onmouseover="this.style.background='#eef2ff'" onmouseout="this.style.background=''">
+              <input type="checkbox" name="gen-product" value="${p.id}" onchange="updateSelectedCount()">
+              <span style="font-family:monospace;font-size:11px;color:var(--accent);min-width:90px">${p.sku_code}</span>
+              <span style="flex:1">${escapeHtml(p.name_en || p.name_zh || '')}</span>
+              <span class="meta" style="font-size:10px">${escapeHtml(p.size_label || '')}</span>
+              ${p.is_main_push ? '<span class="pill pill-main" style="font-size:10px;padding:0 5px">主推</span>' : ''}
+              ${p.price_tiktok ? `<span class="meta" style="font-size:10px;color:#389e0d">$${p.price_tiktok}</span>` : ''}
+            </label>
+          `).join('')}
+        </div>
+      `;
+    }).join('');
+  }
+
+  $('#gen-only-main').addEventListener('change', renderProducts);
+  $('#gen-select-all').addEventListener('change', e => {
+    document.querySelectorAll('input[name=gen-product]').forEach(cb => cb.checked = e.target.checked);
+    updateSelectedCount();
+  });
+  window.updateSelectedCount = () => {
+    const n = document.querySelectorAll('input[name=gen-product]:checked').length;
+    $('#gen-selected-count').textContent = `已选 ${n} 个`;
+    $('#gen-selected-count').style.color = n ? 'var(--good)' : 'var(--muted)';
+  };
+  renderProducts();
+}
+
+async function autoSelectProducts(creatorId) {
+  try {
+    const r = await fetch('/api/v1/ai/outreach/suggest_products', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ creator_id: creatorId, limit: 3 })
+    });
+    const j = await r.json();
+    if (j.detail) { alert('推荐失败: ' + j.detail); return; }
+    // 清空再勾选
+    document.querySelectorAll('input[name=gen-product]').forEach(cb => cb.checked = false);
+    const ids = new Set((j.products || []).map(p => p.id));
+    document.querySelectorAll('input[name=gen-product]').forEach(cb => {
+      if (ids.has(parseInt(cb.value))) cb.checked = true;
+    });
+    updateSelectedCount();
+    // 更新渠道默认值
+    const chSel = document.getElementById('gen-channel');
+    if (chSel && j.channel_suggested) chSel.value = j.channel_suggested;
+    // 显示信号
+    const fs = j.fit_signals || {};
+    const parts = [];
+    if (fs.fit_level) parts.push(`fit=<b>${fs.fit_level}</b>`);
+    if (fs.priority_score != null) parts.push(`priority=${fs.priority_score}`);
+    if (fs.recommended_product_type) parts.push(`推荐品类: ${fs.recommended_product_type}`);
+    if (fs.recommended_collab_type) parts.push(`合作: ${fs.recommended_collab_type}`);
+    if (fs.review_required) parts.push(`<span style="color:#cf1322">⚠ 需人工复核</span>`);
+    if (fs.risk_summary) parts.push(`<span style="color:#cf1322">风险: ${fs.risk_summary}</span>`);
+    document.getElementById('gen-fit-signals').innerHTML = parts.length
+      ? '🎯 廖 lead 池信号：' + parts.join(' · ')
+      : '<span class="meta">该达人没有 lead 池字段（尚未被廖爬虫覆盖）</span>';
+  } catch (e) {
+    alert('网络错误: ' + e);
+  }
+}
+
+async function doGenerateOutreach(creatorId) {
+  const product_ids = [...document.querySelectorAll('input[name=gen-product]:checked')].map(c => parseInt(c.value));
+  // product_ids 为空 → 让后端按廖 lead 池字段自动推荐
+  if (product_ids.length > 4) {
+    if (!confirm(`你选了 ${product_ids.length} 个产品。一次邀约推荐 1-3 个最佳，超过容易话术散漫，确认继续吗？`)) return;
+  }
+  const channel = $('#gen-channel').value;
+  const language = $('#gen-language').value || null;
+  const family = $('#gen-family').value;
+  const queue = $('#gen-queue').value === '1';
+
+  showModal(`<h2>📝 生成邀约话术中…</h2>
+    <div class="meta">达人 #${creatorId} · ${product_ids.length} 个产品 · ${channel} · ${language || 'auto-lang'}</div>
+    <div class="meta" style="margin-top:6px">正在调 LLM，约 5-15 秒（GPT-4o-mini 比较快，Claude Sonnet 略慢）</div>
+    <div id="gen-result" style="margin-top:10px"></div>`);
+
+  try {
+    const r = await fetch('/api/v1/ai/generate_outreach', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({
+        creator_id: creatorId,
+        product_ids,
+        channel,
+        language,
+        template_family: family,
+        queue,
+      })
+    });
+    const j = await r.json();
+    if (j.detail) {
+      $('#gen-result').innerHTML = '<div class="empty">生成失败: ' + escapeHtml(j.detail) + '</div>';
+      return;
+    }
+    renderGeneratedScript(j);
+  } catch (e) {
+    $('#gen-result').innerHTML = '<div class="empty">网络错误: ' + e + '</div>';
+  }
+}
+
+function renderGeneratedScript(j) {
+  const flagsHtml = (j.compliance_flags || []).length
+    ? `<div style="background:#fff1f0;color:#cf1322;padding:6px 10px;border-radius:5px;margin:8px 0;font-size:12px">
+         ⚠ 合规警告: ${j.compliance_flags.map(f => `${escapeHtml(f.phrase)} → ${escapeHtml(f.suggestion)}`).join('; ')}
+       </div>`
+    : `<div class="meta" style="color:var(--good);margin:6px 0">✓ 合规检查通过</div>`;
+
+  const fewShotsHtml = (j.few_shots_used || []).length
+    ? '<div class="meta">few-shot 来源: ' + j.few_shots_used.map(fs => fs.author).join(', ') + '</div>'
+    : '';
+
+  const fs = j.fit_signals || {};
+  const fitBits = [];
+  if (fs.fit_level) fitBits.push(`fit=<b>${fs.fit_level}</b>`);
+  if (fs.priority_score != null) fitBits.push(`priority=${fs.priority_score}`);
+  if (fs.review_required) fitBits.push('<span style="color:#cf1322">⚠ 复核</span>');
+  const fitHtml = fitBits.length ? `<span class="pill" style="background:#fff7e6;color:#d46b08">🎯 ${fitBits.join(' · ')}</span>` : '';
+  const autoChannelHtml = j.auto_picked_channel ? `<span class="meta" style="color:#1677ff">🤖 自动选了 ${j.auto_picked_channel}</span>` : '';
+  const autoProductsHtml = (j.auto_selected_products || []).length
+    ? `<div class="meta" style="color:#1677ff;margin:4px 0">🤖 自动选了产品: ${j.auto_selected_products.map(p=>p.sku_code).join(', ')}</div>`
+    : '';
+
+  $('#gen-result').innerHTML = `
+    <div style="margin-bottom:8px">
+      <span class="pill" style="background:var(--accent-soft);color:var(--accent)">${j.template_family}</span>
+      <span class="pill" style="background:#f5f6f7">${j.channel} · ${j.language}</span>
+      ${fitHtml}
+      ${autoChannelHtml}
+      <span class="meta">${j.resolved_provider} / ${j.resolved_model} · ${j.tokens.input}→${j.tokens.output} tok</span>
+      ${j.outbox_id ? `<span class="pill" style="background:#f6ffed;color:#389e0d">已入 outbox #${j.outbox_id}</span>` : ''}
+    </div>
+    ${autoProductsHtml}
+    ${flagsHtml}
+    ${j.subject ? `<div style="margin-bottom:8px"><b>Subject:</b> ${escapeHtml(j.subject)}</div>` : ''}
+    <textarea id="gen-body" style="width:100%;min-height:280px;padding:10px;border:1px solid var(--border);border-radius:6px;font:inherit;line-height:1.6">${escapeHtml(j.body)}</textarea>
+    <div class="actions">
+      ${fewShotsHtml}
+      <button class="btn" onclick="copyGeneratedBody()" style="margin-left:auto">📋 复制全文</button>
+      ${j.outbox_id ? `<button class="btn" onclick="markOutboxCopied(${j.outbox_id})">标记"已复制"</button>` : ''}
+      <button class="btn btn-primary" onclick="closeModal()">完成</button>
+    </div>`;
+}
+
+function copyGeneratedBody() {
+  const ta = $('#gen-body');
+  ta.select();
+  document.execCommand('copy');
+  alert('已复制到剪贴板');
+}
+
+async function markOutboxCopied(outboxId) {
+  await fetch('/api/v1/data/outbox/' + outboxId, {
+    method: 'PATCH', headers: authHeaders(),
+    body: JSON.stringify({status: 'copied', copied_at: new Date().toISOString()})
+  });
+}
+
+// ---------- 🔥 TK 热搜实时仪表盘 ----------
+let hotKwTimer = null;
+
+function startHotKw() {
+  loadHotKw();
+  if (hotKwTimer) clearInterval(hotKwTimer);
+  hotKwTimer = setInterval(loadHotKw, 30000);   // 30s 轮询
+}
+function stopHotKw() {
+  if (hotKwTimer) { clearInterval(hotKwTimer); hotKwTimer = null; }
+}
+
+async function loadHotKw() {
+  try {
+    const d = await API.hotKwDashboard();
+    renderHotKw(d);
+  } catch (e) {
+    $('#hotkw-status').textContent = '加载失败: ' + e;
+  }
+}
+
+function renderHotKw(d) {
+  const lr = d.last_run;
+  const lastRunHtml = lr
+    ? `上次抓取: <b>${lr.started_at?.slice(11,19) || '?'}</b> · ${lr.source} · ${lr.status} · 新增${lr.n_added||0}/更新${lr.n_updated||0}`
+    : '<span style="color:var(--warn)">⚠ 还没有抓取记录 — 廖的爬虫可能未上线，可点"立即抓取"跑一次 demo</span>';
+  $('#hotkw-status').innerHTML = `📡 实时数据 · 30s 自动刷新 · ${lastRunHtml}`;
+
+  // 总体
+  const t = d.totals;
+  $('#hotkw-totals').innerHTML = `
+    <div style="font-size:14px;line-height:1.8">
+      活跃关键词 <b>${t.active}</b><br>
+      近 ${t.stale_threshold_minutes} 分钟新鲜 <b>${t.fresh}</b>${t.fresh < t.active ? ' <span class="meta">(其余偏旧)</span>' : ''}<br>
+      <span style="color:var(--warn)">待 AI 分类 <b>${t.uncategorized}</b></span>
+    </div>`;
+
+  // 类目分布（横向条）
+  const maxCat = Math.max(1, ...d.by_category.map(c => c.n));
+  $('#hotkw-by-cat').innerHTML = d.by_category.map(c => `
+    <div style="display:flex;align-items:center;gap:8px;font-size:12px;margin:4px 0">
+      <div style="width:90px;color:#4e5969">${escapeHtml(c.cat)}</div>
+      <div style="flex:1;background:#eef2ff;height:14px;border-radius:3px"><div style="width:${(c.n/maxCat*100).toFixed(0)}%;height:100%;background:var(--accent);border-radius:3px"></div></div>
+      <b style="width:30px;text-align:right">${c.n}</b>
+    </div>`).join('');
+
+  // Rising
+  $('#hotkw-rising').innerHTML = (d.rising_top || []).map(r => {
+    const arrow = r.growth_rate > 0.3 ? '🚀' : (r.growth_rate > 0.1 ? '↑' : '→');
+    return `<tr style="cursor:pointer" onclick="openKwTrend(${r.id})">
+      <td>${escapeHtml(r.keyword)}</td>
+      <td><span class="pill" style="background:#f5f6f7">${r.category_hint || '?'}</span></td>
+      <td>${r.search_volume ? r.search_volume.toLocaleString() : '-'}</td>
+      <td><span style="color:var(--good)">${arrow} ${(r.growth_rate*100).toFixed(0)}%</span></td>
+    </tr>`;
+  }).join('');
+
+  // Volume top
+  $('#hotkw-volume').innerHTML = (d.volume_top || []).map(r => `
+    <tr style="cursor:pointer" onclick="openKwTrend(${r.id})">
+      <td>${escapeHtml(r.keyword)}</td>
+      <td><span class="pill" style="background:#f5f6f7">${r.category_hint || '?'}</span></td>
+      <td>${r.search_volume ? r.search_volume.toLocaleString() : '-'}</td>
+      <td>${r.growth_rate != null ? (r.growth_rate*100).toFixed(0)+'%' : '-'}</td>
+    </tr>`).join('');
+
+  // Recent runs
+  $('#hotkw-runs').innerHTML = (d.recent_runs || []).map(r => `
+    <tr>
+      <td>${(r.started_at || '').slice(0,19)}</td>
+      <td>${r.source}</td>
+      <td><span class="pill pill-status">${r.status}</span></td>
+      <td>${r.n_added}/${r.n_updated}/${r.n_errors}</td>
+    </tr>`).join('') || '<tr><td colspan=4 class="empty">暂无</td></tr>';
+}
+
+async function openKwTrend(kid) {
+  showModal(`<h2>📈 关键词趋势</h2><div id="kw-trend-body" class="meta">加载中…</div>`);
+  try {
+    const d = await API.hotKwTrend(kid);
+    const k = d.keyword;
+    const snaps = d.snapshots || [];
+    const minVol = Math.min(...snaps.map(s => s.search_volume).filter(Boolean), 0);
+    const maxVol = Math.max(...snaps.map(s => s.search_volume).filter(Boolean), 1);
+    const w = 720, h = 220, pad = 30;
+    const points = snaps.filter(s => s.search_volume).map((s, i, arr) => {
+      const x = pad + (i / Math.max(1, arr.length - 1)) * (w - pad*2);
+      const y = h - pad - ((s.search_volume - minVol) / Math.max(1, maxVol - minVol)) * (h - pad*2);
+      return `${x},${y}`;
+    }).join(' ');
+    $('#kw-trend-body').innerHTML = `
+      <div style="margin-bottom:10px">
+        <b style="font-size:16px">${escapeHtml(k.keyword)}</b>
+        <span class="pill" style="background:#f5f6f7;margin-left:8px">${k.category_hint || '?'}</span>
+        <span class="meta" style="margin-left:8px">当前: vol ${k.search_volume?.toLocaleString() || '?'} · growth ${k.growth_rate != null ? (k.growth_rate*100).toFixed(0)+'%' : '?'}</span>
+      </div>
+      <svg width="100%" viewBox="0 0 ${w} ${h}" style="background:#fafbfc;border:1px solid var(--border);border-radius:6px">
+        ${points ? `<polyline fill="none" stroke="var(--accent)" stroke-width="2" points="${points}"/>` : '<text x="50%" y="50%" text-anchor="middle" fill="#999">无数据点</text>'}
+        ${snaps.filter(s => s.search_volume).map((s, i, arr) => {
+          const x = pad + (i / Math.max(1, arr.length - 1)) * (w - pad*2);
+          const y = h - pad - ((s.search_volume - minVol) / Math.max(1, maxVol - minVol)) * (h - pad*2);
+          return `<circle cx="${x}" cy="${y}" r="3" fill="var(--accent)"><title>${s.captured_at}: ${s.search_volume}</title></circle>`;
+        }).join('')}
+      </svg>
+      <div class="meta" style="margin-top:8px">共 ${snaps.length} 个历史快照（近 ${d.days} 天）。每次抓取自动写一条 snapshot，趋势会越积越完整。</div>
+    `;
+  } catch (e) {
+    $('#kw-trend-body').innerHTML = '<div class="empty">加载失败: ' + e + '</div>';
+  }
+}
+
+async function runScrapeManual() {
+  if (!confirm('立即触发一次 demo 抓取？\n\n注意：当前是廖爬虫的占位 demo，会用模拟数据 upsert 到 tk_hot_keywords 表。\n生产用真实抓取需要廖把 scripts/scrape_tk_hot.py 里的 fetch_keywords_real() 实现完。')) return;
+  $('#hotkw-status').innerHTML = '⏳ 抓取中...';
+  try {
+    // 用现有 admin key 当 X9_API_KEY，让脚本通过 API 写入；这里简单做法：
+    // 直接前端调脚本所做的事 — 即批量 POST 一批 demo keywords
+    const demoItems = [
+      {"keyword":"period underwear","source_platform":"tiktok","region":"US","category_hint":"female_care","search_volume":Math.round(220000*(0.9+Math.random()*0.2)),"growth_rate":+(0.18+Math.random()*0.1).toFixed(3),"rank_position":4,"last_seen_at":new Date().toISOString().slice(0,19).replace('T',' ')},
+      {"keyword":"organic cotton pads","source_platform":"tiktok","region":"US","category_hint":"female_care","search_volume":Math.round(95000*(0.9+Math.random()*0.2)),"growth_rate":+(0.34+Math.random()*0.1).toFixed(3),"rank_position":12,"last_seen_at":new Date().toISOString().slice(0,19).replace('T',' ')},
+      {"keyword":"dog diapers male","source_platform":"tiktok","region":"US","category_hint":"pet","search_volume":Math.round(88000*(0.9+Math.random()*0.2)),"growth_rate":+(0.42+Math.random()*0.1).toFixed(3),"rank_position":8,"last_seen_at":new Date().toISOString().slice(0,19).replace('T',' ')},
+      {"keyword":"biodegradable period pads","source_platform":"tiktok","region":"US","search_volume":Math.round(15000+Math.random()*30000),"growth_rate":+(0.5+Math.random()*0.5).toFixed(3),"last_seen_at":new Date().toISOString().slice(0,19).replace('T',' ')},
+      {"keyword":"sensitive skin overnight","source_platform":"tiktok","region":"US","search_volume":Math.round(10000+Math.random()*25000),"growth_rate":+(0.3+Math.random()*0.4).toFixed(3),"last_seen_at":new Date().toISOString().slice(0,19).replace('T',' ')},
+    ];
+    // 创建 scrape_run 记录
+    const runResp = await fetch('/api/v1/data/scrape_runs/bulk', {
+      method:'POST', headers: authHeaders(),
+      body: JSON.stringify({items:[{source:'manual_demo_ui', region:'US', triggered_by:'manual', operator:CURRENT_USER?.username, status:'running'}]})
+    }).then(r => r.json());
+    // 推关键词（自动触发 snapshot trigger）
+    const r = await fetch('/api/v1/data/tk_hot_keywords/bulk', {
+      method:'POST', headers: authHeaders(),
+      body: JSON.stringify({items: demoItems})
+    }).then(r => r.json());
+    alert(`✓ 抓取完成 — 新增 ${r.inserted || 0}、更新 ${r.updated || 0}。\n\n仪表盘自动刷新。`);
+    loadHotKw();
+  } catch (e) {
+    alert('抓取失败: ' + e);
+  }
+}
+
+async function runEnrichAll() {
+  if (!confirm('让 AI 把所有"待分类"关键词分一遍？\n\n会调用激活的 LLM Provider 处理一批（最多 50 条），花几秒。')) return;
+  $('#hotkw-status').innerHTML = '⏳ AI 分析中...';
+  try {
+    const r = await API.hotKwEnrich({scope: 'uncategorized', max_items: 50});
+    if (!r.enriched || !r.enriched.length) { alert(r.message || '没有待分类的关键词'); loadHotKw(); return; }
+    let msg = `✓ AI 分析完成 — 处理了 ${r.n_input} 条\n`;
+    msg += `Provider: ${r.provider} / ${r.model}\n`;
+    msg += `Tokens: ${r.tokens.input}→${r.tokens.output}\n\n`;
+    msg += `示例（前 5 条）：\n`;
+    r.enriched.slice(0, 5).forEach(e => {
+      msg += `- "${e.keyword}" → ${e.category}, X9 相关性 ${e.x9_relevance}${e.is_competitor_term ? ', ⚠ 竞品词' : ''}${e.deactivated ? ', 已自动停用' : ''}\n`;
+    });
+    alert(msg);
+    loadHotKw();
+  } catch (e) {
+    alert('AI 分析失败: ' + e.message);
+  }
+}
+
+// ---------- Title optimizer (任务 2.2.2) ----------
+async function optimizeTitleFor(productId) {
+  // First check readiness (LLM provider + keyword data)
+  let info;
+  try { info = await API.titleInfo(); }
+  catch (e) { alert('加载失败: ' + e); return; }
+
+  if (!info.ready) {
+    alert('⚠ 标题优化器未启用：' + (info.reason || '请管理员到「设置」配置 LLM Provider'));
+    return;
+  }
+
+  const seedWarning = info.keywords.warning
+    ? `<div style="background:#fff7e6;color:#d46b08;padding:6px 10px;border-radius:5px;margin-bottom:10px;font-size:12px">⚠ ${info.keywords.warning}</div>`
+    : '';
+
+  showModal(`
+    <h2 style="margin:0 0 8px">🔍 标题优化 — 产品 #${productId}</h2>
+    ${seedWarning}
+    <div class="meta" style="margin-bottom:10px">
+      Provider: <b>${info.provider.code}</b> / ${info.provider.model}
+      · 关键词库: <b>${info.keywords.fresh_30d}</b> 条 (近 30 天)
+      ${info.keywords.bootstrap_seeds > 0 ? `· 其中 ${info.keywords.bootstrap_seeds} 条种子` : ''}
+    </div>
+    <div class="grid-2">
+      <div class="field">
+        <label>目标平台</label>
+        <select id="opt-platform">
+          <option value="tiktok" selected>TikTok Shop (≤100 字符, 推荐 60-90)</option>
+          <option value="temu">Temu (≤80, 推荐 50-70)</option>
+          <option value="ebay">eBay (≤80, 推荐 50-75)</option>
+          <option value="independent">X9 独立站 (≤100, 推荐 60-95)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>区域</label>
+        <select id="opt-region">
+          <option value="US" selected>US</option>
+          <option value="UK">UK</option>
+          <option value="MX">MX</option>
+          <option value="SEA">SEA</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label>候选数量</label>
+      <select id="opt-n">
+        <option value="3">3 条</option>
+        <option value="5" selected>5 条</option>
+        <option value="8">8 条</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>关键词来源</label>
+      <select id="opt-kw-mode">
+        <option value="auto" selected>自动（按品类挑权重最高的 8 个）</option>
+        <option value="manual">手动指定（下面勾选）</option>
+      </select>
+    </div>
+    <div id="opt-kw-list" style="display:none;max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:5px;padding:6px;font-size:12px">加载中…</div>
+    <div class="actions">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" onclick="doOptimizeTitle(${productId})">🔍 生成候选</button>
+    </div>
+  `);
+
+  // Toggle manual keyword chooser
+  $('#opt-kw-mode').addEventListener('change', async (e) => {
+    const list = $('#opt-kw-list');
+    if (e.target.value === 'manual') {
+      list.style.display = 'block';
+      try {
+        const r = await fetch('/api/v1/data/tk_hot_keywords?limit=200&order_by=search_volume&desc=true').then(r => r.json());
+        const grouped = {};
+        for (const k of r.items || []) {
+          const cat = k.category_hint || '(未分类)';
+          if (!grouped[cat]) grouped[cat] = [];
+          grouped[cat].push(k);
+        }
+        list.innerHTML = Object.entries(grouped).map(([cat, kws]) => `
+          <div style="font-weight:600;margin:6px 0 3px;color:#4e5969">${cat} (${kws.length})</div>
+          ${kws.map(k => `
+            <label style="display:flex;align-items:center;gap:6px;padding:2px 4px;cursor:pointer">
+              <input type="checkbox" name="opt-kw" value="${k.id}">
+              <span>${escapeHtml(k.keyword)}</span>
+              <span class="meta" style="margin-left:auto">vol≈${(k.search_volume||0).toLocaleString()} · ${k.growth_rate ? (k.growth_rate*100).toFixed(0)+'%' : '-'}</span>
+            </label>
+          `).join('')}
+        `).join('');
+      } catch (e) { list.innerHTML = '<div class="empty">加载失败: ' + e + '</div>'; }
+    } else {
+      list.style.display = 'none';
+    }
+  });
+}
+
+async function doOptimizeTitle(productId) {
+  const platform = $('#opt-platform').value;
+  const region = $('#opt-region').value;
+  const n_variants = parseInt($('#opt-n').value);
+  const mode = $('#opt-kw-mode').value;
+  const body = {product_id: productId, platform, region, n_variants};
+  if (mode === 'manual') {
+    body.keyword_ids = [...document.querySelectorAll('input[name=opt-kw]:checked')].map(c => parseInt(c.value));
+    if (!body.keyword_ids.length) { alert('请至少勾选 1 个关键词，或切回「自动」'); return; }
+  }
+
+  showModal(`<h2>🔍 生成中…</h2>
+    <div class="meta">${platform} / ${region} · ${n_variants} 条 · 调 LLM 中（5-15 秒）</div>
+    <div id="opt-result" style="margin-top:10px"></div>`);
+
+  try {
+    const j = await API.optimizeTitle(body);
+    renderTitleVariants(j, productId);
+  } catch (e) {
+    $('#opt-result').innerHTML = '<div class="empty">生成失败: ' + e.message + '</div>';
+  }
+}
+
+function renderTitleVariants(j, productId) {
+  const limits = j.platform_limits;
+  const kwHtml = (j.keywords_used || []).map(k => {
+    const seedTag = k.is_bootstrap ? '<span class="pill" style="background:#fff7e6;color:#d46b08;font-size:10px">种子</span>' : '';
+    return `<span class="pill" style="background:#f5f6f7;font-size:11px;margin:2px 3px 2px 0">${escapeHtml(k.keyword)} ${seedTag}</span>`;
+  }).join('');
+
+  const variantsHtml = (j.variants || []).map((v, i) => {
+    const charPercent = Math.round(v.char_count / limits.max_chars * 100);
+    const overLimit = v.over_limit;
+    const flagsHtml = (v.compliance_flags || []).length
+      ? `<div class="meta" style="color:var(--bad)">⚠ ${v.compliance_flags.map(f => `${escapeHtml(f.phrase)} → ${escapeHtml(f.suggestion)}`).join('; ')}</div>`
+      : '';
+    const barColor = overLimit ? 'var(--bad)' : (charPercent > 90 ? 'var(--warn)' : 'var(--good)');
+    return `
+      <div style="border:1px solid ${overLimit ? 'var(--bad)' : 'var(--border)'};border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff">
+        <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px">
+          <span class="pill" style="background:var(--accent-soft);color:var(--accent);min-width:30px;text-align:center">#${i+1}</span>
+          <div style="flex:1;font-weight:600;font-size:14px;line-height:1.4;word-break:break-word" id="title-${i}">${escapeHtml(v.title)}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px">
+          <span style="color:${barColor};font-weight:600">${v.char_count} 字符</span>
+          <div style="flex:1;height:5px;background:#eee;border-radius:3px;overflow:hidden">
+            <div style="width:${Math.min(100, charPercent)}%;height:100%;background:${barColor}"></div>
+          </div>
+          <span class="meta">${limits.max_chars} 上限</span>
+          ${overLimit ? '<span style="color:var(--bad);font-weight:600">超限!</span>' : ''}
+        </div>
+        ${v.primary_keyword ? `<div class="meta" style="font-size:11px">主关键词: <b style="color:var(--accent)">${escapeHtml(v.primary_keyword)}</b></div>` : ''}
+        ${v.rationale ? `<div class="meta" style="font-size:11px">${escapeHtml(v.rationale)}</div>` : ''}
+        ${flagsHtml}
+        <div class="actions" style="justify-content:flex-end;margin-top:6px">
+          <button class="btn" onclick="copyTitleVariant(${i})" style="font-size:11px;padding:3px 10px">📋 复制</button>
+          <button class="btn btn-primary" onclick="applyTitleVariant(${productId}, ${i})" style="font-size:11px;padding:3px 10px">✓ 用这条替换 name_en</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  $('#opt-result').innerHTML = `
+    <div class="meta" style="margin-bottom:8px">
+      <span class="pill" style="background:var(--accent-soft);color:var(--accent)">${limits.label}</span>
+      <span class="pill" style="background:#f5f6f7">推荐 ${limits.recommended} 字符</span>
+      <span class="meta">${j.resolved_provider} / ${j.resolved_model} · ${j.tokens.input}→${j.tokens.output} tok</span>
+    </div>
+    <div class="meta" style="margin-bottom:10px">基于关键词: ${kwHtml}</div>
+    ${variantsHtml || '<div class="empty">没有生成候选标题</div>'}
+    <div class="actions">
+      <button class="btn btn-primary" onclick="closeModal()">完成</button>
+    </div>`;
+  // Stash variants on window for copy/apply handlers
+  window._lastTitleVariants = j.variants;
+}
+
+function copyTitleVariant(idx) {
+  const v = (window._lastTitleVariants || [])[idx];
+  if (!v) return;
+  navigator.clipboard.writeText(v.title).then(
+    () => alert('已复制：\n\n' + v.title),
+    () => alert('复制失败，请手动选中复制')
+  );
+}
+
+async function applyTitleVariant(productId, idx) {
+  const v = (window._lastTitleVariants || [])[idx];
+  if (!v) return;
+  if (!confirm(`确认用这条覆盖产品的英文名 (name_en)？\n\n新值：\n${v.title}\n\n(写入数据库后会被审计 log 记录)`)) return;
+  // get product to find SKU
+  const list = await API.products({limit: 1, q: ''});
+  const r = await fetch('/api/products/' + (window._currentProduct?.sku_code || ''), {headers: authHeaders()});
+  // Actually find by id
+  const all = await API.products({limit: 200});
+  const target = (all.items || []).find(p => p.id === productId);
+  if (!target) { alert('找不到产品'); return; }
+  const upd = await API.saveProduct(target.sku_code, {name_en: v.title});
+  if (upd.detail) { alert('保存失败: ' + upd.detail); return; }
+  alert('✓ 已替换。可在产品 tab 看到新标题。');
+  closeModal();
+  loadProducts();
+}
+
+// ---------- Outreach ----------
+async function loadOutreach() {
+  const data = await API.outreach({limit: 300});
+  const tbody = $('#t-outreach tbody');
+  tbody.innerHTML = '';
+  if (!data.items.length) { tbody.innerHTML = '<tr><td colspan=10 class="empty">无数据</td></tr>'; return; }
+  for (const o of data.items) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${o.event_date || ''}</td>
+      <td>${o.store_name || ''}</td>
+      <td>${o.bd_owner || ''}</td>
+      <td><a class="handle-link" href="https://www.tiktok.com/@${o.creator_handle}" target="_blank">@${o.creator_handle}</a></td>
+      <td><span class="pill pill-status">${statusLabel(o.status)}</span></td>
+      <td>${o.sample_qty || 0}</td>
+      <td>${o.commission_rate || ''}</td>
+      <td>${o.video_url ? '<a href="'+o.video_url+'" target="_blank">link</a>' : ''}</td>
+      <td>${o.ad_auth_code ? '<span class="meta">'+o.ad_auth_code.slice(0,18)+'…</span>' : ''}</td>
+      <td class="meta">${(o.remark || '').slice(0, 30)}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+$('#o-reload').addEventListener('click', loadOutreach);
+
+// ---------- Dashboard ----------
+// ---------- Business dashboard ----------
+const BIZ_LABELS = {
+  female_care: '女性护理',
+  feminine_care: '女性护理',
+  adult_care: '成人护理',
+  pet: '宠物用品',
+  pet_care: '宠物用品',
+  baby: '母婴',
+  mom_baby: '母婴',
+  home_care: '家居护理',
+  mask: '口罩',
+  health_mask: '健康/口罩',
+  general_lifestyle: '生活方式',
+  sample_shipped: '已寄样',
+  contacted: '已建联',
+  video_published: '已发布视频',
+  ad_authorized: '已授权',
+  prospect: '候选',
+  unassigned: '未分配',
+  unknown: '待分类',
+};
+
+function bizNum(v) {
+  return Number(v || 0).toLocaleString('zh-CN');
+}
+function bizLabel(v) {
+  if (v === null || v === undefined || v === '') return '未填写';
+  return BIZ_LABELS[v] || String(v).replace(/_/g, ' ');
+}
+function bizKpi(title, value, sub, tone='') {
+  return `<div class="biz-kpi ${tone}">
+    <div class="biz-kpi-label">${escapeHtml(title)}</div>
+    <div class="biz-kpi-value">${escapeHtml(value)}</div>
+    <div class="biz-kpi-sub">${escapeHtml(sub)}</div>
+  </div>`;
+}
+function bizBarList(items, tone='') {
+  items = items || [];
+  if (!items.length) return '<div class="empty">暂无数据</div>';
+  const max = Math.max(1, ...items.map(x => Number(x.value || 0)));
+  return items.map((x, idx) => {
+    const cls = tone || (idx === 0 ? 'good' : (idx === 1 ? 'warn' : ''));
+    const pct = Math.max(2, Number(x.value || 0) / max * 100).toFixed(0);
+    return `<div class="biz-bar-row">
+      <div class="biz-bar-name" title="${escapeHtml(bizLabel(x.label || x.key))}">${escapeHtml(bizLabel(x.label || x.key))}</div>
+      <div class="biz-bar-track"><div class="biz-bar-fill ${cls}" style="width:${pct}%"></div></div>
+      <div class="biz-bar-value">${bizNum(x.value)}</div>
+    </div>`;
+  }).join('');
+}
+function bizActionCard(value, label, hint, tone='') {
+  return `<div class="biz-action ${tone}">
+    <b>${bizNum(value)}</b>
+    <span>${escapeHtml(label)} · ${escapeHtml(hint)}</span>
+  </div>`;
+}
+function renderBusinessActions(actions) {
+  actions = actions || {};
+  $('#biz-actions').innerHTML = [
+    bizActionCard(actions.missing_email, '缺邮箱线索', '优先补联系方式', 'bad'),
+    bizActionCard(actions.review_required, '待复核线索', '销售/运营确认', 'warn'),
+    bizActionCard(actions.unassigned, '未分配达人', '明确 BD 负责人', 'warn'),
+    bizActionCard(actions.unknown_keywords, '未分类热搜', '补品类判断', ''),
+    bizActionCard(actions.video_links, '视频链接', '可复盘内容', 'good'),
+    bizActionCard(actions.auth_codes, '授权码', '可进入投放', 'good'),
+  ].join('');
+}
+function renderBusinessTopLeads(rows) {
+  rows = rows || [];
+  const tbody = $('#biz-top-leads');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无线索</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const name = r.display_name || r.handle || '-';
+    const handle = r.handle && r.handle !== name ? '@' + r.handle : '';
+    const email = r.email ? '<span class="pill" style="background:#f6ffed;color:#389e0d">有</span>' : '<span class="pill" style="background:#fff1f0;color:#cf1322">缺</span>';
+    return `<tr>
+      <td><b>${escapeHtml(name)}</b><div class="meta">${escapeHtml(handle)}</div></td>
+      <td><span class="pill pill-tier-${escapeHtml(r.fit_level || 'D')}">${escapeHtml(r.fit_level || '-')}</span></td>
+      <td><b>${bizNum(r.recommendation_score)}</b></td>
+      <td>${escapeHtml(bizLabel(r.primary_product_category))}</td>
+      <td>${escapeHtml(r.outreach_priority || '-')}</td>
+      <td>${email}</td>
+    </tr>`;
+  }).join('');
+}
+async function loadBusinessDashboard() {
+  const alert = $('#biz-alert');
+  alert.className = 'biz-alert';
+  alert.textContent = '正在刷新业务统计...';
+  try {
+    const data = await API.businessSummary();
+    const h = data.headline || {};
+    const actions = data.actions || {};
+    const charts = data.charts || {};
+    $('#biz-kpis').innerHTML = [
+      bizKpi('产品 SKU', bizNum(h.products), `主推 ${bizNum(h.main_push)} 个，素材 ${bizNum(h.product_images)} 张`),
+      bizKpi('达人线索池', bizNum(h.leads), `可识别达人 ${bizNum(h.unique_creators)} 个`, 'good'),
+      bizKpi('邮箱覆盖率', `${Number(h.lead_email_rate || 0).toFixed(1)}%`, `待补邮箱 ${bizNum(actions.missing_email)} 条`, 'warn'),
+      bizKpi('建联事件', bizNum(h.outreach), `视频 ${bizNum(actions.video_links)} 条，授权 ${bizNum(actions.auth_codes)} 个`, 'good'),
+      bizKpi('热搜关键词', bizNum(h.keywords), `待分类 ${bizNum(actions.unknown_keywords)} 条`),
+      bizKpi('待人工复核', bizNum(actions.review_required), '优先确认高潜线索', 'warn'),
+      bizKpi('未分配达人', bizNum(actions.unassigned), '需要明确跟进负责人', 'bad'),
+      bizKpi('主推占比', `${h.products ? (h.main_push / h.products * 100).toFixed(1) : '0.0'}%`, '用于检查产品聚焦度'),
+    ].join('');
+    $('#biz-products-total').textContent = `共 ${bizNum(h.products)} 个 SKU`;
+    $('#biz-leads-total').textContent = `共 ${bizNum(h.leads)} 条`;
+    $('#biz-outreach-total').textContent = `共 ${bizNum(h.outreach)} 次`;
+    $('#biz-owner-total').textContent = `可识别 ${bizNum(h.unique_creators)} 个`;
+    $('#biz-keyword-total').textContent = `共 ${bizNum(h.keywords)} 条`;
+    $('#biz-products-chart').innerHTML = bizBarList(charts.product_categories);
+    $('#biz-leads-chart').innerHTML = bizBarList(charts.lead_fit, 'good');
+    $('#biz-outreach-chart').innerHTML = bizBarList(charts.outreach_status);
+    $('#biz-owner-chart').innerHTML = bizBarList(charts.owner_bd, 'warn');
+    $('#biz-keyword-chart').innerHTML = bizBarList(charts.keyword_category);
+    renderBusinessActions(actions);
+    renderBusinessTopLeads(data.top_leads);
+    alert.textContent = '已更新：' + new Date().toLocaleString('zh-CN', {hour12:false});
+  } catch (e) {
+    alert.className = 'biz-alert warn';
+    alert.textContent = '业务看板暂时无法加载：' + e.message;
+  }
+}
+
+async function loadDashboard() {
+  const s = await API.stats();
+  $('#d-cat').innerHTML = barList(s.by_category.map(x => [x.name, x.count]));
+  $('#d-status').innerHTML = barList(s.creators_by_status.map(x => [statusLabel(x.status), x.count]));
+  $('#d-tier').innerHTML = barList(s.creators_by_tier.map(x => [x.tier, x.count]));
+}
+function barList(items) {
+  const max = Math.max(1, ...items.map(x => x[1]));
+  return items.map(([k,v]) =>
+    `<div style="display:flex;align-items:center;gap:8px;margin:4px 0">
+       <div style="width:120px;font-size:12px">${k}</div>
+       <div style="flex:1;background:#eef2ff;height:18px;border-radius:3px"><div style="width:${(v/max*100).toFixed(0)}%;height:100%;background:var(--accent);border-radius:3px"></div></div>
+       <b style="width:36px;text-align:right">${v}</b>
+     </div>`).join('');
+}
+
+// ---------- Field builders ----------
+function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function textField(label, name, val, readonly=false) {
+  return `<div class="field"><label>${label}</label><input name="${name}" value="${escapeHtml(val)}" ${readonly?'readonly':''}></div>`;
+}
+function numberField(label, name, val, step=1) {
+  return `<div class="field"><label>${label}</label><input type="number" step="${step}" name="${name}" value="${escapeHtml(val ?? '')}"></div>`;
+}
+function textareaField(label, name, val) {
+  return `<div class="field"><label>${label}</label><textarea name="${name}">${escapeHtml(val)}</textarea></div>`;
+}
+function selectField(label, name, opts, val) {
+  return `<div class="field"><label>${label}</label><select name="${name}">${
+    opts.map(o => { const [k,v] = o.split(':'); return `<option value="${k}" ${k===String(val)?'selected':''}>${v}</option>`; }).join('')
+  }</select></div>`;
+}
+function arrField(label, name, vals) {
+  if (!Array.isArray(vals)) vals = [];
+  return `<div class="field"><label>${label}</label>
+    <div class="field-arr" data-arr="${name}">
+      ${vals.map(v => `<input value="${escapeHtml(v)}">`).join('')}
+      <input value="" placeholder="+ 新增一行 (回车确认)">
+    </div></div>`;
+}
+function collectFields(root) {
+  const out = {};
+  $$('input[name],textarea[name],select[name]', root).forEach(el => {
+    const k = el.name;
+    let v = el.value;
+    if (el.type === 'number') v = v === '' ? null : Number(v);
+    out[k] = v;
+  });
+  $$('[data-arr]', root).forEach(c => {
+    const name = c.dataset.arr;
+    out[name] = $$('input', c).map(i => i.value.trim()).filter(Boolean);
+  });
+  return out;
+}
+
+// ---------- Modal ----------
+function showModal(html) {
+  $('#modal-content').innerHTML = html;
+  $('#modal-bg').classList.add('show');
+}
+function closeModal() {
+  $('#modal-bg').classList.remove('show');
+}
+$('#modal-close').addEventListener('click', closeModal);
+$('#modal-bg').addEventListener('click', e => { if (e.target.id === 'modal-bg') closeModal(); });
+
+// ---------- Utils ----------
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+// ---------- Settings (Users + LLM providers + Feature binding) ----------
+async function loadSettings() {
+  await loadUsersPanel();
+  await loadFeaturesPanel();
+  loadWebhooks();
+  const headerHtml = '';
+
+  // 2. provider 卡片
+  let data;
+  try { data = await API.llmList(); }
+  catch (e) { $('#llm-list').innerHTML = headerHtml + '<div class="empty">加载失败: ' + e + '</div>'; return; }
+
+  const cards = data.items.map(p => {
+    const activeBadge = p.is_active ? '<span class="pill" style="background:#16a34a;color:#fff">● Active</span>' : '';
+    const keyBadge = p.api_key_set ? '<span class="pill" style="background:#16a34a;color:#fff">已设 Key</span>' : '<span class="pill" style="background:#f5a623;color:#fff">未设 Key</span>';
+    const test = p.last_test_status === 'ok'
+      ? `<span class="pill" style="background:#16a34a;color:#fff">连通 ✓</span> <span class="meta">${(p.last_tested_at||'').slice(0,16)}</span>`
+      : (p.last_test_status === 'error'
+          ? `<span class="pill" style="background:#ef4444;color:#fff">连通失败</span> <span class="meta" title="${escapeHtml(p.last_test_message||'')}">${(p.last_test_message||'').slice(0,60)}…</span>`
+          : '<span class="meta">尚未测试</span>');
+    return `
+      <div class="panel" style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;background:#fff">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <b style="font-size:14px">${escapeHtml(p.display_name)}</b>
+          <span class="pill" style="background:#f5f6f7">${p.code}</span>
+          <span class="pill" style="background:#f5f6f7">${p.type}</span>
+          ${activeBadge} ${keyBadge}
+          <span style="margin-left:auto">${test}</span>
+        </div>
+        <div class="grid-2">
+          <div>
+            <div class="field"><label>API Key</label>
+              <input type="password" id="key-${p.code}" value="${p.api_key || ''}" placeholder="粘贴你的 ${p.code.toUpperCase()}_API_KEY">
+            </div>
+            <div class="field"><label>默认模型</label>
+              <input id="model-${p.code}" value="${escapeHtml(p.default_model||'')}">
+            </div>
+          </div>
+          <div>
+            <div class="field"><label>Base URL</label>
+              <input id="base-${p.code}" value="${escapeHtml(p.base_url||'')}">
+            </div>
+            <div class="field"><label>额外 Header (JSON)</label>
+              <input id="hdr-${p.code}" value='${escapeHtml(typeof p.extra_headers === 'object' ? JSON.stringify(p.extra_headers||{}) : (p.extra_headers||""))}'>
+            </div>
+          </div>
+        </div>
+        <div class="actions" style="justify-content:flex-start">
+          <button class="btn btn-primary" onclick="saveProvider('${p.code}')">保存</button>
+          <button class="btn" onclick="testProvider('${p.code}')">测试连通</button>
+          <button class="btn" onclick="activateProvider('${p.code}')" ${p.is_active?'disabled':''}>${p.is_active?'已激活':'设为活跃'}</button>
+          <button class="btn" onclick="clearKey('${p.code}')" style="margin-left:auto;color:var(--bad)">清除 Key</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  $('#llm-list').innerHTML = headerHtml + cards;
+
+  // 3. 自定义 Provider 表单
+  const f = $('#new-provider-form');
+  if (f) f.innerHTML = `
+    ${textField('Code (英文标识，如 moonshot)', 'new_code', '')}
+    ${textField('显示名', 'new_display_name', '')}
+    ${selectField('协议', 'new_type', ['openai_compat:OpenAI 兼容','anthropic:Anthropic Messages'], 'openai_compat')}
+    ${textField('Base URL', 'new_base_url', '')}
+    ${textField('默认模型', 'new_default_model', '')}
+    <div class="actions"><button class="btn btn-primary" onclick="createProvider()">创建</button></div>`;
+}
+
+// ---------- Users panel ----------
+async function loadUsersPanel() {
+  const sec = $('#users-section');
+  const list = $('#users-list');
+  const meta = $('#users-section-meta');
+  if (!CURRENT_USER) { list.innerHTML = '<div class="empty">未登录</div>'; return; }
+  if (CURRENT_USER.role !== 'admin') {
+    sec.style.display = 'none';
+    return;
+  }
+  sec.style.display = '';
+  meta.textContent = `（管理员: ${CURRENT_USER.display_name}）`;
+  let data;
+  try { data = await API.authUsers(); }
+  catch (e) { list.innerHTML = '<div class="empty">加载失败: ' + e + '</div>'; return; }
+  const rows = (data.items || []).map(u => `
+    <div class="panel" style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px;background:#fff">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <b>${escapeHtml(u.display_name || u.username)}</b>
+        <span class="pill" style="background:#f5f6f7">@${escapeHtml(u.username)}</span>
+        <span class="pill ${u.role === 'admin' ? 'pill-tier-A' : (u.role === 'readonly' ? 'pill-tier-D' : 'pill-tier-B')}">${u.role}</span>
+        <span class="pill" style="background:${u.active ? '#f6ffed' : '#fff1f0'};color:${u.active ? '#389e0d' : '#cf1322'}">${u.active ? '启用' : '停用'}</span>
+        <span class="meta" style="margin-left:auto">活跃 Key: ${u.active_keys}/${u.total_keys} · 最近用: ${(u.last_used_at || '从未').slice(0,16)}</span>
+      </div>
+      <div class="actions" style="justify-content:flex-start;margin-top:6px">
+        <button class="btn btn-primary" onclick="issueKey(${u.id}, '${escapeHtml(u.display_name||u.username)}')">+ 签发新 Key</button>
+        <button class="btn" onclick="viewKeys(${u.id}, '${escapeHtml(u.display_name||u.username)}')">查看 Keys</button>
+        ${u.id === CURRENT_USER.user_id ? '' : `
+          <button class="btn" onclick="toggleActive(${u.id}, ${u.active ? 0 : 1})">${u.active ? '停用' : '启用'}</button>
+          <button class="btn" onclick="changeRole(${u.id}, '${u.role}')">改角色</button>
+          <button class="btn" onclick="delUser(${u.id}, '${escapeHtml(u.display_name||u.username)}')" style="color:var(--bad);margin-left:auto">删除</button>
+        `}
+      </div>
+    </div>`).join('');
+  list.innerHTML = rows + `
+    <details style="margin-top:10px"><summary>＋ 创建新用户</summary>
+      <div style="padding:10px;border:1px solid var(--border);border-radius:6px;margin-top:6px">
+        <div class="field"><label>username</label><input id="new-user-username" placeholder="只能字母数字下划线"></div>
+        <div class="field"><label>显示名</label><input id="new-user-displayname" placeholder="如 廖 / 实习生1"></div>
+        <div class="field"><label>角色</label><select id="new-user-role">
+          <option value="admin">admin (全权)</option>
+          <option value="user" selected>user (写数据,不动 schema)</option>
+          <option value="readonly">readonly (只读)</option>
+        </select></div>
+        <div class="field"><label>备注</label><input id="new-user-notes"></div>
+        <div class="actions"><button class="btn btn-primary" onclick="createUser()">创建</button></div>
+      </div>
+    </details>`;
+}
+
+async function issueKey(uid, displayName) {
+  const desc = prompt(`为 ${displayName} 签发新 Key —— 备注（可选）：`, '');
+  if (desc === null) return;
+  const r = await API.authIssueKey(uid, desc ? {description: desc} : {});
+  if (r.detail) { alert('签发失败: ' + r.detail); return; }
+  prompt(`新 Key 已签发！\n\n⚠️ 这是唯一一次显示，请立即复制并安全交给 ${displayName}：\n\n服务器只存哈希，丢失只能重新签。`, r.token);
+  loadUsersPanel();
+}
+
+async function viewKeys(uid, displayName) {
+  const r = await API.authListKeys(uid);
+  const items = r.items || [];
+  if (!items.length) { alert(`${displayName} 没有任何 Key`); return; }
+  const list = items.map(k => {
+    const status = k.revoked ? '已撤销' : (k.expires_at && new Date(k.expires_at) < new Date() ? '已过期' : '有效');
+    const last = k.last_used_at ? '最近: ' + k.last_used_at.slice(0,16) : '从未使用';
+    return `[${status}] ${k.prefix}******  ${last}  备注: ${k.description || '-'}\n  → 撤销请记下 key_id=${k.id}`;
+  }).join('\n\n');
+  const action = prompt(`${displayName} 的 Keys (共 ${items.length} 个):\n\n${list}\n\n要撤销某把 Key？输入 key_id（直接回车取消）：`, '');
+  if (action && action.trim()) {
+    const kid = parseInt(action.trim());
+    if (!isNaN(kid)) {
+      const rr = await API.authRevokeKey(kid);
+      if (rr.detail) alert('撤销失败: ' + rr.detail);
+      else alert('已撤销 key_id=' + kid);
+      loadUsersPanel();
+    }
+  }
+}
+
+async function toggleActive(uid, target) {
+  await API.authPatchUser(uid, {active: target});
+  loadUsersPanel();
+}
+async function changeRole(uid, current) {
+  const next = prompt('新角色 (admin / user / readonly):', current);
+  if (!next || !['admin','user','readonly'].includes(next)) return;
+  const r = await API.authPatchUser(uid, {role: next});
+  if (r.detail) alert('修改失败: ' + r.detail);
+  loadUsersPanel();
+}
+async function delUser(uid, name) {
+  if (!confirm(`确认删除用户 ${name}？(他所有 Key 会一并删除，无法恢复)`)) return;
+  const r = await API.authDelUser(uid);
+  if (r.detail) alert('删除失败: ' + r.detail);
+  loadUsersPanel();
+}
+async function createUser() {
+  const body = {
+    username: $('#new-user-username').value.trim(),
+    display_name: $('#new-user-displayname').value.trim() || $('#new-user-username').value.trim(),
+    role: $('#new-user-role').value,
+    notes: $('#new-user-notes').value.trim(),
+  };
+  if (!body.username) { alert('username 必填'); return; }
+  const r = await API.authNewUser(body);
+  if (r.detail) { alert('创建失败: ' + r.detail); return; }
+  alert(`用户 ${body.username} 已创建。\n下一步：在用户卡片点 "+ 签发新 Key" 给他签首把 Key。`);
+  loadUsersPanel();
+}
+
+// ---------- Feature-binding panel ----------
+// ---------- Webhooks (钉钉) ----------
+async function loadWebhooks() {
+  const list = document.getElementById('webhooks-list');
+  if (!list) return;
+  if (!CURRENT_USER || CURRENT_USER.role !== 'admin') {
+    list.innerHTML = '<div class="meta">需要 admin 权限才能查看/配置</div>';
+    return;
+  }
+  try {
+    const r = await fetch('/api/v1/data/webhooks?limit=50', {headers: authHeaders()});
+    const j = await r.json();
+    const items = j.items || [];
+    if (!items.length) {
+      list.innerHTML = '<div class="empty">还没有订阅者。下方添加一个钉钉机器人 webhook URL，schema 改动会自动推送到群。</div>';
+      return;
+    }
+    list.innerHTML = items.map(w => {
+      const status = w.last_status === 'ok'
+        ? '<span class="pill" style="background:#16a34a;color:#fff">● 上次 ok</span>'
+        : (w.last_status === 'fail'
+            ? `<span class="pill" style="background:#ef4444;color:#fff" title="${escapeHtml(w.last_error||'')}">● 上次失败</span>`
+            : '<span class="meta">尚未触发</span>');
+      const active = w.active
+        ? '<span class="pill" style="background:#16a34a;color:#fff">启用</span>'
+        : '<span class="pill" style="background:#9ca3af;color:#fff">已停用</span>';
+      return `
+        <div class="panel" style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px;background:#fff">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <b>${escapeHtml(w.name)}</b>
+            <span class="pill" style="background:#f5f6f7">${w.kind}</span>
+            ${active} ${status}
+            <span class="meta">${escapeHtml((w.url || '').slice(0, 60))}…</span>
+            <span style="margin-left:auto;display:flex;gap:6px">
+              <button class="btn" onclick="testWebhook(${w.id})">📨 测试</button>
+              <button class="btn" onclick="toggleWebhook(${w.id}, ${w.active ? 0 : 1})">${w.active ? '停用' : '启用'}</button>
+              <button class="btn" onclick="deleteWebhook(${w.id})" style="color:#ef4444">删除</button>
+            </span>
+          </div>
+          ${w.last_error ? `<div class="meta" style="color:#ef4444;margin-top:4px">最近错误: ${escapeHtml(w.last_error)}</div>` : ''}
+          ${w.last_fired_at ? `<div class="meta" style="margin-top:2px">最近触发: ${w.last_fired_at}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = '<div class="empty">加载失败: ' + e + '</div>';
+  }
+}
+
+async function addWebhook() {
+  const name = document.getElementById('wh-name').value.trim();
+  const url = document.getElementById('wh-url').value.trim();
+  const keyword = document.getElementById('wh-keyword').value.trim() || null;
+  const secret = document.getElementById('wh-secret').value.trim() || null;
+  if (!name || !url) { alert('name 和 url 必填'); return; }
+  if (!url.startsWith('https://oapi.dingtalk.com/')) {
+    if (!confirm('URL 不像钉钉机器人地址（应该是 https://oapi.dingtalk.com/robot/send?...），确认继续？')) return;
+  }
+  const r = await fetch('/api/v1/data/webhooks/bulk', {
+    method: 'POST', headers: authHeaders(),
+    body: JSON.stringify({items: [{name, kind: 'dingtalk', url, keyword, secret, active: 1}]})
+  });
+  const j = await r.json();
+  if (j.detail) { alert('添加失败: ' + j.detail); return; }
+  document.getElementById('wh-name').value = '';
+  document.getElementById('wh-url').value = '';
+  document.getElementById('wh-secret').value = '';
+  loadWebhooks();
+}
+
+async function testWebhook(id) {
+  const r = await fetch('/api/v1/webhooks/' + id + '/test', {method: 'POST', headers: authHeaders()});
+  const j = await r.json();
+  if (j.detail) { alert('失败: ' + j.detail); return; }
+  alert('已发送测试消息，几秒后查看钉钉群。\n如果没收到，看下面"最近错误"。');
+  setTimeout(loadWebhooks, 3000);
+}
+
+async function toggleWebhook(id, active) {
+  await fetch('/api/v1/data/webhooks/' + id, {
+    method: 'PATCH', headers: authHeaders(),
+    body: JSON.stringify({active})
+  });
+  loadWebhooks();
+}
+
+async function deleteWebhook(id) {
+  if (!confirm('确认删除该 webhook？')) return;
+  await fetch('/api/v1/data/webhooks/' + id, {method: 'DELETE', headers: authHeaders()});
+  loadWebhooks();
+}
+
+async function loadFeaturesPanel() {
+  const list = $('#features-list');
+  if (!list) return;
+  if (!CURRENT_USER || CURRENT_USER.role !== 'admin') {
+    list.innerHTML = '<div class="meta">需要 admin 权限才能配置</div>';
+    return;
+  }
+  let data, providers;
+  try {
+    [data, providers] = await Promise.all([API.llmFeatures(), API.llmList()]);
+  } catch (e) {
+    list.innerHTML = '<div class="empty">加载失败: ' + e + '</div>';
+    return;
+  }
+  const fb = data.global_fallback;
+  const fallbackInfo = fb
+    ? `当前全局活跃 Provider: <b>${fb.code}</b>（${fb.default_model || '默认模型'}）`
+    : '⚠ 全局活跃 Provider 未配置';
+  list.innerHTML = `
+    <div class="meta" style="background:#f5f6f7;padding:6px 10px;border-radius:5px;margin-bottom:10px">${fallbackInfo}</div>
+    ${(data.items || []).map(f => renderFeatureCard(f, providers.items || [])).join('')}
+  `;
+}
+
+function renderFeatureCard(f, providers) {
+  const isBound = f.bound;
+  const tag = isBound
+    ? `<span class="pill" style="background:#fff7e6;color:#d46b08">已单独绑定</span>`
+    : `<span class="pill" style="background:#e6f4ff;color:#1677ff">使用全局兜底</span>`;
+  const enabledTag = f.enabled
+    ? '<span class="pill" style="background:#f6ffed;color:#389e0d">启用</span>'
+    : '<span class="pill" style="background:#fff1f0;color:#cf1322">停用</span>';
+  const opts = providers.map(p =>
+    `<option value="${p.code}" ${p.code === f.provider_code ? 'selected' : ''}>${escapeHtml(p.display_name)} (${p.code})${!p.api_key_set ? ' [无 Key]' : ''}</option>`
+  ).join('');
+  return `
+    <div class="panel" style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;background:#fff">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <b style="font-size:14px">${escapeHtml(f.display_name)}</b>
+        <span class="pill" style="background:#f5f6f7;font-family:monospace">${f.code}</span>
+        ${tag} ${enabledTag}
+        <span class="meta" style="margin-left:auto">实际使用: <b>${f.resolved_provider || '(无)'} / ${f.resolved_model || '(无)'}</b></span>
+      </div>
+      <div class="meta" style="margin-bottom:8px">${escapeHtml(f.description || '')}</div>
+      <div class="grid-2">
+        <div class="field">
+          <label>绑定 Provider</label>
+          <select id="feat-prov-${f.code}">
+            <option value="">(留空 = 用全局兜底)</option>
+            ${opts}
+          </select>
+        </div>
+        <div class="field">
+          <label>覆盖模型</label>
+          <input id="feat-model-${f.code}" value="${escapeHtml(f.model || '')}" placeholder="留空 = 用 Provider 默认">
+        </div>
+      </div>
+      <div class="actions" style="justify-content:flex-start">
+        <button class="btn btn-primary" onclick="bindFeature('${f.code}')">保存绑定</button>
+        ${isBound ? `<button class="btn" onclick="unbindFeature('${f.code}')">解绑（回到全局兜底）</button>` : ''}
+        <button class="btn" onclick="toggleFeatureEnabled('${f.code}', ${f.enabled ? 0 : 1})" style="margin-left:auto">${f.enabled ? '停用此功能' : '启用'}</button>
+      </div>
+    </div>`;
+}
+
+async function bindFeature(code) {
+  const provVal = $('#feat-prov-' + code).value;
+  const modelVal = $('#feat-model-' + code).value.trim();
+  const body = {
+    provider_code: provVal || null,
+    model: modelVal || null,
+  };
+  const r = await API.llmFeatureBind(code, body);
+  if (r.detail) { alert('保存失败: ' + r.detail); return; }
+  loadFeaturesPanel();
+}
+
+async function unbindFeature(code) {
+  if (!confirm('确认解绑？该功能将回到「全局活跃 Provider」')) return;
+  const r = await API.llmFeatureUnbind(code);
+  if (r.detail) { alert('解绑失败: ' + r.detail); return; }
+  loadFeaturesPanel();
+}
+
+async function toggleFeatureEnabled(code, target) {
+  const r = await API.llmFeatureBind(code, {enabled: target});
+  if (r.detail) { alert('修改失败: ' + r.detail); return; }
+  loadFeaturesPanel();
+}
+
+async function saveProvider(code) {
+  const key = $('#key-' + code).value.trim();
+  const model = $('#model-' + code).value.trim();
+  const base = $('#base-' + code).value.trim();
+  const hdrRaw = $('#hdr-' + code).value.trim();
+  const body = {default_model: model, base_url: base};
+  if (hdrRaw) {
+    try { body.extra_headers = JSON.parse(hdrRaw); }
+    catch (e) { alert('额外 Header 不是合法 JSON'); return; }
+  } else {
+    body.extra_headers = {};
+  }
+  // 仅当看起来不像脱敏值时才提交 (脱敏 API 返回值含 ******，这种就跳过覆盖)
+  if (key && !key.includes('******')) body.api_key = key;
+  const r = await API.llmUpdate(code, body);
+  if (r.detail) { alert('保存失败: ' + r.detail); return; }
+  loadSettings();
+}
+
+async function testProvider(code) {
+  const r = await API.llmTest(code);
+  alert('测试结果: ' + (r.status === 'ok' ? '✓ 通了' : '✗ 失败') + '\n\n' + (r.message || ''));
+  loadSettings();
+}
+async function activateProvider(code) {
+  const r = await API.llmActivate(code);
+  if (r.detail) { alert('激活失败: ' + r.detail); return; }
+  loadSettings();
+}
+async function clearKey(code) {
+  if (!confirm('确认清除 ' + code + ' 的 API Key? (会同时取消激活)')) return;
+  await API.llmClearKey(code);
+  loadSettings();
+}
+async function createProvider() {
+  const root = $('#new-provider-form');
+  const fields = collectFields(root);
+  if (!fields.new_code) { alert('Code 必填'); return; }
+  const body = {
+    code: fields.new_code, type: fields.new_type,
+    display_name: fields.new_display_name || fields.new_code,
+    base_url: fields.new_base_url, default_model: fields.new_default_model,
+  };
+  const r = await API.llmCreate(body);
+  if (r.detail) { alert('创建失败: ' + r.detail); return; }
+  loadSettings();
+}
+
+// ============================================================
+// AI Agent — 共用核心：floating widget + dedicated tab 共一份 history/逻辑
+// ============================================================
+const AGENT_HISTORY_KEY = 'x9_agent_history_v1';
+let agentHistory = [];      // [{role, content, tokens?, provider?}]
+let agentReady = false;
+let agentInfoText = '';
+
+function loadAgentHistory() {
+  try { agentHistory = JSON.parse(localStorage.getItem(AGENT_HISTORY_KEY) || '[]'); }
+  catch (e) { agentHistory = []; }
+}
+function saveAgentHistory() {
+  localStorage.setItem(AGENT_HISTORY_KEY, JSON.stringify(agentHistory.slice(-40)));
+}
+
+async function refreshAgentInfo() {
+  try {
+    const info = await API.agentInfo();
+    agentReady = !!info.ready;
+    if (info.ready) {
+      agentInfoText = `就绪 · ${info.active_provider}（${info.active_model || '默认'}）· ${info.docs_in_context} 份文档 ${info.docs_kb} KB`;
+    } else {
+      agentInfoText = '⚠ 暂未启用：' + (info.reason || '');
+    }
+  } catch (e) {
+    agentReady = false;
+    agentInfoText = '加载失败: ' + e;
+  }
+  // sync to both UIs
+  const tabStatus = $('#agent-status');
+  if (tabStatus) {
+    tabStatus.innerHTML = info_link(agentInfoText, !agentReady);
+    const btn = $('#agent-send-btn'); if (btn) btn.disabled = !agentReady;
+  }
+  const paneStatus = $('#ai-pane-status');
+  if (paneStatus) {
+    paneStatus.innerHTML = info_link(agentInfoText, !agentReady);
+    paneStatus.classList.toggle('warn', !agentReady);
+    const sb = $('#ai-pane-send'); if (sb) sb.disabled = !agentReady;
+  }
+}
+function info_link(text, isWarn) {
+  if (isWarn) return text + '　<a href="#" onclick="document.querySelector(\'nav button[data-view=settings]\').click();return false" style="color:var(--accent)">去配置</a>';
+  return text;
+}
+
+// ----- Tab (full view) handlers -----
+async function loadAgent() {
+  loadAgentHistory();
+  await refreshAgentInfo();
+  renderTabMessages();
+}
+
+function renderTabMessages() {
+  const box = $('#agent-messages');
+  if (!box) return;
+  if (!agentHistory.length) {
+    box.innerHTML = welcomeHtml('large');
+    return;
+  }
+  box.innerHTML = agentHistory.map(m => renderMessage(m, 'large')).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+// ----- Floating widget handlers -----
+function toggleAiPanel() {
+  const p = $('#ai-panel');
+  const fab = $('#ai-fab');
+  if (p.classList.contains('hidden')) {
+    p.classList.remove('hidden');
+    fab.classList.remove('has-msg');
+    refreshAgentInfo();
+    renderPaneMessages();
+    setTimeout(() => $('#ai-pane-input').focus(), 50);
+  } else {
+    p.classList.add('hidden');
+  }
+}
+function showAiFab() {
+  if (CURRENT_USER) $('#ai-fab').classList.remove('hidden');
+}
+function hideAiFab() {
+  $('#ai-fab').classList.add('hidden');
+  $('#ai-panel').classList.add('hidden');
+}
+function renderPaneMessages() {
+  const box = $('#ai-pane-msgs');
+  if (!box) return;
+  if (!agentHistory.length) {
+    box.innerHTML = welcomeHtml('compact');
+    return;
+  }
+  box.innerHTML = agentHistory.map(m => renderMessage(m, 'compact')).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+// ----- Welcome screen with quick prompts -----
+function welcomeHtml(size) {
+  const compact = size === 'compact';
+  const sample = [
+    '怎么给新人加管理员权限？',
+    '我的 Key 丢了怎么办？',
+    '怎么改 SKU 价格？',
+    '怎么看待联系达人？',
+  ];
+  return `
+    <div style="text-align:center;color:var(--muted);padding:${compact ? '24px 12px' : '50px 20px'}">
+      <div style="font-size:${compact ? '28px' : '36px'};margin-bottom:8px">🤖</div>
+      <div style="font-size:${compact ? '13px' : '14px'};color:var(--text);margin-bottom:6px">我可以引导你，但不替你执行</div>
+      <div class="meta" style="max-width:${compact ? '320px' : '560px'};margin:0 auto;line-height:1.6;font-size:${compact ? '11px' : '12px'}">
+        我加载了项目所有运维文档。回答里会给可点击的"操作入口"按钮，
+        点击直接跳到对应页面，但**操作还得你自己点**。
+      </div>
+      <div style="margin-top:12px;display:flex;gap:5px;justify-content:center;flex-wrap:wrap">
+        ${sample.map(q => `<button class="btn" style="font-size:${compact ? '11px' : '12px'};padding:${compact ? '4px 8px' : '5px 10px'}" onclick="askAi(${JSON.stringify(q)})">${q}</button>`).join('')}
+      </div>
+    </div>`;
+}
+
+// ----- Render one message in either view -----
+function renderMessage(m, size) {
+  const compact = size === 'compact';
+  if (m.role === 'user') {
+    if (compact) {
+      return `<div class="ai-msg-user"><div>${escapeHtml(m.content)}</div></div>`;
+    }
+    return `<div style="margin:10px 0;display:flex;justify-content:flex-end">
+      <div style="max-width:78%;padding:8px 12px;background:var(--accent);color:#fff;border-radius:14px 14px 2px 14px;white-space:pre-wrap">${escapeHtml(m.content)}</div>
+    </div>`;
+  }
+  // assistant
+  const body = renderMarkdown(m.content);
+  const tokens = m.tokens ? `<div class="meta" style="margin-top:5px;font-size:10px">${m.tokens.input || '?'}→${m.tokens.output || '?'} tok · ${m.provider || ''}</div>` : '';
+  if (compact) {
+    return `<div class="ai-msg-bot">
+      <div class="icon">🤖</div>
+      <div class="body">${body}${tokens}</div>
+    </div>`;
+  }
+  return `<div style="margin:10px 0;display:flex;align-items:flex-start;gap:8px">
+    <div style="font-size:20px;flex-shrink:0">🤖</div>
+    <div style="max-width:80%;padding:8px 12px;background:#f5f6f7;border-radius:14px 14px 14px 2px">${body}${tokens}</div>
+  </div>`;
+}
+
+// ----- Markdown + Action links -----
+// Action link prefixes embedded by the LLM to take user to the right place:
+//   #nav:products / #nav:creators / #nav:outreach / #nav:dashboard / #nav:settings / #nav:agent
+//   #open:product:<sku>          opens that SKU's edit modal
+//   #open:creator:<handle>       opens that creator's detail
+//   #run-query:<query_name>      runs a named query and shows result
+const ACTION_ICONS = {
+  nav: '🧭', open: '🔍', 'run-query': '⚡', filter: '🎯',
+};
+function renderMarkdown(text) {
+  let s = escapeHtml(text);
+  // 代码块
+  s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
+    `<pre><code>${code.trim()}</code></pre>`);
+  // 行内代码
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  // 加粗
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  // markdown 链接 — 区分 #action 和普通 url
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, label, url) => {
+    if (url.startsWith('#nav:') || url.startsWith('#open:') || url.startsWith('#run-query:') || url.startsWith('#filter:')) {
+      const safeUrl = url.replace(/'/g, '&apos;');
+      const verb = url.split(':')[0].slice(1);
+      const icon = ACTION_ICONS[verb] || '➡';
+      return `<a class="ai-action-btn" onclick="aiAction('${safeUrl}');return false">${icon} ${label}</a>`;
+    }
+    const tgt = url.startsWith('http') ? ' target="_blank"' : '';
+    return `<a href="${url}"${tgt} style="color:var(--accent)">${label}</a>`;
+  });
+  // 列表
+  s = s.replace(/(^|\n)([-*]) ([^\n]+)/g, '$1• $3');
+  // 换行
+  s = s.replace(/\n/g, '<br>');
+  return s;
+}
+
+// ----- Action link router (#nav: / #open: / #run-query:) -----
+function aiAction(url) {
+  if (!url.startsWith('#')) return;
+  const [verb, ...rest] = url.slice(1).split(':');
+  const arg = rest.join(':');
+  if (verb === 'nav') {
+    const btn = document.querySelector(`nav button[data-view=${arg}]`);
+    if (btn) { btn.click(); return; }
+    // 兜底：常见误判（agent 把 changelog/schema/操作手册 当 nav 处理）
+    const docMap = {
+      'changelog': 'CHANGELOG.md',
+      'schema': 'schema.md',
+      '操作手册': '操作手册.md',
+      'manual': '操作手册.md',
+      '协作约定': '协作约定.md',
+      'docs': 'README.md',
+      'readme': 'README.md',
+      'api': '廖_API使用指南.md',
+    };
+    const doc = docMap[arg.toLowerCase()] || docMap[arg];
+    if (doc) {
+      window.open('/docs/' + encodeURIComponent(doc), '_blank');
+      return;
+    }
+    alert('AI 给的 tab 名识别不出: "' + arg + '"\n\n有效 tab: products / creators / outreach / dashboard / hotkw / agent / settings');
+    return;
+  }
+  if (verb === 'open') {
+    const [kind, ...idParts] = arg.split(':');
+    const id = idParts.join(':');
+    if (kind === 'product') {
+      document.querySelector('nav button[data-view=products]').click();
+      setTimeout(() => openProduct(id), 100);
+    } else if (kind === 'creator') {
+      document.querySelector('nav button[data-view=creators]').click();
+      // creator open by handle — we need to look up id
+      setTimeout(async () => {
+        const r = await API.creators({q: id, limit: 5});
+        const match = (r.items || []).find(c => c.handle === id);
+        if (match) openCreator(match.id);
+        else alert('找不到达人: ' + id);
+      }, 100);
+    } else {
+      alert('未知打开类型: ' + kind);
+    }
+    return;
+  }
+  if (verb === 'run-query') {
+    runNamedQueryDialog(arg);
+    return;
+  }
+  if (verb === 'filter') {
+    // #filter:creators:tier=A
+    const [view, ...filterParts] = arg.split(':');
+    const filterStr = filterParts.join(':');
+    document.querySelector(`nav button[data-view=${view}]`).click();
+    setTimeout(() => {
+      const [k, v] = filterStr.split('=');
+      const sel = $('#c-' + k) || $('#p-' + k);
+      if (sel) { sel.value = v; sel.dispatchEvent(new Event('change')); }
+    }, 100);
+    return;
+  }
+  alert('未知动作: ' + url);
+}
+
+async function runNamedQueryDialog(name) {
+  showModal(`<h2 style="margin:0 0 6px">⚡ 查询：${escapeHtml(name)}</h2><div id="query-result" class="meta">加载中…</div>`);
+  try {
+    const r = await fetch('/api/v1/queries/' + encodeURIComponent(name)).then(r => r.json());
+    if (r.detail) {
+      $('#query-result').innerHTML = '<div class="empty">查询失败：' + escapeHtml(r.detail) + '</div>';
+      return;
+    }
+    if (!r.items || !r.items.length) {
+      $('#query-result').innerHTML = '<div class="empty">这个查询当前无匹配结果</div>';
+      return;
+    }
+    // 参数摘要
+    const paramText = Object.entries(r.params || {})
+      .filter(([k, v]) => v !== null && v !== '')
+      .map(([k, v]) => `${k}=${v}`).join(', ') || '默认参数';
+
+    const cols = Object.keys(r.items[0]);
+
+    // Card-based rendering — works in any modal width, easier to read than wide table
+    let html = `<div class="meta" style="margin-bottom:10px">
+      共 <b>${r.total}</b> 条 · 参数: ${escapeHtml(paramText)}
+      ${r.items.length > 100 ? '· 仅显示前 100' : ''}
+    </div>
+    <div style="max-height:60vh;overflow-y:auto;padding-right:6px">`;
+
+    r.items.slice(0, 100).forEach((row, idx) => {
+      html += `<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span class="pill" style="background:#f5f6f7">#${idx + 1}</span>
+          ${row.handle ? `<a class="handle-link" href="${escapeHtml(row.profile_url || ('https://www.tiktok.com/@' + row.handle))}" target="_blank">@${escapeHtml(row.handle)}</a>` : ''}
+          ${row.tier ? `<span class="pill pill-tier-${row.tier}">${row.tier}</span>` : ''}
+          ${row.sku_code ? `<b>${escapeHtml(row.sku_code)}</b>` : ''}
+          ${row.id !== undefined ? `<span class="meta" style="margin-left:auto">id=${row.id}</span>` : ''}
+        </div>
+        <div style="display:grid;grid-template-columns:130px 1fr;gap:3px 10px;font-size:12px">`;
+      for (const c of cols) {
+        if (['id', 'handle', 'tier', 'sku_code', 'profile_url'].includes(c)) continue;
+        const v = row[c];
+        if (v === null || v === undefined || v === '') continue;
+        let display = String(v);
+        if (display.length > 200) display = display.slice(0, 200) + '…';
+        if (display.startsWith('http')) {
+          display = `<a href="${escapeHtml(String(v))}" target="_blank" style="color:var(--accent);word-break:break-all">${escapeHtml(display)}</a>`;
+        } else {
+          display = escapeHtml(display);
+        }
+        html += `<div style="color:var(--muted)">${escapeHtml(c)}</div><div>${display}</div>`;
+      }
+      html += `</div></div>`;
+    });
+    html += '</div>';
+    $('#query-result').innerHTML = html;
+  } catch (e) {
+    $('#query-result').innerHTML = '<div class="empty">加载失败：' + e + '</div>';
+  }
+}
+
+// ----- Send (works for both UIs) -----
+// fromPane=true 表示从悬浮窗发，否则从 tab
+async function sendAi(fromPane) {
+  const input = fromPane ? $('#ai-pane-input') : $('#agent-input');
+  const sendBtn = fromPane ? $('#ai-pane-send') : $('#agent-send-btn');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  input.style.height = fromPane ? '38px' : '60px';
+  if (sendBtn) sendBtn.disabled = true;
+
+  agentHistory.push({role: 'user', content: text});
+  agentHistory.push({role: 'assistant', content: '思考中…'});
+  renderTabMessages();
+  renderPaneMessages();
+
+  try {
+    const r = await API.agentChat({
+      messages: agentHistory
+        .filter(m => m.content !== '思考中…')
+        .map(m => ({role: m.role, content: m.content})),
+      max_tokens: 1500,
+    });
+    agentHistory[agentHistory.length - 1] = {
+      role: 'assistant', content: r.answer,
+      tokens: r.tokens, provider: r.provider,
+    };
+    // 如果用户在别的 tab，悬浮 FAB 上闪个红点提示
+    if ($('#ai-panel').classList.contains('hidden')) {
+      $('#ai-fab').classList.add('has-msg');
+    }
+  } catch (e) {
+    agentHistory[agentHistory.length - 1] = {
+      role: 'assistant',
+      content: '⚠ 调用失败：' + e.message + '\n\n[去设置页配置 LLM](#nav:settings)',
+    };
+  }
+  saveAgentHistory();
+  renderTabMessages();
+  renderPaneMessages();
+  if (sendBtn) sendBtn.disabled = !agentReady;
+}
+
+function askAi(q) {
+  // Decide which input to use depending on which view is open
+  const paneOpen = !$('#ai-panel').classList.contains('hidden');
+  if (paneOpen) {
+    $('#ai-pane-input').value = q;
+    sendAi(true);
+  } else {
+    const ai = $('#agent-input');
+    if (ai && ai.offsetParent !== null) {
+      ai.value = q; sendAi(false);
+    } else {
+      // 默认打开 floating
+      toggleAiPanel();
+      setTimeout(() => { $('#ai-pane-input').value = q; sendAi(true); }, 100);
+    }
+  }
+}
+
+function resetChat() {
+  if (!confirm('清空当前对话历史？(只清前端记录，不影响 audit_log)')) return;
+  agentHistory = [];
+  saveAgentHistory();
+  renderTabMessages();
+  renderPaneMessages();
+}
+
+// 输入框 Enter 发送 / Shift+Enter 换行（区分两个输入框）
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.shiftKey) return;
+  const ae = document.activeElement;
+  if (ae?.id === 'agent-input') { e.preventDefault(); sendAi(false); }
+  else if (ae?.id === 'ai-pane-input') { e.preventDefault(); sendAi(true); }
+});
+
+// 兼容旧引用
+function sendAgent() { sendAi(false); }
+function askAgent(q) { askAi(q); }
+function renderAgentMessages() { renderTabMessages(); }
+
+// ---------- Boot ----------
+(async function boot() {
+  const ok = await checkLogin();
+  if (ok) {
+    loadStats();
+    const view = $$('nav button.active')[0]?.dataset.view || 'business';
+    if (view === 'business') loadBusinessDashboard();
+    if (view === 'products') loadProducts();
+    if (view === 'creators') loadCreators();
+  }
+})();
+</script>
+</body>
+</html>

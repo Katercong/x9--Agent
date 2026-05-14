@@ -1,0 +1,24 @@
+{
+  "name": "x9-creator-desktop-system",
+  "version": "3.0.0",
+  "description": "Desktop control center for the X9 Creator Local System",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "package": "electron-builder --dir"
+  },
+  "author": "X9",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.x9.creator-desktop",
+    "productName": "X9 Creator Desktop",
+    "files": ["main.js", "preload.js", "service_manager.js"],
+    "extraResources": [{ "from": "../backend", "to": "backend" }],
+    "win": { "target": "nsis" }
+  }
+}

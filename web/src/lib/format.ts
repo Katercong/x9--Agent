@@ -1,0 +1,51 @@
+export function formatNum(n: number | null | undefined, fallback = '—'): string {
+  if (n === null || n === undefined || Number.isNaN(n)) return fallback;
+  return new Intl.NumberFormat('zh-CN').format(n);
+}
+
+export function formatCompact(n: number | null | undefined, fallback = '—'): string {
+  if (n === null || n === undefined || Number.isNaN(n)) return fallback;
+  if (n >= 100_000_000) return (n / 100_000_000).toFixed(1) + '亿';
+  if (n >= 10_000) return (n / 10_000).toFixed(1) + '万';
+  return new Intl.NumberFormat('zh-CN').format(n);
+}
+
+export function formatCurrency(n: number | null | undefined, currency = '¥'): string {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return currency + new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(n);
+}
+
+export function formatPercent(n: number | null | undefined, digits = 1): string {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return n.toFixed(digits) + '%';
+}
+
+export function formatDelta(n: number | null | undefined): { text: string; tone: 'up' | 'down' | 'flat' } {
+  if (n === null || n === undefined || Number.isNaN(n) || n === 0) {
+    return { text: '0%', tone: 'flat' };
+  }
+  const tone = n > 0 ? 'up' : 'down';
+  return { text: (n > 0 ? '+' : '') + n.toFixed(0) + '%', tone };
+}
+
+export function formatDate(d: string | Date | null | undefined): string {
+  if (!d) return '—';
+  const dt = typeof d === 'string' ? new Date(d) : d;
+  if (Number.isNaN(dt.getTime())) return '—';
+  return `${dt.getMonth() + 1}/${dt.getDate()}`;
+}
+
+export function formatDateTime(d: string | Date | null | undefined): string {
+  if (!d) return '—';
+  const dt = typeof d === 'string' ? new Date(d) : d;
+  if (Number.isNaN(dt.getTime())) return '—';
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${dt.getMonth() + 1}/${dt.getDate()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+}
+
+export function maskEmail(email: string): string {
+  if (!email || !email.includes('@')) return email || '—';
+  const [user, domain] = email.split('@');
+  if (user.length <= 2) return user[0] + '***@' + domain;
+  return user.slice(0, 2) + '***@' + domain;
+}

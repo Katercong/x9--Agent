@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light" data-lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YouTube 邮箱抓取工作台</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="header-content">
+        <h1>YouTube 邮箱抓取工作台</h1>
+        <div class="header-controls">
+          <button id="theme-toggle" class="icon-button" aria-label="切换主题">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="5"></circle>
+              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path>
+            </svg>
+          </button>
+          <button id="lang-toggle" class="icon-button" aria-label="切换语言">EN</button>
+        </div>
+      </div>
+      <p class="subtle">关键词搜索、description 邮箱、频道 About 信息、CSV 导出</p>
+    </header>
+
+    <main class="shell">
+      <section class="toolbar" aria-label="任务状态">
+        <div class="status-info">
+          <div class="status-pill" id="status-pill">待命</div>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <form class="panel controls" id="job-form">
+          <div class="panel-header">
+            <h2>抓取配置</h2>
+          </div>
+          <div class="field">
+            <label for="queries">关键词</label>
+            <textarea id="queries" name="queries" spellcheck="false" placeholder="每行一个关键词">{{ default_queries }}</textarea>
+          </div>
+
+          <div class="grid-2">
+            <div class="field">
+              <label for="max-results">每个关键词视频数</label>
+              <input id="max-results" name="max_results" type="number" min="1" max="200" value="30" />
+            </div>
+            <div class="field">
+              <label for="order">排序</label>
+              <select id="order" name="order">
+                <option value="relevance">相关度</option>
+                <option value="date">最新发布</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="field">
+              <label for="published-after">发布日期之后</label>
+              <input id="published-after" name="published_after" type="text" placeholder="2025-01-01" />
+            </div>
+            <div class="field">
+              <label for="sleep">关键词间隔秒数</label>
+              <input id="sleep" name="sleep" type="number" min="0" step="0.5" value="0" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="output-filename">输出文件名</label>
+            <input id="output-filename" name="output_filename" type="text" value="youtube_emails.csv" />
+          </div>
+
+          <div class="field">
+            <label for="yt-dlp-path">yt-dlp.exe 路径</label>
+            <input id="yt-dlp-path" name="yt_dlp_path" type="text" placeholder="可留空" />
+          </div>
+
+          <div class="switch-row">
+            <label class="switch">
+              <input id="scan-about" name="scan_about" type="checkbox" checked />
+              <span>扫描频道 About</span>
+            </label>
+            <label class="switch">
+              <input id="keep-duplicates" name="keep_duplicates" type="checkbox" />
+              <span>保留重复邮箱</span>
+            </label>
+          </div>
+
+          <div class="actions">
+            <button type="submit" class="primary" id="start-button">开始抓取</button>
+            <button type="button" class="secondary" id="stop-button" disabled>停止</button>
+            <a class="secondary link-button disabled" href="/download" id="download-button">下载 CSV</a>
+            <a class="secondary link-button disabled" href="/download/verification" id="download-verification-button">下载验证队列</a>
+          </div>
+        </form>
+
+        <section class="results">
+          <div class="panel summary">
+            <div class="metric">
+              <span class="metric-label">导出行数</span>
+              <strong id="row-count">0</strong>
+            </div>
+            <div class="metric">
+              <span class="metric-label">待人工验证</span>
+              <strong id="verification-count">0</strong>
+            </div>
+            <div class="metric">
+              <span class="metric-label">开始时间</span>
+              <strong id="started-at">-</strong>
+            </div>
+            <div class="metric">
+              <span class="metric-label">输出文件</span>
+              <strong id="output-path">-</strong>
+            </div>
+          </div>
+
+          <div class="panel log-panel">
+            <div class="panel-head">
+              <h2>运行日志</h2>
+              <button type="button" class="ghost" id="clear-log-button">清空显示</button>
+            </div>
+            <pre id="logs"></pre>
+          </div>
+
+          <div class="panel table-panel">
+            <div class="panel-head">
+              <h2>结果预览</h2>
+              <span id="preview-note">最多显示 300 行</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>来源</th>
+                    <th>频道</th>
+                    <th>简介</th>
+                    <th>视频</th>
+                  </tr>
+                </thead>
+                <tbody id="result-body">
+                  <tr>
+                    <td colspan="5" class="empty">等待抓取结果</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="panel table-panel queue-panel">
+            <div class="panel-head">
+              <h2>人工验证队列</h2>
+              <span>检测到隐藏邮箱按钮的频道</span>
+            </div>
+            <div class="table-wrap queue-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>操作</th>
+                    <th>频道</th>
+                    <th>简介</th>
+                    <th>来源视频</th>
+                    <th>原因</th>
+                  </tr>
+                </thead>
+                <tbody id="verification-body">
+                  <tr>
+                    <td colspan="5" class="empty">暂无待人工验证频道</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>
