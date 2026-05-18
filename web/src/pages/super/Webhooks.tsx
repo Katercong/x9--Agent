@@ -1,11 +1,12 @@
 import { Plus, Webhook, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
-import { webhooks } from '@/mock/super';
+import { AsyncState } from '@/components/states/States';
+import { useWebhooks } from '@/hooks/useApi';
+import { shortRelative } from '@/lib/format';
+import type { Webhook as WebhookT } from '@/api/types';
 
-type Hook = typeof webhooks[number];
-
-const columns: Column<Hook>[] = [
+const columns: Column<WebhookT>[] = [
   {
     key: 'name', header: '名称',
     cell: (r) => (
@@ -17,31 +18,29 @@ const columns: Column<Hook>[] = [
       </div>
     ),
   },
-  { key: 'url', header: 'URL', cell: (r) => <span className="text-xs font-mono text-muted truncate">{r.url}</span> },
-  { key: 'secret', header: 'Secret', cell: (r) => <Pill tone={r.secret === '已配置' ? 'good' : 'warn'}>{r.secret}</Pill> },
+  { key: 'kind', header: '类型', cell: (r) => <Pill tone="info">{r.kind}</Pill> },
+  { key: 'url', header: 'URL', cell: (r) => <span className="text-xs font-mono text-muted truncate max-w-[260px] block">{r.url}</span> },
   {
-    key: 'triggers', header: '触发规则',
-    cell: (r) => (
-      <div className="flex flex-wrap gap-1">
-        {r.triggers.map((t) => (
-          <span key={t} className="pill pill-info text-xxs">{t}</span>
-        ))}
-      </div>
-    ),
+    key: 'secret', header: 'Secret',
+    cell: (r) => <Pill tone={r.secret ? 'good' : 'warn'}>{r.secret ? '已配置' : '未配置'}</Pill>,
   },
+  { key: 'keyword', header: '关键词', cell: (r) => <span className="text-xs">{r.keyword || '—'}</span> },
   {
     key: 'status', header: '上次发送',
     cell: (r) => (
       <div className="flex items-center gap-2">
-        {r.lastStatus === 'ok' ? (
+        {r.last_status === 'ok' || r.last_status === 'success' ? (
           <CheckCircle2 size={14} className="text-good" />
-        ) : (
+        ) : r.last_status ? (
           <AlertTriangle size={14} className="text-warn" />
+        ) : (
+          <span className="text-xxs text-muted">—</span>
         )}
-        <span className="text-xs text-muted">{r.lastSent}</span>
+        <span className="text-xs text-muted">{r.last_fired_at ? shortRelative(r.last_fired_at) : '从未'}</span>
       </div>
     ),
   },
+  { key: 'active', header: '启用', cell: (r) => <Pill tone={r.active === 1 ? 'good' : 'muted'}>{r.active === 1 ? '是' : '否'}</Pill> },
   {
     key: 'action', header: '', align: 'right',
     cell: () => (
@@ -55,14 +54,20 @@ const columns: Column<Hook>[] = [
 ];
 
 export default function Webhooks() {
+  const { data, isLoading, error } = useWebhooks({ limit: 100 });
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const active = items.filter((w) => w.active === 1).length;
+  const errors = items.filter((w) => w.last_status && w.last_status !== 'ok' && w.last_status !== 'success').length;
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
-          { label: '总订阅数', value: webhooks.length, tone: 'info' as const },
-          { label: '今日发送', value: 18, tone: 'good' as const },
-          { label: '成功率', value: '96.4%', tone: 'good' as const },
-          { label: '异常数', value: 1, tone: 'warn' as const },
+          { label: '总订阅数', value: total },
+          { label: '启用中', value: active },
+          { label: '最近发送异常', value: errors },
+          { label: '类型数', value: new Set(items.map((w) => w.kind)).size },
         ].map((k) => (
           <div key={k.label} className="card card-body">
             <div className="text-xs text-muted">{k.label}</div>
@@ -73,30 +78,25 @@ export default function Webhooks() {
 
       <div className="card">
         <div className="px-4 py-3 flex items-center gap-2 border-b border-line">
+          <Webhook size={16} className="text-muted" />
           <h3 className="text-sm font-semibold text-gray-800">Webhook 列表</h3>
+          <span className="text-xxs text-muted">数据源:webhooks(钉钉/HTTP 通用)</span>
           <div className="ml-auto">
             <button className="btn btn-primary"><Plus size={12} />新增 Webhook</button>
           </div>
         </div>
-        <DataTable columns={columns} data={webhooks} rowKey={(r) => r.id} />
+        <AsyncState loading={isLoading} error={error} isEmpty={items.length === 0} emptyMessage="还没配置 webhook,点击右上「新增 Webhook」创建" height={280}>
+          <DataTable columns={columns} data={items} rowKey={(r) => r.id} />
+        </AsyncState>
       </div>
 
       <div className="card card-body">
-        <h3 className="text-sm font-semibold text-gray-800 mb-3">触发事件类型</h3>
+        <h3 className="text-sm font-semibold text-gray-800 mb-3">支持的触发事件</h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-          {[
-            { name: '建联完成', count: 28 },
-            { name: '寄样签收', count: 14 },
-            { name: '视频发布', count: 9 },
-            { name: '广告授权', count: 6 },
-            { name: '错误率超阈', count: 2 },
-            { name: '日报', count: 1 },
-            { name: '周报', count: 1 },
-            { name: '自定义', count: 4 },
-          ].map((e) => (
-            <div key={e.name} className="border border-line rounded p-3">
-              <div className="text-muted text-xxs">{e.name}</div>
-              <div className="text-lg num font-semibold mt-1">{e.count}</div>
+          {['建联完成', '寄样签收', '视频发布', '广告授权', '错误率超阈', '日报', '周报', '自定义'].map((name) => (
+            <div key={name} className="border border-line rounded p-3">
+              <div className="text-muted text-xxs">{name}</div>
+              <div className="text-lg num font-semibold mt-1 text-muted">—</div>
             </div>
           ))}
         </div>

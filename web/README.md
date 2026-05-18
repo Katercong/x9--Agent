@@ -1,6 +1,7 @@
-# X9 跨境数据库 · 前端静态预览
+# X9 跨境数据库 · 前端预览
 
-3 个管理员角色 × 24 个页面的静态预览原型,基于 Vite + React 18 + TypeScript + Tailwind CSS + ECharts。
+3 个管理角色 × 24 个页面,基于 Vite + React 18 + TypeScript + Tailwind CSS + ECharts。
+**已全量接通真实后端 API**,管理端数据来自登录会话保护的 PostgreSQL `/api/v1/*`。
 
 ## 快速开始
 
@@ -21,9 +22,9 @@ npm run build
 npm run preview
 ```
 
-## 3 个角色 × 24 页
+## 3 个管理角色 × 24 页
 
-页面通过路径前缀划分,右上角"角色切换器"可在三个角色间切换,侧边栏菜单随之变化。
+页面通过路径前缀划分,实际入口由后端登录会话角色决定,前端不允许切换身份。
 
 ### 部门管理员 `/d/*`(默认进入)
 
@@ -75,7 +76,7 @@ npm run preview
 - **状态**: Zustand 4
 - **表格**: TanStack Table 8(headless,自封 DataTable)
 - **图标**: lucide-react
-- **Mock**: 内置 `src/mock/*.ts`,无需后端 API
+- **数据**: 真实 `/api/v1/*` 接口,开发态不再回退 mock
 
 ## 目录结构
 
@@ -93,7 +94,6 @@ web/
 │   │   ├── role/               # RoleSwitcher
 │   │   └── Pill.tsx, PageHeader.tsx
 │   ├── stores/                 # roleStore (zustand)
-│   ├── mock/                   # department / company / super 三套 mock
 │   ├── pages/
 │   │   ├── department/         # D1-D8 + routes.tsx
 │   │   ├── company/            # C1-C8 + routes.tsx
@@ -111,20 +111,32 @@ web/
 - 字号 11-26px,行高 1.5,圆角 4-10px,卡片 padding 12-16px
 - 数字 tabular-nums(`.num` 类)
 
-## Mock 数据来源
+## 数据接入
 
-- **部门管理员**:数字与参考截图严格对齐(总达人 33、已推荐 17、待审核 6 等)
-- **公司管理员**:30 日 GMV ¥2.46M、6 部门、Top 10 SKU、近 90 天三条增长曲线
-- **超级管理员**:24h 请求、慢查询、用户与 Key、Provider 配置、命名查询等
+所有 24 页已经全量接入真实 API,**无 mock 残留**。
 
-修改 mock 文件即可联调或微调展示数据。
+- **资源 CRUD**: `/api/v1/data/{resource}` (creators / products / outreach / categories / staff / audit_log / keyword_snapshots / outreach_example)
+- **命名查询**: `/api/v1/queries/{name}` (D3 线索池用 `creators_to_contact`)
+- **元信息**: `/api/v1/version`, `/api/v1/resources`, `/api/v1/queries` (超管页用)
+- **用户与 LLM**: `/api/v1/auth/users`, `/api/v1/llm/providers`
 
-## 后端联调(后续步骤)
+API 客户端在 [src/api/client.ts](src/api/client.ts),hooks 在 [src/hooks/useApi.ts](src/hooks/useApi.ts),
+聚合工具(漏斗、Tier 分布、BD 战绩等前端聚合)在 [src/lib/derive.ts](src/lib/derive.ts)。
 
-当前完全静态,所有数据从 `src/mock/*.ts` 导入。要切换到真实 API:
+## 集成方式
 
-1. 新建 `src/api/client.ts` 封装 fetch + X-API-Key
-2. 把页面里的 `import { ... } from '@/mock/...'` 改成 TanStack Query hooks
-3. `vite.config.ts` 中加 `server.proxy` 把 `/api` 转发到 FastAPI 18765 端口
+挂到 FastAPI `/web-preview/` 子路径,与现有 `/`、`/api/*`、`/static/*` 并存,廖的爬虫脚本零修改。
+路由配置见 [core/app/main.py:133-154](../core/app/main.py)。
 
-后端 API 不需要任何修改 — `/api/v1/data/{resource}`、`/api/v1/queries/*`、`/api/v1/llm/complete` 均已支持。
+```powershell
+# 一键构建并部署到后端
+cd web
+scripts\build-deploy.bat
+# 浏览器打开 http://localhost:18765/web-preview/
+```
+
+## 仍是示意的部分
+
+- **A1 系统监控**:CPU/内存/磁盘仪表盘是示意值(后端暂无 metrics 端点)
+- **A4 Webhook**:`webhook_subscriber` 表未创建(404),显示空状态 + 引导
+- **A8 API 统计**:列出真实端点清单,但调用量/耗时/错误率需后端 metrics

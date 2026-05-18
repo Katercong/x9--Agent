@@ -2,66 +2,73 @@ import { Mail, Send, Eye, Reply, Sparkles, Plus } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
-import { emailTemplates, emailQueue } from '@/mock/department';
-import { formatPercent, formatDate } from '@/lib/format';
+import { AsyncState } from '@/components/states/States';
+import { useResource } from '@/hooks/useApi';
+import { formatDate } from '@/lib/format';
 
-type Template = typeof emailTemplates[number];
-type EmailItem = typeof emailQueue[number];
+// outreach 事件中 channel='email' 的事件
+interface OutreachEvent {
+  id: number;
+  creator_id: number;
+  event_date: string | null;
+  store_name: string | null;
+  bd_owner: string | null;
+  action: string | null;
+  status: string | null;
+  channel: string | null;
+  message: string | null;
+  remark: string | null;
+  created_at: string;
+}
 
-const templateColumns: Column<Template>[] = [
-  { key: 'name', header: '模板名称', cell: (r) => <span className="text-xs font-medium">{r.name}</span>, width: '220px' },
-  { key: 'use', header: '使用次数', align: 'right', cell: (r) => <span className="text-xs num">{r.useCount}</span> },
-  {
-    key: 'open', header: '打开率', align: 'right',
-    cell: (r) => (
-      <div className="flex items-center justify-end gap-2">
-        <div className="w-16 h-1 rounded-full bg-soft overflow-hidden">
-          <div className="h-full rounded-full bg-brand-500" style={{ width: `${r.openRate * 100}%` }} />
-        </div>
-        <span className="text-xs num">{formatPercent(r.openRate * 100, 0)}</span>
-      </div>
-    ),
-  },
-  {
-    key: 'reply', header: '回复率', align: 'right',
-    cell: (r) => (
-      <div className="flex items-center justify-end gap-2">
-        <div className="w-16 h-1 rounded-full bg-soft overflow-hidden">
-          <div className="h-full rounded-full bg-good" style={{ width: `${r.replyRate * 100}%` }} />
-        </div>
-        <span className="text-xs num">{formatPercent(r.replyRate * 100, 0)}</span>
-      </div>
-    ),
-  },
-  { key: 'action', header: '', cell: () => <button className="chip text-xxs">使用</button> },
-];
+interface OutreachExample {
+  id: number;
+  name: string;
+  body_en?: string | null;
+  body_zh?: string | null;
+  channel?: string | null;
+  scenario?: string | null;
+  language?: string | null;
+}
 
-const queueColumns: Column<EmailItem>[] = [
-  { key: 'to', header: '收件人', cell: (r) => <span className="text-xs">{r.to}</span> },
-  { key: 'template', header: '模板', cell: (r) => <span className="text-xs text-muted">{r.template}</span> },
-  { key: 'sku', header: 'SKU', cell: (r) => <span className="text-xs font-mono">{r.sku}</span> },
+const queueColumns: Column<OutreachEvent>[] = [
+  { key: 'creator', header: '达人 ID', cell: (r) => <span className="text-xs font-mono">#{r.creator_id}</span> },
+  { key: 'channel', header: '渠道', cell: (r) => <Pill tone="info">{r.channel || '—'}</Pill> },
+  { key: 'action', header: '动作', cell: (r) => <span className="text-xs">{r.action || '—'}</span> },
   {
     key: 'status', header: '状态',
-    cell: (r) => {
-      const toneMap: Record<string, 'good' | 'warn' | 'info' | 'muted'> = {
-        '草稿': 'muted', '已发送': 'info', '已读': 'warn', '已回复': 'good', '待回复': 'warn',
-      };
-      return <Pill tone={toneMap[r.status] || 'muted'}>{r.status}</Pill>;
-    },
+    cell: (r) => <Pill tone="info">{r.status || '—'}</Pill>,
   },
-  { key: 'sentAt', header: '发送时间', cell: (r) => <span className="text-xs text-muted">{r.sentAt ? formatDate(r.sentAt) : '—'}</span> },
-  { key: 'opened', header: '已打开', align: 'center', cell: (r) => r.opened ? <Eye size={14} className="inline text-good" /> : <span className="text-muted text-xxs">—</span> },
-  { key: 'replied', header: '已回复', align: 'center', cell: (r) => r.replied ? <Reply size={14} className="inline text-good" /> : <span className="text-muted text-xxs">—</span> },
+  { key: 'bd', header: 'BD', cell: (r) => <span className="text-xs">{r.bd_owner || '—'}</span> },
+  { key: 'date', header: '时间', cell: (r) => <span className="text-xs text-muted">{formatDate(r.event_date || r.created_at)}</span> },
+  { key: 'remark', header: '备注', cell: (r) => <span className="text-xs text-muted truncate max-w-[200px] block">{r.remark || '—'}</span> },
+];
+
+const tplColumns: Column<OutreachExample>[] = [
+  { key: 'name', header: '模板名称', cell: (r) => <span className="text-xs font-medium">{r.name}</span> },
+  { key: 'scenario', header: '场景', cell: (r) => <span className="text-xs">{r.scenario || '—'}</span> },
+  { key: 'channel', header: '渠道', cell: (r) => <Pill tone="info">{r.channel || '—'}</Pill> },
+  { key: 'lang', header: '语言', cell: (r) => <span className="text-xs">{r.language || '—'}</span> },
+  { key: 'action', header: '', align: 'right', cell: () => <button className="chip text-xxs">使用</button> },
 ];
 
 export default function Emails() {
+  const examples = useResource<OutreachExample>('outreach_example', { limit: 50 });
+  const outreach = useResource<OutreachEvent>('outreach', { limit: 100, order_by: 'created_at:desc' });
+
+  const events = outreach.data?.items ?? [];
+  const dmEvents = events.filter((e) => e.channel === 'dm' || e.channel === 'email');
+  const emailCount = events.filter((e) => e.channel === 'email').length;
+  const dmCount = events.filter((e) => e.channel === 'dm').length;
+  const tpls = examples.data?.items ?? [];
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiCard label="今日发送" value={3} delta={50} icon={Send} iconBg="#dbeafe" iconColor="#2563eb" />
-        <KpiCard label="打开率" value="48%" delta={3} icon={Eye} iconBg="#fef3c7" iconColor="#ca8a04" />
-        <KpiCard label="回复率" value="18%" delta={6} icon={Reply} iconBg="#d1fae5" iconColor="#16a34a" />
-        <KpiCard label="待回复" value={emailQueue.filter((e) => e.status === '待回复').length} delta={0} icon={Mail} iconBg="#fed7aa" iconColor="#ea580c" />
+        <KpiCard label="DM 触达" value={dmCount} icon={Send} iconBg="#dbeafe" iconColor="#2563eb" />
+        <KpiCard label="邮件触达" value={emailCount} icon={Mail} iconBg="#fed7aa" iconColor="#ea580c" />
+        <KpiCard label="话术模板" value={tpls.length} icon={Sparkles} iconBg="#fef3c7" iconColor="#ca8a04" />
+        <KpiCard label="近 30 天" value={events.length} icon={Reply} iconBg="#d1fae5" iconColor="#16a34a" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
@@ -70,14 +77,18 @@ export default function Emails() {
             <h3 className="text-sm font-semibold text-gray-800">话术模板</h3>
             <button className="chip text-xxs"><Sparkles size={11} />AI 生成</button>
           </div>
-          <DataTable columns={templateColumns} data={emailTemplates} compact />
+          <AsyncState loading={examples.isLoading} error={examples.error} isEmpty={tpls.length === 0} height={300}>
+            <DataTable columns={tplColumns} data={tpls} rowKey={(r) => r.id} compact />
+          </AsyncState>
         </div>
         <div className="card lg:col-span-3">
           <div className="px-4 py-3 flex items-center justify-between border-b border-line">
-            <h3 className="text-sm font-semibold text-gray-800">发送队列</h3>
-            <button className="btn btn-primary text-xxs"><Plus size={11} />新建邮件</button>
+            <h3 className="text-sm font-semibold text-gray-800">发送队列(近期 DM / 邮件)</h3>
+            <button className="btn btn-primary text-xxs"><Plus size={11} />新建</button>
           </div>
-          <DataTable columns={queueColumns} data={emailQueue} rowKey={(r) => r.id} compact />
+          <AsyncState loading={outreach.isLoading} error={outreach.error} isEmpty={dmEvents.length === 0} height={300}>
+            <DataTable columns={queueColumns} data={dmEvents} rowKey={(r) => r.id} compact />
+          </AsyncState>
         </div>
       </div>
     </div>

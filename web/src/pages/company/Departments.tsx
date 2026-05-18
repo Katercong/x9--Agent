@@ -2,58 +2,68 @@ import { Trophy } from 'lucide-react';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
 import { DataTable, type Column } from '@/components/table/DataTable';
-import { departments, radarMetrics } from '@/mock/company';
+import { AsyncState } from '@/components/states/States';
+import { useCreators, useOutreach, useStaff } from '@/hooks/useApi';
+import { staffStats } from '@/lib/derive';
 import { chartPalette } from '@/lib/colors';
-import { formatCurrency, formatPercent } from '@/lib/format';
 
-type Dept = typeof departments[number];
-
-// 归一化每个指标用于雷达图
-const maxVals = {
-  creators: Math.max(...departments.map((d) => d.creators)),
-  conv: Math.max(...departments.map((d) => d.conv)),
-  revenue: Math.max(...departments.map((d) => d.revenue)),
-  video: Math.max(...departments.map((d) => d.video)),
-  roi: Math.max(...departments.map((d) => d.roi)),
-  aov: 100,
-};
-
-const deptColumns: Column<Dept>[] = [
-  {
-    key: 'rank', header: '#', align: 'center',
-    cell: (_, i) => (
-      <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xxs font-bold ${
-        i < 3 ? 'bg-amber-100 text-amber-700' : 'bg-soft text-muted'
-      }`}>
-        {i + 1}
-      </span>
-    ),
-    width: '50px',
-  },
-  { key: 'name', header: '部门', cell: (r) => <span className="text-xs font-medium">{r.name}</span> },
-  { key: 'creators', header: '达人', align: 'right', cell: (r) => <span className="text-xs num">{r.creators}</span> },
-  {
-    key: 'conv', header: '转化率', align: 'right',
-    cell: (r) => (
-      <div className="flex items-center justify-end gap-2">
-        <div className="w-16 h-1 rounded-full bg-soft overflow-hidden">
-          <div className="h-full bg-brand-500 rounded-full" style={{ width: `${(r.conv / maxVals.conv) * 100}%` }} />
-        </div>
-        <span className="text-xs num">{formatPercent(r.conv, 1)}</span>
-      </div>
-    ),
-  },
-  { key: 'revenue', header: '营收(万)', align: 'right', cell: (r) => <span className="text-xs num font-medium">{r.revenue}</span> },
-  { key: 'video', header: '视频数', align: 'right', cell: (r) => <span className="text-xs num">{r.video}</span> },
-  {
-    key: 'roi', header: 'ROI', align: 'right',
-    cell: (r) => <span className={`text-xs num font-medium ${r.roi >= 3 ? 'text-good' : 'text-gray-700'}`}>{r.roi.toFixed(1)}x</span>,
-  },
-];
+interface DeptRow {
+  name: string;
+  creators: number;
+  outreach: number;
+  videos: number;
+  ad_running: number;
+  conv: number;
+}
 
 export default function Departments() {
+  const creators = useCreators({ limit: 1000 });
+  const outreach = useOutreach({ limit: 1000 });
+  const staffQ = useStaff({ limit: 100 });
+
+  const loading = creators.isLoading || outreach.isLoading;
+  const error = creators.error || outreach.error;
+
+  const creatorList = creators.data?.items ?? [];
+  const outreachList = outreach.data?.items ?? [];
+  const staffList = staffQ.data?.items ?? [];
+
+  // 按 store_assigned 聚合
+  const deptMap: Record<string, DeptRow> = {};
+  for (const c of creatorList) {
+    const k = c.store_assigned || '未分配';
+    if (!deptMap[k]) deptMap[k] = { name: k, creators: 0, outreach: 0, videos: 0, ad_running: 0, conv: 0 };
+    deptMap[k].creators++;
+  }
+  // 按 creator_id 找到部门并归类 outreach
+  const creatorDept: Record<number, string> = {};
+  for (const c of creatorList) creatorDept[c.id] = c.store_assigned || '未分配';
+  for (const o of outreachList) {
+    const k = creatorDept[o.creator_id] || o.store_name || '未分配';
+    if (!deptMap[k]) deptMap[k] = { name: k, creators: 0, outreach: 0, videos: 0, ad_running: 0, conv: 0 };
+    deptMap[k].outreach++;
+    if (o.video_url) deptMap[k].videos++;
+    if (o.status === 'ad_running') deptMap[k].ad_running++;
+  }
+  for (const dept of Object.values(deptMap)) {
+    dept.conv = dept.creators > 0 ? +((dept.videos / dept.creators) * 100).toFixed(1) : 0;
+  }
+  const departments = Object.values(deptMap)
+    .filter((d) => d.creators >= 2 || d.outreach >= 2)
+    .sort((a, b) => b.creators - a.creators);
+
+  const maxVals = {
+    creators: Math.max(1, ...departments.map((d) => d.creators)),
+    outreach: Math.max(1, ...departments.map((d) => d.outreach)),
+    videos: Math.max(1, ...departments.map((d) => d.videos)),
+    ad_running: Math.max(1, ...departments.map((d) => d.ad_running)),
+    conv: Math.max(1, ...departments.map((d) => d.conv)),
+  };
+
+  const radarMetrics = ['达人数', '建联事件', '视频数', '投放视频', '转化率'];
+
   const radarOption = {
-    legend: { bottom: 0, icon: 'circle', itemWidth: 8, textStyle: { fontSize: 11 } },
+    legend: { bottom: 0, icon: 'circle', itemWidth: 8, textStyle: { fontSize: 10 } },
     tooltip: {},
     radar: {
       indicator: radarMetrics.map((name) => ({ name, max: 100 })),
@@ -63,73 +73,92 @@ export default function Departments() {
       splitLine: { lineStyle: { color: '#e5e6eb' } },
       axisLine: { lineStyle: { color: '#e5e6eb' } },
     },
-    series: [
-      {
-        type: 'radar',
-        symbol: 'circle',
-        symbolSize: 4,
-        data: departments.map((d, i) => ({
-          name: d.name,
-          value: [
-            (d.creators / maxVals.creators) * 100,
-            (d.conv / maxVals.conv) * 100,
-            (d.revenue / maxVals.revenue) * 100,
-            (d.video / maxVals.video) * 100,
-            (d.roi / maxVals.roi) * 100,
-            70 + i * 4,
-          ],
-          areaStyle: { opacity: 0.18, color: chartPalette.categorical[i] },
-          lineStyle: { width: 2, color: chartPalette.categorical[i] },
-          itemStyle: { color: chartPalette.categorical[i] },
-        })),
-      },
-    ],
+    series: [{
+      type: 'radar', symbol: 'circle', symbolSize: 4,
+      data: departments.slice(0, 6).map((d, i) => ({
+        name: d.name,
+        value: [
+          (d.creators / maxVals.creators) * 100,
+          (d.outreach / maxVals.outreach) * 100,
+          (d.videos / maxVals.videos) * 100,
+          (d.ad_running / maxVals.ad_running) * 100,
+          (d.conv / maxVals.conv) * 100,
+        ],
+        areaStyle: { opacity: 0.18, color: chartPalette.categorical[i] },
+        lineStyle: { width: 2, color: chartPalette.categorical[i] },
+        itemStyle: { color: chartPalette.categorical[i] },
+      })),
+    }],
   };
 
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-        <ChartCard title="部门多维绩效雷达" className="lg:col-span-2">
-          <EChart option={radarOption} height={380} />
-        </ChartCard>
-        <div className="card">
-          <div className="px-4 py-3 border-b border-line flex items-center gap-2">
-            <Trophy size={16} className="text-amber-500" />
-            <h3 className="text-sm font-semibold text-gray-800">Top 3 部门</h3>
+  const deptColumns: Column<DeptRow>[] = [
+    {
+      key: 'rank', header: '#', align: 'center',
+      cell: (_, i) => (
+        <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xxs font-bold ${
+          i < 3 ? 'bg-amber-100 text-amber-700' : 'bg-soft text-muted'
+        }`}>{i + 1}</span>
+      ),
+      width: '50px',
+    },
+    { key: 'name', header: '店铺/部门', cell: (r) => <span className="text-xs font-medium">{r.name}</span> },
+    { key: 'creators', header: '达人', align: 'right', cell: (r) => <span className="text-xs num">{r.creators}</span> },
+    {
+      key: 'outreach', header: '建联事件', align: 'right',
+      cell: (r) => (
+        <div className="flex items-center justify-end gap-2">
+          <div className="w-16 h-1 rounded-full bg-soft overflow-hidden">
+            <div className="h-full bg-brand-500 rounded-full" style={{ width: `${(r.outreach / maxVals.outreach) * 100}%` }} />
           </div>
-          <div className="p-3 space-y-2">
-            {departments.slice(0, 3).map((d, i) => (
-              <div key={d.name} className="border border-line rounded p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-medium">{d.name}</span>
-                  <span className={`pill ${i === 0 ? 'bg-amber-100 text-amber-700' : 'pill-muted'}`}>#{i + 1}</span>
-                </div>
-                <div className="grid grid-cols-3 gap-2 text-xxs">
-                  <div>
-                    <div className="text-muted">营收</div>
-                    <div className="text-sm num font-semibold mt-0.5">{d.revenue}万</div>
-                  </div>
-                  <div>
-                    <div className="text-muted">转化</div>
-                    <div className="text-sm num font-semibold mt-0.5">{formatPercent(d.conv, 1)}</div>
-                  </div>
-                  <div>
-                    <div className="text-muted">ROI</div>
-                    <div className="text-sm num font-semibold mt-0.5">{d.roi}x</div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+          <span className="text-xs num">{r.outreach}</span>
         </div>
-      </div>
+      ),
+    },
+    { key: 'videos', header: '视频数', align: 'right', cell: (r) => <span className="text-xs num">{r.videos}</span> },
+    { key: 'ad_running', header: '在投', align: 'right', cell: (r) => <span className="text-xs num">{r.ad_running}</span> },
+    { key: 'conv', header: '转化率', align: 'right', cell: (r) => <span className={`text-xs num font-medium ${r.conv >= 30 ? 'text-good' : 'text-gray-700'}`}>{r.conv}%</span> },
+  ];
 
-      <div className="card">
-        <div className="px-4 py-3 border-b border-line">
-          <h3 className="text-sm font-semibold text-gray-800">部门绩效详表</h3>
+  const bdRows = staffStats(staffList).sort((a, b) => b.contacted - a.contacted).slice(0, 5);
+
+  return (
+    <AsyncState loading={loading} error={error} height={400}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+          <ChartCard title="部门多维绩效雷达 · Top 6" className="lg:col-span-2">
+            <EChart option={radarOption} height={380} />
+          </ChartCard>
+          <div className="card">
+            <div className="px-4 py-3 border-b border-line flex items-center gap-2">
+              <Trophy size={16} className="text-amber-500" />
+              <h3 className="text-sm font-semibold text-gray-800">Top BD 战绩</h3>
+            </div>
+            <div className="p-3 space-y-2">
+              {bdRows.map((r, i) => (
+                <div key={r.name} className="border border-line rounded p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium">{r.name}</span>
+                    <span className={`pill ${i === 0 ? 'bg-amber-100 text-amber-700' : 'pill-muted'}`}>#{i + 1}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-xxs">
+                    <div><div className="text-muted">联系</div><div className="num font-semibold mt-0.5">{r.contacted}</div></div>
+                    <div><div className="text-muted">确认</div><div className="num font-semibold mt-0.5">{r.confirmed}</div></div>
+                    <div><div className="text-muted">寄样</div><div className="num font-semibold mt-0.5">{r.samples}</div></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
-        <DataTable columns={deptColumns} data={departments} rowKey={(r) => r.name} />
+
+        <div className="card">
+          <div className="px-4 py-3 border-b border-line">
+            <h3 className="text-sm font-semibold text-gray-800">店铺绩效详表</h3>
+            <div className="text-xxs text-muted mt-0.5">按 creator.store_assigned 聚合</div>
+          </div>
+          <DataTable columns={deptColumns} data={departments} rowKey={(r) => r.name} />
+        </div>
       </div>
-    </div>
+    </AsyncState>
   );
 }

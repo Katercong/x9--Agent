@@ -1,0 +1,120 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Dark theme (default) — mirror desktop theme.css palette */
+  :root,
+  [data-theme='dark'] {
+    --bg: 11 13 18;            /* #0b0d12 deep blue-black */
+    --bg-elev-1: 18 22 30;     /* #12161e cards */
+    --bg-elev-2: 24 30 42;     /* #181e2a hover */
+    --text: 236 240 248;       /* #ecf0f8 primary text */
+    --muted: 134 145 162;      /* #8691a2 secondary */
+    --border: 38 47 64;        /* #262f40 dividers */
+    --accent: 6 182 212;       /* #06b6d4 teal */
+    --good: 34 197 94;
+    --warn: 245 158 11;
+    --bad: 239 68 68;
+  }
+
+  [data-theme='light'] {
+    --bg: 247 248 251;
+    --bg-elev-1: 255 255 255;
+    --bg-elev-2: 247 248 251;
+    --text: 31 35 41;
+    --muted: 102 113 130;
+    --border: 226 230 238;
+    --accent: 6 182 212;
+    --good: 22 163 74;
+    --warn: 245 166 35;
+    --bad: 239 68 68;
+  }
+
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: rgb(var(--bg));
+    color: rgb(var(--text));
+    font-size: 13px;
+    font-feature-settings: 'tnum';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  * { box-sizing: border-box; }
+
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+  }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgb(var(--border)); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgb(var(--muted) / 0.5); }
+}
+
+@layer components {
+  .card {
+    @apply bg-elev1 border border-border rounded-md shadow-card;
+  }
+  .card-body { @apply p-4; }
+
+  .pill {
+    @apply inline-flex items-center px-2 py-0.5 rounded-pill text-xxs font-medium;
+  }
+  .pill-good { background: rgb(var(--good) / 0.15); color: rgb(var(--good)); }
+  .pill-warn { background: rgb(var(--warn) / 0.18); color: rgb(var(--warn)); }
+  .pill-bad  { background: rgb(var(--bad)  / 0.16); color: rgb(var(--bad)); }
+  .pill-info { background: rgb(var(--accent) / 0.16); color: rgb(var(--accent)); }
+  .pill-muted{ background: rgb(var(--muted) / 0.12); color: rgb(var(--muted)); }
+
+  .table-x9 { @apply w-full text-xs; }
+  .table-x9 thead th {
+    @apply text-left font-medium text-muted px-3 py-2 border-b border-border;
+    background: rgb(var(--bg-elev-2));
+  }
+  .table-x9 tbody td {
+    @apply px-3 py-2 border-b;
+    border-color: rgb(var(--border) / 0.6);
+  }
+  .table-x9 tbody tr:hover { background: rgb(var(--bg-elev-2) / 0.6); }
+
+  .btn {
+    @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border border-border bg-elev1 text-text transition-colors;
+  }
+  .btn:hover { background: rgb(var(--bg-elev-2)); }
+  .btn-primary {
+    background: rgb(var(--accent));
+    color: #001218;
+    border-color: rgb(var(--accent));
+  }
+  .btn-primary:hover { filter: brightness(1.1); }
+  .btn-ghost {
+    border-color: transparent;
+    background: transparent;
+  }
+  .btn-ghost:hover { background: rgb(var(--bg-elev-2)); }
+
+  .chip {
+    @apply inline-flex items-center gap-1 px-2 py-1 rounded text-xs border border-border cursor-pointer transition-colors;
+    background: rgb(var(--bg-elev-1));
+    color: rgb(var(--text));
+  }
+  .chip:hover { background: rgb(var(--bg-elev-2)); }
+
+  .input-bare {
+    @apply bg-transparent outline-none text-xs;
+    color: rgb(var(--text));
+  }
+  .input-bare::placeholder { color: rgb(var(--muted)); }
+
+  .sec-title {
+    @apply text-sm font-semibold mb-3;
+    color: rgb(var(--text));
+  }
+}

@@ -26,6 +26,7 @@ Named queries
 from __future__ import annotations
 import json
 import os
+import re as _re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -42,10 +43,32 @@ from app.registry import (
 )
 
 router = APIRouter()
+
+
+def _load_shared_env() -> None:
+    env_path = DB_PATH.parent.parent / ".env.shared"
+    if not env_path.exists():
+        return
+    try:
+        for raw in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except OSError:
+        pass
+
+
+_load_shared_env()
 PG_DSN = os.environ.get(
     "X9_PG_DSN",
-    "postgresql://x9:x9_local_dev_2026@localhost:15432/x9db?connect_timeout=5",
+    "postgresql://x9:x9_local_dev_2026@127.0.0.1:15432/x9db?connect_timeout=5",
 )
+API_V1_BACKEND = os.environ.get("X9_API_V1_BACKEND", "postgres").strip().lower()
 
 
 # ============================================================
@@ -62,12 +85,81 @@ def get_pg_con() -> psycopg.Connection:
     return psycopg.connect(PG_DSN, row_factory=dict_row)
 
 
-def get_resource(name: str) -> Resource:
+def use_pg_v1() -> bool:
+    return API_V1_BACKEND not in {"sqlite", "sqlite3", "local_sqlite"}
+
+
+def _json_or(value: Any, fallback: Any) -> Any:
+    if value is None or value == "":
+        return fallback
+    if isinstance(value, (list, dict)):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return fallback
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() not in {"", "0", "false", "no", "none"}
+
+
+def get_sqlite_resource(name: str) -> Resource:
     con = get_con()
     try:
         regs = load_resources(con)
     finally:
         con.close()
+    if name not in regs:
+        raise HTTPException(404, f"unknown resource '{name}' (try GET /api/v1/resources)")
+    return regs[name]
+
+
+def pg_load_resources(cur) -> dict[str, Resource]:
+    cur.execute(
+        """
+        SELECT name, table_name, pk, upsert_keys, json_cols, fk_lookup,
+               description, is_dynamic, writable, deprecated_note
+        FROM _meta_resource
+        ORDER BY name
+        """
+    )
+    out: dict[str, Resource] = {}
+    for row in cur.fetchall():
+        fk = _json_or(row.get("fk_lookup"), {})
+        res = Resource(
+            name=row["name"],
+            table=row["table_name"],
+            pk=row.get("pk") or "id",
+            upsert_keys=_json_or(row.get("upsert_keys"), []),
+            json_cols=_json_or(row.get("json_cols"), []),
+            fk_lookup={k: tuple(v) for k, v in fk.items()},
+            auto_compute=BUILTIN_RESOURCES[row["name"]].auto_compute
+            if row["name"] in BUILTIN_RESOURCES else {},
+            description=row.get("description") or "",
+            is_dynamic=_truthy(row.get("is_dynamic")),
+            writable=_truthy(row.get("writable")),
+        )
+        if row.get("deprecated_note"):
+            res.description = (res.description or "") + f" [DEPRECATED: {row['deprecated_note']}]"
+        out[res.name] = res
+    return out
+
+
+def get_resource(name: str) -> Resource:
+    if not use_pg_v1():
+        return get_sqlite_resource(name)
+    try:
+        with get_pg_con() as con, con.cursor() as cur:
+            regs = pg_load_resources(cur)
+    except Exception as exc:
+        raise HTTPException(503, f"PostgreSQL resource registry unavailable: {exc}") from exc
     if name not in regs:
         raise HTTPException(404, f"unknown resource '{name}' (try GET /api/v1/resources)")
     return regs[name]
@@ -150,8 +242,19 @@ def pg_table_columns(cur, table: str) -> list[dict]:
                data_type AS type,
                is_nullable <> 'YES' AS notnull,
                column_default AS "default",
-               false AS pk
-        FROM information_schema.columns
+               EXISTS (
+                 SELECT 1
+                 FROM information_schema.table_constraints tc
+                 JOIN information_schema.key_column_usage kcu
+                   ON tc.constraint_name = kcu.constraint_name
+                  AND tc.table_schema = kcu.table_schema
+                  AND tc.table_name = kcu.table_name
+                 WHERE tc.constraint_type = 'PRIMARY KEY'
+                   AND tc.table_schema = c.table_schema
+                   AND tc.table_name = c.table_name
+                   AND kcu.column_name = c.column_name
+               ) AS pk
+        FROM information_schema.columns c
         WHERE table_schema = 'public' AND table_name = %s
         ORDER BY ordinal_position
         """,
@@ -213,6 +316,242 @@ def pg_resolve_fk(cur, payload: dict, fk_lookup: dict) -> tuple[dict, list[dict]
     return out, errors
 
 
+def pg_encode_for_db(payload: dict, json_cols: list[str]) -> dict:
+    return encode_for_db(payload, json_cols)
+
+
+def pg_count(cur, table: str, where_sql: str = "1=1", args: list[Any] | tuple[Any, ...] = ()) -> int:
+    safe_ident(table)
+    cur.execute(f"SELECT COUNT(*)::int AS count FROM {table} WHERE {where_sql}", args)
+    row = cur.fetchone()
+    return int(row["count"] if isinstance(row, dict) else row[0])
+
+
+def _pg_text_columns(cols_meta: list[dict]) -> list[str]:
+    text_types = {"text", "character varying", "character", "citext"}
+    return [c["name"] for c in cols_meta if str(c.get("type") or "").lower() in text_types]
+
+
+def _pg_order_clause(order_by: str | None, desc: bool, cols: set[str]) -> str:
+    if not order_by:
+        return ""
+    pieces = []
+    if "," in order_by or ":" in order_by:
+        for part in order_by.split(","):
+            part = part.strip()
+            if ":" in part:
+                c, d = part.split(":", 1)
+                c = c.strip()
+                d = d.strip().lower()
+            else:
+                c, d = part, "asc"
+            if c in cols and d in ("asc", "desc"):
+                pieces.append(f"{c} {d.upper()}")
+    elif order_by in cols:
+        pieces.append(f"{order_by} {'DESC' if desc else 'ASC'}")
+    return "ORDER BY " + ", ".join(pieces) if pieces else ""
+
+
+def pg_list_rows(
+    resource: str,
+    request: Request,
+    limit: int,
+    offset: int,
+    q: str | None,
+    order_by: str | None,
+    desc: bool,
+) -> dict:
+    r = get_resource(resource)
+    with get_pg_con() as con, con.cursor() as cur:
+        cols_meta = pg_table_columns(cur, r.table)
+        cols = {c["name"] for c in cols_meta}
+        where = ["1=1"]
+        args: list[Any] = []
+        in_buckets: dict[str, list[str]] = {}
+        op_suffixes = {"__gte": ">=", "__lte": "<=", "__gt": ">", "__lt": "<"}
+
+        for k, v in request.query_params.multi_items():
+            if k in {"limit", "offset", "q", "order_by", "desc"}:
+                continue
+            matched = False
+            for suffix, sql_op in op_suffixes.items():
+                if k.endswith(suffix):
+                    col = k[:-len(suffix)]
+                    if col in cols:
+                        where.append(f"{col} {sql_op} %s")
+                        args.append(v)
+                    matched = True
+                    break
+            if matched:
+                continue
+            if k.endswith("__in"):
+                col = k[:-4]
+                if col in cols:
+                    in_buckets.setdefault(col, []).extend(s for s in v.split(",") if s != "")
+                continue
+            if k.endswith("__like"):
+                col = k[:-6]
+                if col in cols:
+                    where.append(f"{col} LIKE %s")
+                    args.append(v)
+                continue
+            if k.endswith("__icontains"):
+                col = k[:-11]
+                if col in cols:
+                    where.append(f"{col} ILIKE %s")
+                    args.append(f"%{v}%")
+                continue
+            if k.endswith("__isnull"):
+                col = k[:-8]
+                if col in cols:
+                    if v.lower() in ("true", "1", "yes"):
+                        where.append(f"{col} IS NULL")
+                    else:
+                        where.append(f"{col} IS NOT NULL")
+                continue
+            if k in cols:
+                where.append(f"{k} = %s")
+                args.append(v)
+
+        for col, vals in in_buckets.items():
+            if vals:
+                where.append(f"{col} = ANY(%s)")
+                args.append(vals)
+
+        if q:
+            text_cols = _pg_text_columns(cols_meta)
+            if text_cols:
+                where.append("(" + " OR ".join([f"{c} ILIKE %s" for c in text_cols]) + ")")
+                args.extend([f"%{q}%"] * len(text_cols))
+
+        where_sql = " AND ".join(where)
+        order = _pg_order_clause(order_by, desc, cols)
+        cur.execute(
+            f"SELECT * FROM {r.table} WHERE {where_sql} {order} LIMIT %s OFFSET %s",
+            args + [limit, offset],
+        )
+        rows = [pg_decode_row(row, r.json_cols) for row in cur.fetchall()]
+        total = pg_count(cur, r.table, where_sql, args)
+    return {"resource": resource, "total": total, "limit": limit, "offset": offset, "items": rows}
+
+
+def pg_get_row(resource: str, row_id: str) -> dict:
+    r = get_resource(resource)
+    safe_ident(r.pk)
+    with get_pg_con() as con, con.cursor() as cur:
+        cur.execute(f"SELECT * FROM {r.table} WHERE {r.pk} = %s", (row_id,))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, f"{resource}#{row_id} not found")
+    return pg_decode_row(row, r.json_cols)
+
+
+def pg_bulk_upsert(resource: str, payload: dict) -> dict:
+    r = get_resource(resource)
+    if not r.writable:
+        raise HTTPException(403, f"resource '{resource}' is read-only")
+    items = payload.get("items") or []
+    if not isinstance(items, list):
+        raise HTTPException(400, "items must be a list")
+
+    with get_pg_con() as con, con.cursor() as cur:
+        cols = pg_columns_set(cur, r.table)
+        inserted = updated = 0
+        errors: list[dict] = []
+        for idx, raw in enumerate(items):
+            try:
+                resolved, fk_errors = pg_resolve_fk(cur, dict(raw), r.fk_lookup)
+                if fk_errors:
+                    errors.append({"idx": idx, "fk_errors": fk_errors})
+                    continue
+                for col, fn in r.auto_compute.items():
+                    if col in cols and col not in resolved:
+                        value = fn(resolved)
+                        if value is not None:
+                            resolved[col] = value
+                fields = {k: v for k, v in resolved.items() if k in cols}
+                if not fields:
+                    errors.append({"idx": idx, "error": "no recognized columns"})
+                    continue
+                fields = pg_encode_for_db(fields, r.json_cols)
+
+                if r.upsert_keys and all(k in fields for k in r.upsert_keys):
+                    where = " AND ".join([f"{k} = %s" for k in r.upsert_keys])
+                    cur.execute(
+                        f"SELECT {r.pk} FROM {r.table} WHERE {where} LIMIT 1",
+                        [fields[k] for k in r.upsert_keys],
+                    )
+                    pre = cur.fetchone()
+                    if pre:
+                        update_keys = [k for k in fields if k not in r.upsert_keys]
+                        if update_keys:
+                            sets = ", ".join([f"{k} = %s" for k in update_keys])
+                            cur.execute(
+                                f"UPDATE {r.table} SET {sets} WHERE {r.pk} = %s",
+                                [fields[k] for k in update_keys] + [pre[r.pk]],
+                            )
+                        updated += 1
+                        continue
+
+                columns = list(fields.keys())
+                placeholders = ", ".join(["%s"] * len(columns))
+                cur.execute(
+                    f"INSERT INTO {r.table}({', '.join(columns)}) VALUES({placeholders})",
+                    [fields[k] for k in columns],
+                )
+                inserted += 1
+            except Exception as exc:
+                errors.append({"idx": idx, "error": str(exc)})
+        con.commit()
+    return {
+        "resource": resource,
+        "inserted": inserted,
+        "updated": updated,
+        "skipped": len(items) - inserted - updated,
+        "errors": errors,
+    }
+
+
+def pg_patch_row(resource: str, row_id: str, payload: dict) -> dict:
+    r = get_resource(resource)
+    if not r.writable:
+        raise HTTPException(403, f"resource '{resource}' is read-only")
+    with get_pg_con() as con, con.cursor() as cur:
+        cols = pg_columns_set(cur, r.table)
+        resolved, fk_errors = pg_resolve_fk(cur, dict(payload), r.fk_lookup)
+        if fk_errors:
+            raise HTTPException(400, {"fk_errors": fk_errors})
+        for col, fn in r.auto_compute.items():
+            if col in cols and col not in resolved:
+                value = fn(resolved)
+                if value is not None:
+                    resolved[col] = value
+        fields = {k: v for k, v in resolved.items() if k in cols and k != r.pk}
+        if not fields:
+            raise HTTPException(400, "no editable fields in payload")
+        fields = pg_encode_for_db(fields, r.json_cols)
+        cur.execute(f"SELECT {r.pk} FROM {r.table} WHERE {r.pk} = %s", (row_id,))
+        if not cur.fetchone():
+            raise HTTPException(404, f"{resource}#{row_id} not found")
+        sets = ", ".join([f"{k} = %s" for k in fields])
+        cur.execute(f"UPDATE {r.table} SET {sets} WHERE {r.pk} = %s", list(fields.values()) + [row_id])
+        con.commit()
+    return {"ok": True, "updated_fields": list(fields.keys())}
+
+
+def pg_delete_row(resource: str, row_id: str) -> dict:
+    r = get_resource(resource)
+    if not r.writable:
+        raise HTTPException(403, f"resource '{resource}' is read-only")
+    with get_pg_con() as con, con.cursor() as cur:
+        cur.execute(f"SELECT {r.pk} FROM {r.table} WHERE {r.pk} = %s", (row_id,))
+        if not cur.fetchone():
+            raise HTTPException(404, "row not found")
+        cur.execute(f"DELETE FROM {r.table} WHERE {r.pk} = %s", (row_id,))
+        con.commit()
+    return {"ok": True, "deleted": {r.pk: row_id}}
+
+
 # ============================================================
 # Discovery
 # ============================================================
@@ -222,6 +561,30 @@ def version() -> dict:
 
     廖 那边可以定期 poll 这个，看到 schema_changed_at 变化就知道张这边动 schema 了。
     """
+    if use_pg_v1():
+        resources = []
+        with get_pg_con() as con, con.cursor() as cur:
+            regs = pg_load_resources(cur)
+            for name, r in regs.items():
+                try:
+                    cols = pg_table_columns(cur, r.table)
+                except Exception:
+                    cols = []
+                resources.append({
+                    "name": name, "table": r.table,
+                    "column_count": len(cols),
+                    "columns": [c["name"] for c in cols],
+                })
+        return {
+            "api_version": "v1",
+            "server_version": "2.1.0",
+            "database_backend": "postgres",
+            "compatibility": "additive (adding fields/resources/queries is non-breaking)",
+            "resources": resources,
+            "changelog_url": "/docs/CHANGELOG.md",
+            "changelog_last_modified_ts": None,
+        }
+
     con = get_con()
     try:
         regs = load_resources(con)
@@ -249,6 +612,7 @@ def version() -> dict:
     return {
         "api_version": "v1",
         "server_version": "2.1.0",
+        "database_backend": "sqlite",
         "compatibility": "additive (adding fields/resources/queries is non-breaking)",
         "resources": resources,
         "changelog_url": "/docs/CHANGELOG.md",
@@ -258,6 +622,40 @@ def version() -> dict:
 
 @router.get("/api/v1/")
 def discovery() -> dict:
+    if use_pg_v1():
+        with get_pg_con() as con, con.cursor() as cur:
+            regs = pg_load_resources(cur)
+            counts: dict[str, int] = {}
+            for name, r in regs.items():
+                try:
+                    counts[name] = pg_count(cur, r.table)
+                except Exception:
+                    counts[name] = -1
+            cur.execute("SELECT name FROM _meta_query ORDER BY name")
+            queries = [row["name"] for row in cur.fetchall()]
+        return {
+            "version": "v1",
+            "database_backend": "postgres",
+            "resources": sorted(regs.keys()),
+            "queries": queries,
+            "counts": counts,
+            "auth": "Send X-API-Key header for write endpoints. Read endpoints are open.",
+            "endpoints": {
+                "discovery":     "GET  /api/v1/",
+                "list_resources":"GET  /api/v1/resources",
+                "get_resource":  "GET  /api/v1/resources/{name}",
+                "create_table":  "POST /api/v1/tables (auth)",
+                "add_column":    "POST /api/v1/tables/{name}/columns (auth)",
+                "list_rows":     "GET  /api/v1/data/{resource}",
+                "get_row":       "GET  /api/v1/data/{resource}/{id}",
+                "bulk_upsert":   "POST /api/v1/data/{resource}/bulk (auth)",
+                "patch_row":     "PATCH /api/v1/data/{resource}/{id} (auth)",
+                "delete_row":    "DELETE /api/v1/data/{resource}/{id} (auth)",
+                "list_queries":  "GET  /api/v1/queries",
+                "run_query":     "GET  /api/v1/queries/{name}",
+            },
+        }
+
     con = get_con()
     regs = load_resources(con)
     counts: dict[str, int] = {}
@@ -298,6 +696,24 @@ def discovery() -> dict:
 
 @router.get("/api/v1/resources")
 def list_resources() -> dict:
+    if use_pg_v1():
+        with get_pg_con() as con, con.cursor() as cur:
+            regs = pg_load_resources(cur)
+            out = []
+            for r in regs.values():
+                try:
+                    cols = pg_table_columns(cur, r.table)
+                except Exception as e:
+                    cols = [{"error": str(e)}]
+                out.append({
+                    "name": r.name, "table": r.table, "pk": r.pk,
+                    "upsert_keys": r.upsert_keys, "json_cols": r.json_cols,
+                    "fk_lookup": {k: list(v) for k, v in r.fk_lookup.items()},
+                    "writable": r.writable, "is_dynamic": r.is_dynamic,
+                    "description": r.description, "columns": cols,
+                })
+        return {"database_backend": "postgres", "total": len(out), "items": out}
+
     con = get_con()
     regs = load_resources(con)
     out = []
@@ -319,6 +735,21 @@ def list_resources() -> dict:
 
 @router.get("/api/v1/resources/{name}")
 def get_resource_meta(name: str) -> dict:
+    if use_pg_v1():
+        with get_pg_con() as con, con.cursor() as cur:
+            regs = pg_load_resources(cur)
+            if name not in regs:
+                raise HTTPException(404, "unknown resource")
+            r = regs[name]
+            cols = pg_table_columns(cur, r.table)
+            sample_count = pg_count(cur, r.table)
+        return {"name": r.name, "table": r.table, "pk": r.pk,
+                "upsert_keys": r.upsert_keys, "json_cols": r.json_cols,
+                "fk_lookup": {k: list(v) for k, v in r.fk_lookup.items()},
+                "writable": r.writable, "is_dynamic": r.is_dynamic,
+                "description": r.description, "columns": cols,
+                "row_count": sample_count, "database_backend": "postgres"}
+
     con = get_con()
     regs = load_resources(con)
     if name not in regs:
@@ -373,6 +804,8 @@ async def create_table(payload: dict,
     if name.startswith("_") or table.startswith("_"):
         raise HTTPException(400, "names starting with _ are reserved")
     assert_can(user, "admin", name)
+    if use_pg_v1():
+        raise HTTPException(501, "PostgreSQL schema changes are applied by migrations, not this SQLite-era endpoint")
 
     cols_def = payload.get("columns") or []
     if not cols_def:
@@ -461,6 +894,8 @@ async def create_table(payload: dict,
 async def add_column(name: str, payload: dict,
                      user: dict = Depends(require_admin)) -> dict:
     assert_can(user, "admin", name)
+    if use_pg_v1():
+        raise HTTPException(501, "PostgreSQL schema changes are applied by migrations, not this SQLite-era endpoint")
     """Add a single column to an existing dynamic table.
 
     body: {"name": "click_through_rate", "type": "REAL", "default": 0}
@@ -514,6 +949,8 @@ async def drop_table(name: str, confirm: bool = False,
     """
     if not confirm:
         raise HTTPException(400, "must pass ?confirm=true to actually drop")
+    if use_pg_v1():
+        raise HTTPException(501, "PostgreSQL schema changes are applied by migrations, not this SQLite-era endpoint")
     r = get_resource(name)
     if not r.is_dynamic:
         raise HTTPException(403, f"resource '{name}' is built-in; cannot DROP via API. "
@@ -547,6 +984,8 @@ async def drop_column(name: str, col: str, confirm: bool = False,
     """
     if not confirm:
         raise HTTPException(400, "must pass ?confirm=true to actually drop")
+    if use_pg_v1():
+        raise HTTPException(501, "PostgreSQL schema changes are applied by migrations, not this SQLite-era endpoint")
     try:
         safe_ident(col)
     except ValueError as e:
@@ -589,6 +1028,25 @@ def schema_dump_endpoint(format: str = "markdown",
     """完整 schema dump (markdown 或 json)。webhook 大变动通知里的链接打开会到这里。"""
     from app.notifier import build_schema_dump_markdown
     if format == "json":
+        if use_pg_v1():
+            with get_pg_con() as con, con.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                    ORDER BY table_name
+                    """
+                )
+                tables = [row["table_name"] for row in cur.fetchall()]
+                out = {}
+                for t in tables:
+                    out[t] = {
+                        "row_count": pg_count(cur, t),
+                        "columns": pg_table_columns(cur, t),
+                    }
+            return {"ts": datetime.now().isoformat(), "database_backend": "postgres", "tables": out}
+
         con = get_con()
         try:
             tables = [r[0] for r in con.execute(
@@ -648,6 +1106,9 @@ def list_rows(
       - ?order_by=<col>&desc=true       — single sort (legacy)
       - ?order_by=col1:desc,col2:asc    — multi-key sort (v3.8.1)
     """
+    if use_pg_v1():
+        return pg_list_rows(resource, request, limit, offset, q, order_by, desc)
+
     r = get_resource(resource)
     con = get_con()
     try:
@@ -746,6 +1207,9 @@ def list_rows(
 
 @router.get("/api/v1/data/{resource}/{row_id}")
 def get_row(resource: str, row_id: str) -> dict:
+    if use_pg_v1():
+        return pg_get_row(resource, row_id)
+
     r = get_resource(resource)
     con = get_con()
     try:
@@ -763,6 +1227,9 @@ async def bulk_upsert(resource: str, payload: dict,
     """Batch upsert. Dedup by `upsert_keys` defined on the resource.
     body: {"items": [{...}, {...}]}"""
     assert_can(user, "write", resource)
+    if use_pg_v1():
+        return pg_bulk_upsert(resource, payload)
+
     r = get_resource(resource)
     if not r.writable:
         raise HTTPException(403, f"resource '{resource}' is read-only")
@@ -829,6 +1296,9 @@ async def bulk_upsert(resource: str, payload: dict,
 async def patch_row(resource: str, row_id: str, payload: dict,
                     user: dict = Depends(require_user_or_above)) -> dict:
     assert_can(user, "write", resource)
+    if use_pg_v1():
+        return pg_patch_row(resource, row_id, payload)
+
     r = get_resource(resource)
     if not r.writable:
         raise HTTPException(403, f"resource '{resource}' is read-only")
@@ -865,6 +1335,9 @@ async def patch_row(resource: str, row_id: str, payload: dict,
 async def delete_row(resource: str, row_id: str,
                      user: dict = Depends(require_admin)) -> dict:
     assert_can(user, "admin", resource)
+    if use_pg_v1():
+        return pg_delete_row(resource, row_id)
+
     r = get_resource(resource)
     if not r.writable:
         raise HTTPException(403, f"resource '{resource}' is read-only")
@@ -912,8 +1385,69 @@ def _load_query_from_db(name: str, con: sqlite3.Connection) -> dict | None:
     return d
 
 
+_PG_NAMED_PARAM_RE = _re.compile(r"(?<!:):([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _pg_sql_placeholders(sql: str) -> str:
+    if "%(" in sql:
+        return sql
+    return _PG_NAMED_PARAM_RE.sub(r"%(\1)s", sql)
+
+
+def _parse_query_params(value: Any) -> list:
+    parsed = _json_or(value, [])
+    return parsed if isinstance(parsed, list) else []
+
+
+def _load_query_from_pg(name: str, cur) -> dict | None:
+    cur.execute(
+        "SELECT name, description, sql, params, is_builtin FROM _meta_query WHERE name = %s",
+        (name,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["params"] = _parse_query_params(d.get("params"))
+    return d
+
+
+def _bind_named_query_params(q: dict, request: Request) -> dict[str, Any]:
+    bind: dict[str, Any] = {}
+    qp = request.query_params
+    for p in q["params"]:
+        pname, ptype, pdefault = p[0], p[1], p[2]
+        raw = qp.get(pname)
+        if raw is None or raw == "":
+            bind[pname] = pdefault
+            continue
+        try:
+            bind[pname] = {"int": int, "str": str, "float": float}[ptype](raw)
+        except (ValueError, KeyError):
+            raise HTTPException(400, f"param {pname!r} expects {ptype}")
+    return bind
+
+
 @router.get("/api/v1/queries")
 def list_queries() -> dict:
+    if use_pg_v1():
+        with get_pg_con() as con, con.cursor() as cur:
+            cur.execute(
+                "SELECT name, description, sql, params, is_builtin FROM _meta_query "
+                "ORDER BY is_builtin DESC, name"
+            )
+            rows = cur.fetchall()
+        out = []
+        for r in rows:
+            params = _parse_query_params(r.get("params"))
+            out.append({
+                "name": r["name"], "description": r["description"],
+                "is_builtin": _truthy(r["is_builtin"]),
+                "params": [{"name": p[0], "type": p[1], "default": p[2]} for p in params],
+                "url": f"/api/v1/queries/{r['name']}",
+            })
+        return {"database_backend": "postgres", "items": out}
+
     con = get_con()
     try:
         rows = [dict(r) for r in con.execute(
@@ -938,6 +1472,17 @@ def list_queries() -> dict:
 
 @router.get("/api/v1/queries/{name}")
 def run_query(name: str, request: Request) -> dict:
+    if use_pg_v1():
+        with get_pg_con() as con, con.cursor() as cur:
+            q = _load_query_from_pg(name, cur)
+            if not q:
+                raise HTTPException(404, f"unknown query '{name}' (try GET /api/v1/queries)")
+            bind = _bind_named_query_params(q, request)
+            cur.execute(_pg_sql_placeholders(q["sql"]), bind)
+            rows = [dict(r) for r in cur.fetchall()]
+        return {"query": name, "params": bind, "total": len(rows), "items": rows,
+                "database_backend": "postgres"}
+
     con = get_con()
     try:
         q = _load_query_from_db(name, con)
@@ -982,6 +1527,23 @@ async def create_query(payload: dict) -> dict:
     params = payload.get("params") or []
     if not isinstance(params, list):
         raise HTTPException(400, "params must be a list of [name,type,default]")
+    if use_pg_v1():
+        with get_pg_con() as con, con.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO _meta_query(name,description,sql,params,is_builtin,updated_at)
+                VALUES(%s,%s,%s,%s,0,CURRENT_TIMESTAMP)
+                ON CONFLICT(name) DO UPDATE SET
+                  description = EXCLUDED.description,
+                  sql = EXCLUDED.sql,
+                  params = EXCLUDED.params,
+                  updated_at = CURRENT_TIMESTAMP
+                """,
+                (name, payload.get("description", ""), sql, json.dumps(params, ensure_ascii=False)),
+            )
+            con.commit()
+        return {"ok": True, "name": name, "database_backend": "postgres"}
+
     con = get_con()
     try:
         existing = con.execute(
@@ -1017,6 +1579,23 @@ async def update_query(name: str, payload: dict) -> dict:
     if not fields:
         raise HTTPException(400, "no editable fields in payload")
     fields["updated_at"] = "datetime('now')"   # placeholder, replaced below
+    if use_pg_v1():
+        with get_pg_con() as con, con.cursor() as cur:
+            cur.execute("SELECT 1 FROM _meta_query WHERE name = %s", (name,))
+            if not cur.fetchone():
+                raise HTTPException(404, f"query '{name}' not found")
+            set_keys = [k for k in fields if k != "updated_at"]
+            sets = ", ".join([f"{k} = %s" for k in set_keys])
+            if sets:
+                sets += ", updated_at = CURRENT_TIMESTAMP"
+            else:
+                sets = "updated_at = CURRENT_TIMESTAMP"
+            args = [fields[k] for k in set_keys] + [name]
+            cur.execute(f"UPDATE _meta_query SET {sets} WHERE name = %s", args)
+            con.commit()
+        return {"ok": True, "name": name, "updated_fields": list(fields.keys()),
+                "database_backend": "postgres"}
+
     con = get_con()
     try:
         if not con.execute("SELECT 1 FROM _meta_query WHERE name=?", (name,)).fetchone():
@@ -1032,6 +1611,18 @@ async def update_query(name: str, payload: dict) -> dict:
 
 @router.delete("/api/v1/queries/{name}", dependencies=[Depends(require_admin)])
 async def delete_query(name: str) -> dict:
+    if use_pg_v1():
+        with get_pg_con() as con, con.cursor() as cur:
+            cur.execute("SELECT is_builtin FROM _meta_query WHERE name = %s", (name,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, f"query '{name}' not found")
+            if _truthy(row["is_builtin"]):
+                raise HTTPException(403, "cannot delete a builtin query (override via PUT instead)")
+            cur.execute("DELETE FROM _meta_query WHERE name = %s", (name,))
+            con.commit()
+        return {"ok": True, "deleted": name, "database_backend": "postgres"}
+
     con = get_con()
     try:
         row = con.execute("SELECT is_builtin FROM _meta_query WHERE name=?", (name,)).fetchone()

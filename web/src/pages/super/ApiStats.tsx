@@ -3,132 +3,93 @@ import { KpiCard } from '@/components/kpi/KpiCard';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
 import { DataTable, type Column } from '@/components/table/DataTable';
-import { Pill } from '@/components/Pill';
-import { apiStats, topUsers, requestVolume } from '@/mock/super';
-import { formatPercent } from '@/lib/format';
-import { chartPalette } from '@/lib/colors';
+import { AsyncState } from '@/components/states/States';
+import { useResources, useNamedQueries } from '@/hooks/useApi';
 
-type Stat = typeof apiStats[number];
-type TopU = typeof topUsers[number];
-
-const statColumns: Column<Stat>[] = [
-  { key: 'endpoint', header: '端点', cell: (r) => <span className="text-xs font-mono">{r.endpoint}</span> },
-  {
-    key: 'count', header: '调用量', align: 'right',
-    cell: (r) => (
-      <div className="flex items-center justify-end gap-2">
-        <div className="w-20 h-1 rounded-full bg-soft overflow-hidden">
-          <div className="h-full bg-brand-500 rounded-full" style={{ width: `${(r.count / 12840) * 100}%` }} />
-        </div>
-        <span className="text-xs num">{r.count.toLocaleString()}</span>
-      </div>
-    ),
-  },
-  { key: 'avg', header: '平均耗时', align: 'right', cell: (r) => <span className={`text-xs num ${r.avgMs > 500 ? 'text-warn' : 'text-good'}`}>{r.avgMs} ms</span> },
-  {
-    key: 'err', header: '错误率', align: 'right',
-    cell: (r) => (
-      <Pill tone={r.errorRate > 0.02 ? 'bad' : r.errorRate > 0.005 ? 'warn' : 'good'}>
-        {formatPercent(r.errorRate * 100, 2)}
-      </Pill>
-    ),
-  },
-];
-
-const userColumns: Column<TopU>[] = [
-  { key: 'user', header: '调用方', cell: (r) => <span className="text-xs font-medium">{r.user}</span> },
-  {
-    key: 'calls', header: '调用量', align: 'right',
-    cell: (r) => (
-      <div className="flex items-center justify-end gap-2">
-        <div className="w-20 h-1 rounded-full bg-soft overflow-hidden">
-          <div className="h-full bg-brand-500 rounded-full" style={{ width: `${r.percent}%` }} />
-        </div>
-        <span className="text-xs num">{r.calls.toLocaleString()}</span>
-      </div>
-    ),
-  },
-  { key: 'pct', header: '占比', align: 'right', cell: (r) => <span className="text-xs num font-medium">{r.percent}%</span> },
-];
+interface EndpointRow {
+  endpoint: string;
+  desc: string;
+  type: '资源' | '命名查询' | 'LLM' | '元信息';
+}
 
 export default function ApiStats() {
-  const trendOption = {
-    grid: { top: 30, right: 20, bottom: 30, left: 50, containLabel: true },
-    tooltip: { trigger: 'axis' },
-    xAxis: {
-      type: 'category',
-      data: requestVolume.hours,
-      axisLine: { lineStyle: { color: '#e5e6eb' } },
-      axisTick: { show: false },
-      axisLabel: { color: '#86909c', fontSize: 10, interval: 2 },
-    },
-    yAxis: {
-      type: 'value',
-      splitLine: { lineStyle: { color: '#f0f1f5', type: 'dashed' } },
-      axisLine: { show: false },
-      axisTick: { show: false },
-    },
-    series: [
-      {
-        type: 'line',
-        data: requestVolume.values,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: { color: '#3370ff', width: 2 },
-        areaStyle: {
-          color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [{ offset: 0, color: 'rgba(51,112,255,0.18)' }, { offset: 1, color: 'rgba(51,112,255,0)' }] },
-        },
-      },
-    ],
-  };
+  const resources = useResources();
+  const queries = useNamedQueries();
 
-  const userPieOption = {
-    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
-    legend: { bottom: 0, icon: 'circle', itemWidth: 8, textStyle: { fontSize: 11 } },
-    series: [
-      {
-        type: 'pie',
-        radius: ['50%', '70%'],
-        center: ['50%', '42%'],
-        label: { show: false },
-        data: topUsers.map((u, i) => ({
-          name: u.user,
-          value: u.calls,
-          itemStyle: { color: chartPalette.categorical[i] },
-        })),
+  const resList = resources.data?.items ?? [];
+  const qList = queries.data?.items ?? [];
+
+  // 构造端点清单(后端没有实时调用统计 metrics 端点,显示静态清单)
+  const endpoints: EndpointRow[] = [
+    ...resList.map((r) => ({
+      endpoint: `/api/v1/data/${r.name}`,
+      desc: r.description || r.table,
+      type: '资源' as const,
+    })),
+    ...qList.map((q) => ({
+      endpoint: q.url,
+      desc: q.description,
+      type: '命名查询' as const,
+    })),
+    { endpoint: '/api/v1/llm/complete', desc: '统一 LLM 调用入口', type: 'LLM' },
+    { endpoint: '/api/v1/llm/providers', desc: 'LLM Provider 列表', type: 'LLM' },
+    { endpoint: '/api/v1/version', desc: '服务版本信息', type: '元信息' },
+    { endpoint: '/api/v1/resources', desc: '全部资源元信息', type: '元信息' },
+  ];
+
+  const columns: Column<EndpointRow>[] = [
+    { key: 'endpoint', header: '端点', cell: (r) => <span className="text-xs font-mono">{r.endpoint}</span> },
+    { key: 'desc', header: '说明', cell: (r) => <span className="text-xs">{r.desc || '—'}</span> },
+    {
+      key: 'type', header: '类型',
+      cell: (r) => {
+        const tone = r.type === '资源' ? 'good' : r.type === '命名查询' ? 'info' : r.type === 'LLM' ? 'warn' : 'muted';
+        return <span className={`pill pill-${tone === 'good' ? 'info' : tone === 'info' ? 'good' : 'warn'}`}>{r.type}</span>;
       },
-    ],
+    },
+  ];
+
+  // 类型分布柱图
+  const counts = {
+    '资源': resList.length,
+    '命名查询': qList.length,
+    'LLM': 2,
+    '元信息': 2,
+  };
+  const distOption = {
+    grid: { top: 20, right: 30, bottom: 30, left: 60, containLabel: true },
+    xAxis: { type: 'value', splitLine: { lineStyle: { color: '#f0f1f5', type: 'dashed' } } },
+    yAxis: { type: 'category', data: Object.keys(counts).reverse(), axisLine: { show: false }, axisTick: { show: false } },
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    series: [{
+      type: 'bar', data: Object.values(counts).reverse(),
+      barWidth: 14, itemStyle: { color: '#3370ff', borderRadius: [0, 3, 3, 0] },
+      label: { show: true, position: 'right', fontSize: 11, color: '#4e5969', formatter: '{c} 个' },
+    }],
   };
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiCard label="24h 调用量" value="51.6K" delta={12} icon={Activity} iconBg="#dbeafe" iconColor="#2563eb" />
-        <KpiCard label="平均响应" value="142ms" delta={-8} icon={Zap} iconBg="#d1fae5" iconColor="#16a34a" />
-        <KpiCard label="错误率" value="0.32%" delta={-15} icon={AlertTriangle} iconBg="#fef3c7" iconColor="#ca8a04" />
-        <KpiCard label="活跃调用方" value={topUsers.length} delta={0} icon={Users} iconBg="#ede9fe" iconColor="#7c3aed" />
-      </div>
-
-      <ChartCard title="24h 调用趋势">
-        <EChart option={trendOption} height={220} />
-      </ChartCard>
-
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
-        <div className="card lg:col-span-3">
-          <div className="px-4 py-3 border-b border-line">
-            <h3 className="text-sm font-semibold text-gray-800">端点性能排行</h3>
-          </div>
-          <DataTable columns={statColumns} data={apiStats} rowKey={(r) => r.endpoint} />
+    <AsyncState loading={resources.isLoading || queries.isLoading} error={resources.error || queries.error} height={400}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <KpiCard label="端点总数" value={endpoints.length} icon={Activity} iconBg="#dbeafe" iconColor="#2563eb" />
+          <KpiCard label="资源端点" value={resList.length} icon={Zap} iconBg="#d1fae5" iconColor="#16a34a" />
+          <KpiCard label="命名查询" value={qList.length} icon={Users} iconBg="#fef3c7" iconColor="#ca8a04" />
+          <KpiCard label="实时统计" value="—" icon={AlertTriangle} iconBg="#fee2e2" iconColor="#dc2626" />
         </div>
-        <div className="card lg:col-span-2">
+
+        <ChartCard title="端点类型分布">
+          <EChart option={distOption} height={220} />
+        </ChartCard>
+
+        <div className="card">
           <div className="px-4 py-3 border-b border-line">
-            <h3 className="text-sm font-semibold text-gray-800">Top 调用方</h3>
+            <h3 className="text-sm font-semibold text-gray-800">全量 API 端点清单</h3>
+            <div className="text-xxs text-muted mt-0.5">注:调用量/耗时/错误率统计需后端 metrics 端点(当前未提供)</div>
           </div>
-          <DataTable columns={userColumns} data={topUsers} rowKey={(r) => r.user} />
-          <EChart option={userPieOption} height={200} />
+          <DataTable columns={columns} data={endpoints} rowKey={(r) => r.endpoint} compact />
         </div>
       </div>
-    </div>
+    </AsyncState>
   );
 }

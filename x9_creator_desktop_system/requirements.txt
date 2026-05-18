@@ -1,0 +1,18 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg[binary]>=3.1
+pydantic
+python-dotenv
+email-validator
+requests
+httpx
+pytest
+
+# --- Outreach (Gmail send) ---
+# These power the Gmail OAuth2 flow + send call in
+# backend/services/gmail_service.py. They are imported lazily so the
+# rest of the app keeps booting even if you skip them on first install.
+google-auth
+google-auth-oauthlib
+google-api-python-client

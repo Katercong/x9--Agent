@@ -95,3 +95,18 @@
     @apply text-sm font-semibold text-gray-800 mb-3;
   }
 }
+
+@layer utilities {
+  /* One orchestrated staggered load-in for the collection dashboards. */
+  @keyframes collectIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .collect-reveal {
+    opacity: 0;
+    animation: collectIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .collect-reveal { animation: none; opacity: 1; }
+  }
+}

@@ -8,11 +8,14 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "build:deploy": "tsc -b && vite build --base /web-preview/ --outDir dist-deploy --emptyOutDir",
+    "build:root": "tsc -b && vite build --base / --outDir dist-root --emptyOutDir",
     "preview": "vite preview",
     "lint": "tsc -b --noEmit",
-    "deploy": "node ./scripts/deploy.mjs"
+    "deploy": "node ./scripts/deploy.mjs",
+    "deploy:root": "node ./scripts/deploy-root.mjs"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.100.10",
     "@tanstack/react-table": "^8.20.5",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",

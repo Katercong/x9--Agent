@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="X9 达人线索后台管理系统 — 跨境达人采集、AI 评分推荐、Gmail 外联、人工审核闭环。" />
+    <meta name="theme-color" content="#0b0d12" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f8f9fb" media="(prefers-color-scheme: light)" />
+    <title>X9 达人线索后台</title>
+    <!-- Preconnect to Google Identity Services so TLS handshake starts during HTML parse. -->
+    <link rel="preconnect" href="https://accounts.google.com" crossorigin />
+    <!-- Preload critical CSS so the browser starts the fetch before discovering the <link rel="stylesheet">. -->
+    <link rel="preload" href="/ui/theme.css" as="style" />
+    <link rel="preload" href="/ui/style.css?v=20260512-collection-polish" as="style" />
+    <link rel="stylesheet" href="/ui/theme.css" />
+    <link rel="stylesheet" href="/ui/style.css?v=20260512-collection-polish" />
+    <script>
+      // Restore theme before paint so there's no flash of wrong colors.
+      // If the user explicitly chose a theme, lock it in. Otherwise leave
+      // data-theme unset so the CSS @media (prefers-color-scheme) picks
+      // up the OS preference automatically.
+      (function () {
+        var t = localStorage.getItem("x9-theme");
+        if (t === "dark" || t === "light") {
+          document.documentElement.setAttribute("data-theme", t);
+        }
+      })();
+    </script>
+    <!-- Google Identity Services (popup-style OAuth) -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+  </head>
+  <body class="app-shell">
+    <!-- Skip-to-content link: lets keyboard users bypass the sidebar with one Tab. -->
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <!-- Mobile drawer scrim — visible only when sidebar is open on small screens -->
+    <div class="sidebar-scrim" id="sidebar-scrim" hidden></div>
+
+    <!-- ═══════ Sidebar (primary navigation) ═══════ -->
+    <aside class="sidebar" id="sidebar" aria-label="Primary navigation">
+      <div class="sidebar-brand">
+        <span class="logo-mark">X9</span>
+        <div class="brand-text">
+          <strong data-i18n="app.title">X9 达人线索后台</strong>
+          <span class="version" id="versions"></span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav tabs" aria-label="Pages">
+        <button class="tab" data-page="business" title="业务看板">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5"/><path d="M4 19h16"/><rect x="7" y="11" width="3" height="5" rx="1"/><rect x="12" y="8" width="3" height="8" rx="1"/><rect x="17" y="4" width="3" height="12" rx="1"/></svg>
+          <span class="nav-label">业务看板</span>
+        </button>
+        <button class="tab active" data-page="dashboard" data-i18n-title="nav.dashboard" title="仪表盘">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+          <span class="nav-label" data-i18n="nav.dashboard">仪表盘</span>
+        </button>
+        <button class="tab" data-page="collection" data-i18n-title="nav.collection" title="采集监控">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><ellipse cx="12" cy="5" rx="9" ry="3"/></svg>
+          <span class="nav-label" data-i18n="nav.collection">采集监控</span>
+        </button>
+        <button class="tab" data-page="recommendations" data-i18n-title="nav.recommendations" title="推荐列表">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11.49 3.17a1 1 0 0 1 1.02 0l7.5 4.33a1 1 0 0 1 .5.87v7.26a1 1 0 0 1-.5.87l-7.5 4.33a1 1 0 0 1-1.02 0l-7.5-4.33a1 1 0 0 1-.5-.87V8.37a1 1 0 0 1 .5-.87Z"/><polyline points="12 7 12 12 16 14"/></svg>
+          <span class="nav-label" data-i18n="nav.recommendations">推荐列表</span>
+        </button>
+        <button class="tab" data-page="review" data-i18n-title="nav.review" title="人工审核">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          <span class="nav-label" data-i18n="nav.review">人工审核</span>
+        </button>
+        <button class="tab" data-page="export" data-i18n-title="nav.export" title="导出/导入达人">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span class="nav-label" data-i18n="nav.export">导出/导入</span>
+        </button>
+        <button class="tab" data-page="hotkw" title="TikTok 热搜">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2s5 4 5 9a5 5 0 0 1-10 0c0-2 1-4 3-6 0 3 2 4 2 4s1-2 0-7Z"/><path d="M8 14c0 2.2 1.8 4 4 4s4-1.8 4-4"/></svg>
+          <span class="nav-label">TikTok 热搜</span>
+        </button>
+        <button class="tab" data-page="assistant" title="AI 助手">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M9 14h.01"/><path d="M15 14h.01"/><path d="M9 18h6"/></svg>
+          <span class="nav-label">AI 助手</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <button id="btn-download-extension" class="sidebar-tool" type="button" data-i18n-title="actions.downloadExtensionTitle" title="下载插件">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span class="nav-label" data-i18n="actions.downloadExtension">下载插件</span>
+        </button>
+        <div class="sidebar-user">
+          <div class="user-avatar" id="user-avatar" aria-hidden="true">?</div>
+          <span id="current-user" class="user-name subtle"></span>
+          <button id="btn-logout" class="icon-btn" type="button" data-i18n-title="auth.logout" title="退出" aria-label="Logout">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          </button>
+        </div>
+        <div class="sidebar-foot-row">
+          <!-- Language toggle: globe icon + current language label. Click cycles. -->
+          <button id="btn-language" class="lang-toggle" type="button" data-i18n-title="actions.languageTitle" title="切换中英文" aria-label="切换中英文">
+            <svg class="lang-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M2 12h20"/>
+              <path d="M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z"/>
+            </svg>
+            <span class="lang-current">中</span>
+          </button>
+          <button id="btn-theme-toggle" class="icon-btn theme-toggle" type="button" title="切换主题" aria-label="Toggle theme">
+            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+            <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ═══════ Main content column ═══════ -->
+    <div class="app-content">
+      <header class="page-topbar">
+        <button class="sidebar-toggle" id="btn-sidebar-toggle" type="button" aria-label="Open sidebar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <div class="page-topbar-title">
+          <h1 id="page-title" data-i18n="nav.dashboard">仪表盘</h1>
+          <span id="page-subtitle" class="subtle"></span>
+        </div>
+        <div class="page-topbar-actions">
+          <button id="btn-pipeline" class="primary compact" type="button" data-i18n="actions.runPipeline">手动重跑流程</button>
+          <button id="btn-refresh" class="icon-btn" type="button" data-i18n-title="actions.refresh" title="刷新" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <main id="main"></main>
+    </div>
+
+    <template id="tpl-dashboard">
+      <section class="page dashboard-page">
+        <h2 data-i18n="dashboard.title">系统仪表盘</h2>
+
+        <!-- Hero: one prominent number + 3 secondary KPIs -->
+        <div class="dashboard-hero">
+          <div class="dashboard-hero-main">
+            <span class="hero-eyebrow" data-i18n="dashboard.observationsToday">今日采集</span>
+            <span class="hero-number" id="card-count-obs">—</span>
+            <span class="hero-detail" data-i18n="dashboard.heroDetail">浏览器扩展实时上传的创作者观察记录</span>
+          </div>
+          <div class="dashboard-hero-side">
+            <div class="kpi">
+              <span class="kpi-label" data-i18n="dashboard.creatorsToday">今日达人</span>
+              <span class="kpi-value" id="card-count-creators">—</span>
+            </div>
+            <div class="kpi">
+              <span class="kpi-label" data-i18n="dashboard.recommended">已推荐</span>
+              <span class="kpi-value" id="card-count-rec">—</span>
+            </div>
+            <div class="kpi">
+              <span class="kpi-label" data-i18n="dashboard.pendingReview">待审核</span>
+              <span class="kpi-value" id="card-count-review">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- System status row -->
+        <h3 data-i18n="dashboard.systemStatus">系统状态</h3>
+        <div class="status-cards">
+          <div class="status-card">
+            <span class="status-card-label" data-i18n="dashboard.backend">后端服务</span>
+            <div class="status-card-body" id="card-backend">—</div>
+          </div>
+          <div class="status-card">
+            <span class="status-card-label" data-i18n="dashboard.database">数据库</span>
+            <div class="status-card-body" id="card-db">—</div>
+          </div>
+          <div class="status-card">
+            <span class="status-card-label" data-i18n="dashboard.extension">浏览器插件</span>
+            <div class="status-card-body" id="card-ext">—</div>
+          </div>
+          <div class="status-card">
+            <span class="status-card-label" data-i18n="dashboard.tiktok">TikTok 登录</span>
+            <div class="status-card-body" id="card-tt">—</div>
+          </div>
+        </div>
+
+      </section>
+    </template>
+
+    <template id="tpl-business">
+      <section class="page business-page">
+        <div class="page-head">
+          <div>
+            <h2>业务看板</h2>
+            <p class="subtle" id="business-scope">按当前部门数据实时汇总。</p>
+          </div>
+        </div>
+        <div class="grid-4" id="business-cards"></div>
+        <div class="business-two-col">
+          <section class="card">
+            <h3>业务状态</h3>
+            <div class="table-scroll compact-scroll">
+              <table class="data-table compact-table"><tbody id="business-status"></tbody></table>
+            </div>
+          </section>
+          <section class="card">
+            <h3>产品方向</h3>
+            <div class="table-scroll compact-scroll">
+              <table class="data-table compact-table"><tbody id="business-products"></tbody></table>
+            </div>
+          </section>
+          <section class="card">
+            <h3>优先级</h3>
+            <div class="table-scroll compact-scroll">
+              <table class="data-table compact-table"><tbody id="business-priorities"></tbody></table>
+            </div>
+          </section>
+          <section class="card">
+            <h3>BD 跟进</h3>
+            <div class="table-scroll compact-scroll">
+              <table class="data-table compact-table">
+                <thead><tr><th>负责人</th><th>推荐</th><th>待联系</th><th>已推进</th></tr></thead>
+                <tbody id="business-owners"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+    </template>
+
+    <template id="tpl-hotkw">
+      <section class="page hotkw-page">
+        <div class="page-head">
+          <div>
+            <h2>TikTok 热搜</h2>
+            <p class="subtle" id="hotkw-status">加载中...</p>
+          </div>
+        </div>
+        <div class="grid-4" id="hotkw-cards"></div>
+        <div class="business-two-col">
+          <section class="card">
+            <h3>类目分布</h3>
+            <div id="hotkw-categories" class="metric-list"></div>
+          </section>
+          <section class="card">
+            <h3>增长最快</h3>
+            <div class="table-scroll compact-scroll">
+              <table class="data-table compact-table">
+                <thead><tr><th>关键词</th><th>类目</th><th>搜索量</th><th>增长</th></tr></thead>
+                <tbody id="hotkw-rising"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="card">
+            <h3>搜索量最高</h3>
+            <div class="table-scroll compact-scroll">
+              <table class="data-table compact-table">
+                <thead><tr><th>关键词</th><th>类目</th><th>搜索量</th><th>增长</th></tr></thead>
+                <tbody id="hotkw-volume"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="card">
+            <h3>最近抓取</h3>
+            <div class="table-scroll compact-scroll">
+              <table class="data-table compact-table">
+                <thead><tr><th>开始时间</th><th>来源</th><th>状态</th><th>新增/更新/失败</th></tr></thead>
+                <tbody id="hotkw-runs"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+    </template>
+
+    <template id="tpl-assistant">
+      <section class="page assistant-page">
+        <div class="page-head">
+          <div>
+            <h2>AI 助手</h2>
+            <p class="subtle" id="assistant-status">加载中...</p>
+          </div>
+        </div>
+        <div class="assistant-shell">
+          <div id="assistant-messages" class="assistant-messages"></div>
+          <div class="assistant-input-row">
+            <textarea id="assistant-input" placeholder="输入问题，比如：今天业务看板要优先看什么？"></textarea>
+            <button id="assistant-send" class="primary" type="button">发送</button>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <template id="tpl-collection">
+      <section class="page collection-page">
+        <h2 data-i18n="collection.title">采集监控</h2>
+        <h3 data-i18n="collection.extensionTitle">插件连接状态</h3>
+        <div id="collector-session-panel" class="collector-session-panel"></div>
+        <h3 data-i18n="collection.progressTitle">当前采集任务</h3>
+        <div id="run-progress-cards" class="grid-4"></div>
+        <h3 data-i18n="collection.guideTitle">采集操作步骤</h3>
+        <div class="card collection-guide">
+          <ol>
+            <li data-i18n="collection.guideStep1">下载并安装浏览器采集插件。</li>
+            <li data-i18n="collection.guideStep2">打开 Chrome，登录 TikTok 账号，并保持插件启用。</li>
+            <li data-i18n="collection.guideStep3">在 TikTok 搜索目标关键词，或打开要采集的达人主页。</li>
+            <li data-i18n="collection.guideStep4">手动浏览达人内容，插件会自动上传有效线索和任务状态。</li>
+            <li data-i18n="collection.guideStep5">回到本页查看当前任务概况，再到推荐列表处理达人。</li>
+          </ol>
+        </div>
+      </section>
+    </template>
+
+    <template id="tpl-recommendations">
+      <section class="page rec-page">
+        <div class="page-head">
+          <h2 data-i18n="recommendations.title">达人推荐列表</h2>
+          <div class="page-actions">
+            <span id="rec-filter-status" class="subtle"></span>
+            <label class="sort-control">
+              <span data-i18n="filters.sortLabel">排序</span>
+              <select id="f-sort">
+                <option value="recommended" data-i18n="sort.recommended">综合推荐</option>
+                <option value="collected_at" data-i18n="sort.collectedAt">最新搜集</option>
+                <option value="followers" data-i18n="sort.followers">粉丝最多</option>
+                <option value="score" data-i18n="sort.score">分数最高</option>
+                <option value="fit" data-i18n="sort.fit">匹配度最高</option>
+                <option value="priority" data-i18n="sort.priority">优先级最高</option>
+                <option value="contactable" data-i18n="sort.contactable">可联系优先</option>
+                <option value="micro" data-i18n="sort.micro">小号测试优先</option>
+              </select>
+            </label>
+            <button id="btn-toggle-advanced" class="ghost compact" type="button" data-i18n="filters.advancedToggle" data-i18n-title="filters.advancedToggleTitle" aria-controls="rec-advanced-filters" aria-expanded="false" title="展开/收起高级筛选">高级筛选 ▾</button>
+            <button id="btn-apply-rec-filters" class="primary compact" type="button" data-i18n="filters.apply">筛选</button>
+            <button id="btn-clear-rec-filters" class="ghost compact" type="button" data-i18n="filters.clear">清空筛选</button>
+          </div>
+        </div>
+
+        <div class="rec-toolbar" id="rec-toolbar">
+          <!-- Primary row: always visible. Same id contract as the old table so the
+               existing query-building code in renderRecommendations() needs no changes. -->
+          <div class="rec-filter-row primary">
+            <input id="f-handle" class="rec-filter rec-filter-text" data-i18n-placeholder="recommendations.handlePlaceholder" placeholder="搜索账号" />
+            <select id="f-priority" class="rec-filter">
+              <option value="" data-i18n="filters.allPriority">全部优先级</option>
+              <option value="P1">P1</option>
+              <option value="P2">P2</option>
+              <option value="P3">P3</option>
+              <option value="P4">P4</option>
+            </select>
+            <input id="f-followers" class="rec-filter" type="text" inputmode="text" data-i18n-placeholder="filters.followersHint" placeholder="≥1K 或 1K-100K" data-i18n-title="filters.followersHintTitle" title="例：≥1K（一千以上）/ 1K-100K（一千到十万）/ ≤10K（一万以内）/ 5M（五百万以上），支持 K/M/B 后缀" />
+            <input id="f-min-followers" type="hidden" />
+            <input id="f-max-followers" type="hidden" />
+            <select id="f-status" class="rec-filter">
+              <option value="" data-i18n="filters.allStatus">全部状态</option>
+              <option value="待建联" data-i18n="current_status.待建联">待建联</option>
+              <option value="已建联" data-i18n="current_status.已建联">已建联</option>
+              <option value="待回复" data-i18n="current_status.待回复">待回复</option>
+              <option value="视频已发布" data-i18n="current_status.视频已发布">视频已发布</option>
+              <option value="已寄样" data-i18n="current_status.已寄样">已寄样</option>
+            </select>
+            <select id="f-contact-channel" class="rec-filter" aria-label="联系方式类型" data-i18n-title="filters.contactType">
+              <option value="" data-i18n="filters.contactAll">全部方式</option>
+              <option value="any" data-i18n="filters.contactAny">有联系方式</option>
+              <option value="email" data-i18n="contact.email">邮箱</option>
+              <option value="whatsapp" data-i18n="contact.whatsapp">WhatsApp</option>
+              <option value="instagram" data-i18n="contact.instagram">Instagram</option>
+              <option value="link" data-i18n="contact.link">链接</option>
+              <option value="telegram" data-i18n="contact.telegram">Telegram</option>
+              <option value="line" data-i18n="contact.line">LINE</option>
+              <option value="phone" data-i18n="contact.phone">电话</option>
+              <option value="dm" data-i18n="contact.dm">私信</option>
+              <option value="no_contact" data-i18n="filters.noContact">无联系方式</option>
+            </select>
+            <div class="time-filter">
+              <button id="f-time-trigger" class="time-trigger" type="button" aria-haspopup="dialog" aria-expanded="false">
+                <span id="f-time-label" data-i18n="filters.timeAll">全部时间</span>
+                <span class="caret">▾</span>
+              </button>
+              <input id="f-collected-date" type="hidden" />
+              <select id="f-time-preset" hidden>
+                <option value="" selected></option>
+                <option value="1d"></option>
+                <option value="7d"></option>
+                <option value="30d"></option>
+                <option value="date"></option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Secondary row: collapsible. Holds the rarer filters. -->
+          <div class="rec-filter-row advanced" id="rec-advanced-filters" hidden>
+            <input id="f-min-score" class="rec-filter rec-filter-num" type="number" min="0" max="100" data-i18n-placeholder="filters.scoreHint" placeholder="≥分(0-100)" data-i18n-title="filters.scoreHintTitle" title="按推荐分过滤，输入最低分（0-100）" />
+            <input id="f-min-fit" class="rec-filter rec-filter-num" type="number" min="0" max="100" data-i18n-placeholder="filters.fitHint" placeholder="≥匹配(0-100)" data-i18n-title="filters.fitHintTitle" title="按匹配度过滤，输入最低分（0-100）" />
+            <input id="f-contact" class="rec-filter" data-i18n-placeholder="recommendations.contactPlaceholder" placeholder="搜索简介联系方式" />
+            <input id="f-reason" class="rec-filter" data-i18n-placeholder="filters.reasonPlaceholder" placeholder="原因关键词" />
+            <select id="f-product" class="rec-filter">
+              <option value="" data-i18n="filters.allProducts">全部产品</option>
+              <option value="feminine_care" data-i18n="product.feminine_care">女性护理</option>
+              <option value="pet_care" data-i18n="product.pet_care">宠物护理</option>
+              <option value="home_care" data-i18n="product.home_care">家居护理</option>
+              <option value="adult_care" data-i18n="product.adult_care">成人护理</option>
+              <option value="mom_baby" data-i18n="product.mom_baby">母婴</option>
+              <option value="health_mask" data-i18n="product.health_mask">健康口罩</option>
+              <option value="general_lifestyle" data-i18n="product.general_lifestyle">泛生活</option>
+              <option value="feminine_care_daily_liner" data-i18n="product.feminine_care_daily_liner">日用护垫</option>
+              <option value="period_care_pad" data-i18n="product.period_care_pad">经期护理垫</option>
+            </select>
+            <select id="f-collab" class="rec-filter">
+              <option value="" data-i18n="filters.allCollabs">全部合作</option>
+              <option value="sample_collab" data-i18n="collab.sample_collab">寄样合作</option>
+              <option value="gifted_review" data-i18n="collab.gifted_review">赠品测评</option>
+              <option value="affiliate_collab" data-i18n="collab.affiliate_collab">联盟合作</option>
+              <option value="paid_test_collab" data-i18n="collab.paid_test_collab">付费测试</option>
+              <option value="brand_awareness_collab" data-i18n="collab.brand_awareness_collab">品牌曝光</option>
+              <option value="do_not_contact_now" data-i18n="collab.do_not_contact_now">暂不联系</option>
+            </select>
+            <select id="f-queue" class="rec-filter">
+              <option value="" data-i18n="filters.allQueue">全部队列</option>
+              <option value="feminine_conversion_queue" data-i18n="queue.feminine_conversion_queue">女性护理转化队列</option>
+              <option value="feminine_warm_lead_queue" data-i18n="queue.feminine_warm_lead_queue">女性护理暖线索</option>
+              <option value="sample_collab_test_queue" data-i18n="queue.sample_collab_test_queue">样品合作测试</option>
+              <option value="affiliate_test_queue" data-i18n="queue.affiliate_test_queue">联盟合作测试</option>
+              <option value="macro_brand_awareness_queue" data-i18n="queue.macro_brand_awareness_queue">大号品牌曝光</option>
+              <option value="low_confidence_hold" data-i18n="queue.low_confidence_hold">低置信度暂存</option>
+              <option value="general_lifestyle_hold" data-i18n="queue.general_lifestyle_hold">泛生活暂缓</option>
+              <option value="not_recommended_queue" data-i18n="queue.not_recommended_queue">暂不推荐</option>
+              <option value="no_contact_info_queue" data-i18n="queue.no_contact_info_queue">缺少联系方式</option>
+            </select>
+            <input id="f-bio" class="rec-filter" data-i18n-placeholder="recommendations.bioPlaceholder" placeholder="简介关键词" />
+            <input id="f-owner" class="rec-filter" data-i18n-placeholder="assignment.ownerPlaceholder" placeholder="对接人" />
+          </div>
+        </div>
+
+        <div class="rec-grid" id="rec-grid" role="list"></div>
+      </section>
+    </template>
+
+    <template id="tpl-review">
+      <section class="page">
+        <h2 data-i18n="review.title">人工审核</h2>
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th data-i18n="review.creator">博主</th>
+                <th data-i18n="table.reason">原因</th>
+                <th data-i18n="review.riskTags">风险标签</th>
+                <th data-i18n="review.action">操作</th>
+              </tr>
+            </thead>
+            <tbody id="review-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </template>
+
+    <template id="tpl-export">
+      <section class="page">
+        <h2 data-i18n="export.title">导出/导入达人</h2>
+        <p data-i18n="export.help">下载推荐达人 CSV。文件包含账号、主页链接、邮箱、推荐产品、合作方式、触达优先级、推荐状态、推荐原因、风险标签和下一步动作。</p>
+        <p>
+          <a class="primary button" href="/api/local/export/recommended-creators.csv" data-i18n="export.all">导出全部推荐</a>
+          <a class="ghost button" href="/api/local/export/recommended-creators.csv?only_p1_p2=true" data-i18n="export.p1p2">只导出 P1/P2</a>
+        </p>
+        <h3 data-i18n="import.creatorsTitle">导入达人表格</h3>
+        <div class="import-controls">
+          <input id="creator-import-file" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+          <button id="btn-import-creators" class="primary" type="button" data-i18n="import.run">导入并自动运行流程</button>
+          <a class="ghost button" href="/api/local/import/creators/template.csv" data-i18n="import.template">下载模板</a>
+          <span id="creator-import-status" class="subtle"></span>
+        </div>
+      </section>
+    </template>
+
+    <template id="tpl-settings">
+      <section class="page">
+        <h2 data-i18n="settings.title">设置</h2>
+        <p class="subtle" data-i18n="settings.help">当前后端配置。</p>
+
+        <!-- Structured key-value display, populated by renderSettings(). -->
+        <div id="settings-pretty" class="settings-grid"></div>
+
+        <!-- Raw JSON kept as a collapsible details block for debugging. -->
+        <details class="settings-raw">
+          <summary data-i18n="settings.rawJson">原始 JSON (调试用)</summary>
+          <pre id="settings-json" class="json"></pre>
+        </details>
+        <div id="admin-users-panel" hidden>
+          <h3 data-i18n="auth.allowedUsers">允许登录邮箱</h3>
+          <div class="import-controls">
+            <input id="admin-user-email" type="email" data-i18n-placeholder="auth.emailPlaceholder" placeholder="Gmail 邮箱" />
+            <select id="admin-user-role">
+              <option value="department_user">部门用户</option>
+              <option value="company_admin">公司管理员</option>
+              <option value="department_admin">部门管理员</option>
+            </select>
+            <select id="admin-user-department">
+              <option value="cross_border">跨境部</option>
+              <option value="foreign_trade">外贸部</option>
+            </select>
+            <button id="btn-add-user" class="primary" type="button" data-i18n="auth.addUser">添加/更新</button>
+            <span id="admin-users-status" class="subtle"></span>
+          </div>
+          <div class="table-scroll">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th data-i18n="auth.email">邮箱</th>
+                  <th data-i18n="auth.role">角色</th>
+                  <th>部门</th>
+                  <th data-i18n="auth.status">状态</th>
+                </tr>
+              </thead>
+              <tbody id="admin-users-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <div id="outreach-modal-root"></div>
+    <div id="time-popover-root"></div>
+    <div id="bio-popover-root"></div>
+    <script src="/ui/app.js?v=20260512-collector-flicker-fix" defer></script>
+  </body>
+</html>
