@@ -44,6 +44,14 @@ export interface ObservationItem {
   lead?: {
     email: string | null;
     external_links: string[];
+    contact_methods?: Array<{
+      type: string;
+      label: string;
+      value: string;
+      source?: string;
+      href?: string;
+    }>;
+    contact_types?: string[];
     source_video_url: string | null;
     current_status: string | null;
   };
@@ -69,7 +77,7 @@ export function useSourceStats() {
   return useQuery({
     queryKey: ['collector', 'source-stats'],
     queryFn: () => api.get<SourceStats>('/collector/source-stats'),
-    refetchInterval: 60_000,
+    refetchInterval: 10_000,
   });
 }
 
@@ -82,5 +90,6 @@ export function useObservationsFeed(params: { source?: SourceKey | 'all'; limit?
         limit: params.limit ?? 200,
         offset: params.offset ?? 0,
       }),
+    refetchInterval: 10_000,
   });
 }

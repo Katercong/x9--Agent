@@ -163,17 +163,18 @@ function SidebarLink({ item, sidebarCollapsed, nested = false }: { item: MenuIte
   return (
     <NavLink
       to={item.to}
+      end={item.to === '/'}
       title={item.label}
       aria-label={item.label}
       className={({ isActive }) =>
         cn(
           'relative flex items-center gap-3 px-3 py-2 my-0.5 rounded text-xs transition-colors',
           nested && !sidebarCollapsed && 'md:py-1.5',
-          isActive ? 'text-white font-semibold' : 'text-text/75 hover:text-text hover:bg-white/5',
+          isActive ? 'text-text font-semibold shadow-sm' : 'text-text/75 hover:text-text hover:bg-white/5',
         )
       }
       style={({ isActive }) =>
-        isActive ? { background: 'rgb(var(--accent) / 0.18)' } : undefined
+        isActive ? { background: 'rgb(var(--accent) / 0.14)' } : undefined
       }
     >
       {({ isActive }) => (

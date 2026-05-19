@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from datetime import datetime, timedelta
 import pytest
 
@@ -80,6 +81,85 @@ def test_observation_ingest(client):
     assert any(item["handle"] == "test_handle" for item in filtered)
 
 
+def test_observation_enrichment_extracts_collected_profile_text(client):
+    handle = f"enriched_creator_{datetime.now():%Y%m%d%H%M%S%f}"
+    payload = {
+        "event_type": "creator_observation",
+        "platform": "tiktok",
+        "search_keyword": "ugc creator",
+        "creator": {},
+        "raw_profile": {
+            "username": handle,
+            "nickname": "Enriched Creator",
+            "profile_url": f"https://www.tiktok.com/@{handle}",
+            "visible_text": (
+                "Enriched Creator\n"
+                "18.5K followers\n"
+                "Business: enriched.creator@example.com\n"
+                "Instagram https://instagram.com/enriched_creator\n"
+                "WhatsApp +15551234567"
+            ),
+            "external_links": [],
+        },
+        "source_video": {
+            "video_url": f"https://www.tiktok.com/@{handle}/video/123",
+            "title": "ugc review",
+            "description": "home routine",
+        },
+        "collected_at": "2026-05-18T08:00:00Z",
+    }
+    r = client.post("/api/local/collector/observations", json=payload)
+    assert r.status_code == 200
+    assert r.json()["action"] == "inserted"
+
+    db = SessionLocal()
+    try:
+        saved = db.query(Creator).filter_by(handle=handle).one()
+        assert saved.email == "enriched.creator@example.com"
+        assert saved.followers_count == 18500
+        assert "instagram.com/enriched_creator" in (saved.external_links_json or "")
+        snapshot = json.loads(saved.profile_snapshot_json or "{}")
+        assert snapshot["emails"] == ["enriched.creator@example.com"]
+        assert "visible_text" in " ".join(snapshot["source_text_fields"])
+        assert "WhatsApp" in snapshot["text_excerpt"]
+    finally:
+        db.close()
+
+
+def test_no_contact_tiktok_observation_is_removed_by_server(client):
+    handle = f"no_contact_collect_{datetime.now():%Y%m%d%H%M%S%f}"
+    payload = {
+        "event_type": "creator_observation",
+        "platform": "tiktok",
+        "search_keyword": "home routine",
+        "creator": {
+            "handle": handle,
+            "display_name": "No Contact Creator",
+            "bio": "home cleaning and family routine",
+            "followers_raw": "20K",
+            "email": None,
+            "external_links": [],
+        },
+        "source_video": {
+            "video_url": f"https://www.tiktok.com/@{handle}/video/456",
+            "title": "morning routine",
+            "description": "home cleaning",
+        },
+    }
+    r = client.post("/api/local/collector/observations", json=payload)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["action"] == "skipped"
+    assert body["reason"] == "missing_contact"
+    assert body["creator_id"] is None
+
+    db = SessionLocal()
+    try:
+        assert db.query(Creator).filter_by(handle=handle).first() is None
+    finally:
+        db.close()
+
+
 def test_contact_methods_from_creator_bio_filter(client):
     payload = {
         "event_type": "creator_observation",
@@ -139,6 +219,131 @@ def test_creator_table_import_csv_runs_pipeline(client):
     assert any(item["handle"] == "table_import_creator" for item in by_status)
 
 
+def test_creator_table_import_xlsx_runs_pipeline(client):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append([
+        "handle",
+        "platform",
+        "display_name",
+        "bio",
+        "followers",
+        "email",
+        "whatsapp",
+        "instagram_handle",
+        "category_tags",
+        "source",
+    ])
+    sheet.append([
+        "xlsx_import_creator",
+        "tiktok",
+        "XLSX Import Creator",
+        "Excel UGC creator",
+        32100,
+        "",
+        "+1 555 987 6543",
+        "@xlsx_import_ig",
+        '["excel", "ugc"]',
+        "xlsx_test",
+    ])
+    out = io.BytesIO()
+    workbook.save(out)
+    workbook.close()
+
+    r = client.post(
+        "/api/local/import/creators/table?filename=creators.xlsx",
+        content=out.getvalue(),
+        headers={"Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["inserted"] == 1
+    assert data["failed"] == 0
+    assert data["items"][0]["pipeline"]["ok"] is True
+
+    db = SessionLocal()
+    try:
+        saved = db.query(Creator).filter_by(handle="xlsx_import_creator").one()
+        assert saved.source == "table_import"
+        assert saved.followers_count == 32100
+    finally:
+        db.close()
+
+
+def test_creator_table_import_infers_handle_from_profile_url_alias(client):
+    handle = f"url_alias_creator_{datetime.now():%Y%m%d%H%M%S%f}"
+    csv_body = (
+        "url,nickname,signature,followers,email\n"
+        f"https://www.tiktok.com/@{handle},URL Alias Creator,"
+        "\"UGC creator with email url_alias@example.com\",12.5K,url_alias@example.com\n"
+    ).encode("utf-8")
+
+    r = client.post(
+        "/api/local/import/creators/table?filename=tiktok-leads.csv",
+        content=csv_body,
+        headers={"Content-Type": "text/csv"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["inserted"] == 1
+    assert data["failed"] == 0
+
+    db = SessionLocal()
+    try:
+        saved = db.query(Creator).filter_by(handle=handle).one()
+        assert saved.display_name == "URL Alias Creator"
+        assert saved.followers_count == 12500
+    finally:
+        db.close()
+
+
+def test_creator_table_import_infers_handle_from_raw_text(client):
+    handle = f"raw_text_creator_{datetime.now():%Y%m%d%H%M%S%f}"
+    csv_body = (
+        "raw_text\n"
+        f"\"@{handle}\nRaw Text Creator\n18K followers\nBusiness raw_text@example.com\"\n"
+    ).encode("utf-8")
+
+    r = client.post(
+        "/api/local/import/creators/table?filename=tiktok_no_more_results_text.csv",
+        content=csv_body,
+        headers={"Content-Type": "text/csv"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["inserted"] == 1
+    assert data["failed"] == 0
+
+    db = SessionLocal()
+    try:
+        saved = db.query(Creator).filter_by(handle=handle).one()
+        assert saved.profile_url == f"https://www.tiktok.com/@{handle}"
+        assert saved.email == "raw_text@example.com"
+    finally:
+        db.close()
+
+
+def test_creator_import_xlsx_template_downloads(client):
+    from openpyxl import load_workbook
+
+    r = client.get("/api/local/import/creators/template.xlsx")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert "creator-import-template.xlsx" in r.headers["content-disposition"]
+
+    workbook = load_workbook(io.BytesIO(r.content), read_only=True, data_only=True)
+    try:
+        sheet = workbook.active
+        headers = [cell.value for cell in next(sheet.iter_rows(max_row=1))]
+    finally:
+        workbook.close()
+    assert headers[:4] == ["handle", "platform", "profile_url", "display_name"]
+
+
 def test_search_keyword_only_match(client):
     client.post("/api/local/collector/observations", json={
         "event_type": "creator_observation",
@@ -174,9 +379,6 @@ def test_recommendation_queues(client):
         # Macro low fit -> brand awareness
         ("macro_low", "comedy creator since 2018", "5M", "agent@bigtalent.com", "vintage",
          "https://www.tiktok.com/@x/video/3", "skit time", "lol"),
-        # No email -> no_contact_info_queue
-        ("no_email_creator", "mom life and home routine", "20K", None, "lifestyle",
-         "https://www.tiktok.com/@x/video/4", "morning routine for moms", "home cleaning"),
     ]
     for handle, bio, fol, email, kw, video, title, desc in samples:
         client.post("/api/local/collector/observations", json={
@@ -187,6 +389,25 @@ def test_recommendation_queues(client):
                         "email": email, "display_name": handle, "external_links": []},
             "source_video": {"video_url": video, "title": title, "description": desc, "hashtags": []},
         })
+    db = SessionLocal()
+    try:
+        db.merge(Creator(
+            id="direct_no_email_creator",
+            platform="tiktok",
+            handle="no_email_creator",
+            display_name="no_email_creator",
+            bio="mom life and home routine",
+            followers_raw="20K",
+            followers_count=20000,
+            search_keyword="lifestyle",
+            source_video_url="https://www.tiktok.com/@x/video/4",
+            source_video_title="morning routine for moms",
+            source_video_description="home cleaning",
+            has_email=0,
+        ))
+        db.commit()
+    finally:
+        db.close()
     client.post("/api/local/process/run-full-pipeline", json={})
 
     expected = {

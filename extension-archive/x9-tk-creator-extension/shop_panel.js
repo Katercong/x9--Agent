@@ -10,16 +10,11 @@
     SHOP_SET_SETTINGS: "TSCLB_SHOP_SET_SETTINGS",
   };
 
-  const DEFAULT_ENDPOINT = "http://127.0.0.1:8000/api/local/collector/observations";
+  const DEFAULT_ENDPOINT = "https://usx9.us/api/local/collector/observations";
   const SHOP_API_BASE_KEY = "x9_api_base";
   const SHOP_API_BASE_ACTIVE_KEY = "x9_api_base_active";
   const SHOP_BACKEND_CANDIDATES = [
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
     "https://usx9.us",
-    "http://usx9.us",
-    "http://192.168.1.171:8000",
-    "http://192.168.1.171",
   ];
   let pollTimer = null;
 

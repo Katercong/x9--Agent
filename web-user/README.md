@@ -35,12 +35,12 @@ scripts\build-deploy.bat
 ```bash
 # 停止旧进程后:
 cd F:\X9_AI_system
-py -3.11 -m uvicorn desktop.backend.main:app --host 127.0.0.1 --port 8000
+线上入口统一使用 https://usx9.us
 # 或使用现有脚本(会自动打开浏览器):
 desktop\start_desktop.bat
 ```
 
-重启后访问:**http://localhost:8000/portal/** (生产 `https://usx9.us/portal/`)
+访问:**https://usx9.us/portal/**
 
 ## 与现有 UI 的关系
 
@@ -66,7 +66,7 @@ React app 使用 `credentials: 'include'`,沿用现有 cookie 会话(`SESSION_CO
 
 ```bash
 cd web-user
-npm run dev   # http://localhost:5174 (proxy /api/local → :8000)
+npm run dev   # dev proxy /api/local -> https://usx9.us
 ```
 
 Vite dev server 会把 `/api/local/*` 代理到 desktop backend(8000),携带 cookie。

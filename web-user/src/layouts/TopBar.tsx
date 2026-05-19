@@ -1,17 +1,20 @@
 import { useLocation } from 'react-router-dom';
-import { RefreshCw, Moon, Sun, Play, LogOut, Loader2, Menu } from 'lucide-react';
+import { RefreshCw, Moon, Sun, LogOut, Menu } from 'lucide-react';
 import { useUiStore } from '@/stores/uiStore';
-import { useMe, useRunPipeline } from '@/hooks/useApi';
+import { useMe } from '@/hooks/useApi';
 import { endpoints } from '@/api/endpoints';
 import { useQueryClient } from '@tanstack/react-query';
 import { pageMeta } from './menus';
 
 export default function TopBar() {
   const { pathname } = useLocation();
-  const meta = pageMeta[pathname] || { title: '页面', subtitle: '' };
+  const meta = pageMeta[pathname] || (
+    pathname.startsWith('/recommendations/')
+      ? { title: '达人详情', subtitle: '推荐判断、证据复核与邮件建联' }
+      : { title: '页面', subtitle: '' }
+  );
   const { theme, toggleTheme, language, toggleLanguage, openMobileDrawer } = useUiStore();
   const { data: me } = useMe();
-  const runPipeline = useRunPipeline();
   const qc = useQueryClient();
 
   const onRefresh = () => qc.invalidateQueries();
@@ -43,17 +46,6 @@ export default function TopBar() {
       </div>
 
       <div className="ml-auto flex items-center gap-1 md:gap-1.5 shrink-0">
-        {/* Pipeline button - 桌面完整,移动端只显示图标 */}
-        <button
-          onClick={() => runPipeline.mutate()}
-          disabled={runPipeline.isPending}
-          className="btn-primary btn !py-1.5 text-xs"
-          aria-label="手动重跑流程"
-          title="手动重跑流程"
-        >
-          {runPipeline.isPending ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
-          <span className="hidden md:inline">手动重跑</span>
-        </button>
         <button onClick={onRefresh} className="w-8 h-8 rounded flex items-center justify-center text-muted hover:text-text" title="刷新">
           <RefreshCw size={15} />
         </button>

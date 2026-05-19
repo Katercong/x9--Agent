@@ -7,6 +7,7 @@ export interface CurrentUser {
   email: string | null;
   role: string;
   department_code: string | null;
+  entry_scope?: string | null;
   active: number;
 }
 
@@ -38,19 +39,39 @@ export interface Creator {
   display_name?: string | null;
   platform?: string | null;
   profile_url?: string | null;
+  avatar_url?: string | null;
+  source?: string | null;
+  source_label?: string | null;
+  source_tags?: string[] | null;
   country?: string | null;
   language?: string | null;
   followers?: number | null;
+  followers_count?: number | null;
+  followers_raw?: string | null;
   tier?: string | null;
   avg_views?: number | null;
   email?: string | null;
+  external_links?: string[] | null;
+  contact_methods?: Array<Record<string, unknown>> | Record<string, unknown> | null;
+  has_contact?: boolean | null;
   current_status?: string | null;
   bd_owner?: string | null;
   owner_bd?: string | null;
+  outreach_priority?: string | null;
+  primary_product_category?: string | null;
+  primary_product_fit_score?: number | null;
+  commercial_value_score?: number | null;
+  data_quality_score?: number | null;
+  contactability_score?: number | null;
+  content_format_score?: number | null;
+  content_format_status?: string | null;
   category_tags?: string[] | null;
+  tiktok_shop?: Record<string, unknown> | null;
   department_code?: string | null;
   recommendation_score?: number | null;
+  recommendation_status?: string | null;
   recommendation_reason?: string | null;
+  collected_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   [k: string]: any;
@@ -87,9 +108,65 @@ export interface RunProgress {
 }
 
 export interface BusinessDashboard {
-  scope?: string;
-  cards?: { label: string; value: number | string; sub?: string; tone?: string }[];
-  status_rows?: { label: string; value: string }[];
+  ok?: boolean;
+  generated_at?: string;
+  scope?: {
+    type?: 'company' | 'department';
+    department_code?: string | null;
+    name?: string | null;
+  };
+  summary?: {
+    total_creators?: number;
+    today_collected?: number;
+    today_new_creators?: number;
+    recent_30d_creators?: number;
+    unique_creators?: number;
+    unique_today_creators?: number;
+    business_unique_creators?: number;
+    all_channel_rows_total?: number;
+    all_channel_rows_today?: number;
+    all_channel_rows_recent_30d?: number;
+    processed_rows_total?: number;
+    processed_rows_today?: number;
+    processed_rows_recent_30d?: number;
+    raw_observations_total?: number;
+    raw_observations_today?: number;
+    raw_observations_recent_30d?: number;
+    bd_history_creators?: number;
+    bd_history_contacted?: number;
+    bd_history_confirmed?: number;
+    bd_history_samples?: number;
+    bd_history_videos?: number;
+    legacy_staff_contacted?: number;
+    legacy_staff_confirmed?: number;
+    legacy_staff_samples?: number;
+    legacy_staff_videos?: number;
+    contacted?: number;
+    review_pending?: number;
+    progressed?: number;
+  };
+  stage_counts?: Record<string, number>;
+  stage_rows?: { key: string; name: string; count: number }[];
+  overview?: { key: string; name: string; count: number }[];
+  trend_7d?: { date: string; count: number }[];
+  category_counts?: { name: string; value: number }[];
+  owner_counts?: { name: string; count: number }[];
+  bd_rows?: {
+    owner: string;
+    creator_count: number;
+    contacted: number;
+    confirmed: number;
+    samples: number;
+    videos: number;
+    authorized: number;
+  }[];
+  source_counts?: { name: string; count: number }[];
+  source_row_counts?: { name: string; count: number }[];
+  source_today_counts?: { name: string; count: number }[];
+  staff_history?: {
+    rows?: Array<Record<string, unknown>>;
+    totals?: Record<string, number>;
+  };
   [k: string]: any;
 }
 

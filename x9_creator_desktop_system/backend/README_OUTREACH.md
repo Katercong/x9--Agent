@@ -49,65 +49,53 @@
 
 安装依赖：
 ```bash
-pip install google-auth google-auth-oauthlib google-api-python-client
+pip install google-auth google-auth-oauthlib google-api-python-client cryptography
 ```
 
-接下来你有 **两条路** 选一个走：
+当前实现使用 **Web application OAuth client + 服务端回调**。用户在浏览器完成 Google 授权，后端用授权 code 换取 token，并把 token 绑定到当前登录账号。
 
-### A. 内置 OAuth 客户端（推荐 · 全团队零配置）
+### A. 统一 OAuth 客户端（推荐）
 
-**项目维护者一次性配置**，所有 BD 成员后续直接点「连接 Gmail」就完事，
-不用再碰 Google Cloud。
+项目维护者一次性配置一个 Google OAuth Web client，所有 BD 成员后续直接点「连接 Gmail」授权自己的 Gmail。
 
 1. 去 [Google Cloud Console](https://console.cloud.google.com) → APIs & Services → Credentials：
    - 启用 **Gmail API**
    - 新建 OAuth 2.0 Client ID，类型选 **Web application**
-   - **Authorized JavaScript origins**（关键！必须登记）：
+   - **Authorized redirect URIs** 必须登记当前后端回调，例如：
      ```
-     http://localhost:8000
-     http://localhost:8001
-     http://localhost:8002
-     http://localhost:8003
-     http://localhost:8004
-     http://localhost:8005
+     https://usx9.us/api/local/outreach/gmail/callback
      ```
-     登记 6 个的原因：应用启动时会动态选可用端口，避免被僵尸进程占用，
-     范围是 8000-8005。Google 不支持通配符，所以每个端口单独登一行。
-   - **Authorized redirect URIs**：留空即可。GIS 弹窗流程用 `postmessage`，
-     不需要登记真实 URI。
-2. 把 `client_id` 和 `client_secret` 写到环境变量（推荐放 `.env` 文件）：
+   - 如果继续使用 GIS popup code flow，再把前端 origin 加到 **Authorized JavaScript origins**，例如：
+     ```
+     https://usx9.us
+     ```
+2. 把配置写到服务端环境变量：
    ```bash
    GMAIL_DEFAULT_CLIENT_ID=xxxxxxxx.apps.googleusercontent.com
    GMAIL_DEFAULT_CLIENT_SECRET=GOCSPX-xxxxxxxxxxxx
    GMAIL_DEFAULT_PROJECT_ID=your-gcp-project-id
+   GMAIL_OAUTH_REDIRECT_URI=https://usx9.us/api/local/outreach/gmail/callback
+   GMAIL_TOKEN_ENCRYPTION_KEY=replace-with-a-long-random-secret
    ```
-3. 重启后端。BD 成员的体验：
+3. 重启后端。用户体验：
    - 推荐列表 → 点「建联」→ 弹窗
-   - 点「Sign in with Google」按钮 → **弹一个 Google 小窗**
-   - 在小窗里登录 / 授权 → 小窗自动关闭
-   - 建联弹窗一直没动，状态条变绿 ✓
+   - 点「连接 Gmail」→ 跳转到 Google 授权页
+   - 授权后跳回系统，Gmail 绑定到当前登录账号
+   - 用户确认发送时，后端只调用该账号自己的 Gmail token
 
-### B. 每个用户自己配（企业自托管 / 多组织部署）
+### B. 自托管 OAuth 客户端
 
 适合每个团队/组织希望用自己的 Google Cloud 项目。
 
-1. 去 Google Cloud Console 建 OAuth Client，类型选 **Desktop application**
-2. 下载 JSON，**重命名为 `gmail_client_secret.json`**，放到：
+1. 去 Google Cloud Console 建 OAuth Client，类型选 **Web application**
+2. 下载 JSON，重命名为 `gmail_client_secret.json`，放到：
    ```
    x9_creator_desktop_system/data/gmail_client_secret.json
    ```
    或者通过环境变量 `GMAIL_CLIENT_SECRET_PATH` 指向任意路径
-3. 此文件存在时，会**优先用它**而不是内置默认客户端
-4. token 自动迁移到 `gmail_accounts` 表里持久化，多账号共存
-
-### 端口说明
-
-应用启动时**自动选用 8000~8020 之间第一个空闲端口**，避免和别的服务冲突或被
-僵尸进程占用。OAuth 回调的 `redirect_uri` 也会跟着动态变化（例如
-`http://localhost:8003/api/local/outreach/gmail/callback`）。
-
-因为 OAuth Client 类型是 **Desktop application**，Google 对 `http://localhost:<port>`
-的回调一律放行，**不需要**在 Google Cloud Console 里登记每个端口。
+3. 同样登记实际的 `GMAIL_OAUTH_REDIRECT_URI`
+4. 设置 `GMAIL_TOKEN_ENCRYPTION_KEY`，用于加密保存 Gmail refresh token
+5. 此文件存在时，会优先用它而不是默认客户端
 
 > 企业 Workspace 也可以用 Service Account + Domain-Wide Delegation，
 > 但普通 `@gmail.com` 账户必须走 OAuth2 流程（A 或 B 任选其一）。

@@ -17,11 +17,15 @@
   };
 
   const DEFAULT_SETTINGS = {
-    endpoint: "http://127.0.0.1:8000/api/local/collector/observations",
+    endpoint: "https://usx9.us/api/local/collector/observations",
     source: "tiktok_shop_creator_lead_browser_extension_2_2",
     workerId: "tiktok_shop_creator_lead_browser_2_2",
     taskCount: 20,
   };
+  const UPLOAD_PATH = "/api/local/collector/observations";
+  const UPLOAD_BASES = [
+    "https://usx9.us",
+  ];
 
   const DEFAULT_STATE = {
     status: "idle", phase: "idle", runId: null,
@@ -63,22 +67,82 @@
 
   async function uploadObservation(observation, endpoint) {
     if (!observation || !observation.creator || !observation.creator.handle) throw new Error("observation missing creator.handle");
-    const resp = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(observation) });
-    let body = null; try { body = await resp.json(); } catch (_) {}
-    if (!resp.ok || (body && body.ok === false)) {
-      const detail = (body && (body.detail || body.error)) || `HTTP ${resp.status}`;
-      throw new Error(detail);
+    const bodyText = JSON.stringify(observation);
+    const failures = [];
+    for (const ep of buildUploadEndpointOrder(endpoint)) {
+      try {
+        const resp = await fetchWithTimeout(ep, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: bodyText,
+        }, 30000);
+        let body = null; try { body = await resp.json(); } catch (_) {}
+        if (!resp.ok || (body && body.ok === false)) {
+          const detail = (body && (body.detail || body.error)) || `HTTP ${resp.status}`;
+          failures.push(`${endpointLabel(ep)} ${detail}`);
+          continue;
+        }
+        return { body: body || { ok: true }, endpoint: ep };
+      } catch (err) {
+        failures.push(`${endpointLabel(ep)} ${String(err && err.message || err)}`);
+      }
     }
-    return body || { ok: true };
+    throw new Error(failures.join(" | ") || "upload_failed");
+  }
+
+  function buildUploadEndpointOrder(preferred) {
+    const out = [];
+    const addEndpoint = (ep) => {
+      const val = normalizeEndpoint(ep);
+      if (val && !out.includes(val)) out.push(val);
+    };
+    const preferredEndpoint = normalizeEndpoint(preferred || DEFAULT_SETTINGS.endpoint);
+    if (isUsx9Endpoint(preferredEndpoint)) addEndpoint(preferredEndpoint);
+    for (const base of UPLOAD_BASES) addEndpoint(joinPath(base, UPLOAD_PATH));
+    return out;
+  }
+
+  function normalizeEndpoint(endpoint) {
+    return String(endpoint || "").trim().replace(/\/+$/, "");
+  }
+
+  function joinPath(base, path) {
+    return `${String(base || "").replace(/\/+$/, "")}${path}`;
+  }
+
+  function endpointLabel(endpoint) {
+    try {
+      const parsed = new URL(endpoint);
+      return parsed.origin;
+    } catch {
+      return endpoint || "unknown_endpoint";
+    }
+  }
+
+  function isUsx9Endpoint(endpoint) {
+    try {
+      const host = new URL(endpoint).hostname.toLowerCase();
+      return host === "usx9.us" || host.endsWith(".usx9.us");
+    } catch {
+      return false;
+    }
+  }
+
+  function fetchWithTimeout(url, init, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    return fetch(url, Object.assign({}, init || {}, { signal: controller.signal }))
+      .finally(() => clearTimeout(timer));
   }
 
   function queueObservationUpload(observation, endpoint, meta) {
     const handle = (observation && observation.creator && observation.creator.handle) || (meta && meta.handle) || "unknown";
     const kind = (meta && meta.kind) || "detail";
     uploadObservation(observation, endpoint)
-      .then(async () => {
+      .then(async (result) => {
         const cur = await getState();
         await patchState({
+          settings: Object.assign({}, cur.settings, { endpoint: result.endpoint || endpoint }),
           lastStatus: kind === "list" ? `列表已入库 @${handle}` : `后端已接收 @${handle}`,
           counts: {
             listItems: cur.counts.listItems,
@@ -275,7 +339,7 @@
           detailTabId = await openDetailForHandle(state.listTabId, handle, 15000);
           console.log(TAG, "detail tab", detailTabId, "@" + handle);
           await patchState({ detailTabId, lastStatus: `详情页已打开 ${pos} @${handle}` });
-          observation = await scrapeDetailTab(detailTabId, 18000);
+          observation = await scrapeDetailTab(detailTabId, 18000, handle);
           console.log(TAG, "scraped @" + handle);
           await patchState({ lastStatus: `已提取详情 ${pos} @${handle}，准备投递后端` });
         } catch (err) {
@@ -398,7 +462,7 @@
     });
   }
 
-  async function scrapeDetailTab(detailTabId, maxMs) {
+  async function scrapeDetailTab(detailTabId, maxMs, expectedHandle) {
     console.log(TAG, "wait tab", detailTabId);
     await waitForTabComplete(detailTabId, maxMs);
     console.log(TAG, "tab loaded, sleeping 600ms");
@@ -407,7 +471,7 @@
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         console.log(TAG, "SCAN_DETAIL_NOW try " + (attempt + 1));
-        const resp = await sendToTab(detailTabId, { type: MSG.CS_SCAN_DETAIL_NOW });
+        const resp = await sendToTab(detailTabId, { type: MSG.CS_SCAN_DETAIL_NOW, expectedHandle });
         if (resp && resp.ok && resp.observation) return resp.observation;
         lastErr = resp && resp.error ? resp.error : "no_observation";
         console.warn(TAG, "scan resp not ok:", resp);

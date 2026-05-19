@@ -2,19 +2,24 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timedelta
+import os
+import shutil
+import subprocess
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
-from ..config import settings
+from ..config import DATA_DIR, settings
 from ..database import get_db
 from ..models.creator import Creator
 from ..models.extension_session import ExtensionSession
 from ..models.outreach_email import OutreachEmail
 from ..models.raw_observation import RawObservation
+from ..models.request_log import RequestLog
 from ..models.review_task import ReviewTask
+from ..models.system_log import SystemLog
 from ..services import gmail_service, remote_creators
 from ..services.departments import (
     DEPARTMENTS,
@@ -80,6 +85,15 @@ def _rows(db: Session, department_code: str | None = None) -> list[dict[str, Any
         return filter_rows_for_department(remote_creators.list_all(), department_code)
     except Exception:
         return _local_rows(db, department_code)
+
+
+def _dashboard_summary(department_code: str | None) -> dict[str, Any]:
+    try:
+        from .dashboard import _build_summary  # noqa: WPS433
+
+        return (_build_summary(department_code).get("summary") or {})
+    except Exception:
+        return {}
 
 
 def _iso(value) -> str | None:
@@ -178,6 +192,7 @@ def overview(request: Request, _admin: dict = Depends(require_admin), db: Sessio
     visible_departments = {department_code: DEPARTMENTS[department_code]} if department_code else DEPARTMENTS
     today = datetime.now().date()
     today_creators = sum(1 for row in rows if str(row.get("collected_at") or row.get("created_at") or "").startswith(str(today)))
+    unified = _dashboard_summary(department_code)
     review_q = select(func.count(ReviewTask.id)).where(ReviewTask.status == "pending")
     outreach_q = select(func.count(OutreachEmail.id)).where(OutreachEmail.status == "sent")
     review_department = department_where(ReviewTask, department_code)
@@ -189,8 +204,11 @@ def overview(request: Request, _admin: dict = Depends(require_admin), db: Sessio
     return {
         "ok": True,
         "department_code": department_code,
-        "total_creators": len(rows),
-        "today_creators": today_creators,
+        "total_creators": int(unified.get("total_creators") or len(rows)),
+        "today_creators": int(unified.get("today_new_creators") or today_creators),
+        "recent_30d_creators": int(unified.get("recent_30d_creators") or today_creators),
+        "unique_creators": int(unified.get("unique_creators") or len(rows)),
+        "all_channel_rows_total": int(unified.get("all_channel_rows_total") or unified.get("total_creators") or len(rows)),
         "recommended": sum(status_counts[s] for s in RECOMMENDED_STATUSES),
         "pending_review": db.scalar(review_q) or 0,
         "outreach_sent": db.scalar(outreach_q) or 0,
@@ -331,6 +349,104 @@ def _mask_secret(value: str) -> str:
         return f"{scheme}://***@{host}"
     user, _password = creds.split(":", 1)
     return f"{scheme}://{user}:***@{host}"
+
+
+def _safe_count(db: Session, model: Any) -> int:
+    try:
+        return int(db.scalar(select(func.count(model.id))) or 0)
+    except Exception:
+        return 0
+
+
+def _cpu_percent() -> int | None:
+    try:
+        if os.name == "nt":
+            kwargs: dict[str, Any] = {}
+            kwargs["creationflags"] = 0x08000000
+            proc = subprocess.run(
+                ["wmic", "cpu", "get", "loadpercentage", "/value"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                **kwargs,
+            )
+            for line in proc.stdout.splitlines():
+                if line.strip().lower().startswith("loadpercentage="):
+                    return max(0, min(100, int(line.split("=", 1)[1].strip())))
+        load = os.getloadavg()[0]
+        cpu_count = os.cpu_count() or 1
+        return max(0, min(100, round((load / cpu_count) * 100)))
+    except Exception:
+        return None
+
+
+def _request_buckets(db: Session) -> tuple[list[dict[str, Any]], int, int, int]:
+    now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    first_hour = now - timedelta(hours=23)
+    buckets: dict[datetime, int] = {
+        first_hour + timedelta(hours=i): 0
+        for i in range(24)
+    }
+    rows = db.execute(
+        select(RequestLog.ts, RequestLog.status_code, RequestLog.duration_ms)
+        .where(RequestLog.ts >= first_hour)
+    ).all()
+    total_duration = 0
+    duration_count = 0
+    error_count = 0
+    for ts, status_code, duration_ms in rows:
+        if not ts:
+            continue
+        hour = ts.replace(minute=0, second=0, microsecond=0)
+        if hour in buckets:
+            buckets[hour] += 1
+        if duration_ms is not None:
+            total_duration += int(duration_ms)
+            duration_count += 1
+        if int(status_code or 0) >= 500:
+            error_count += 1
+    items = [
+        {"hour": key.strftime("%H:00"), "count": count}
+        for key, count in sorted(buckets.items())
+    ]
+    avg_duration = round(total_duration / duration_count) if duration_count else 0
+    return items, len(rows), avg_duration, error_count
+
+
+@router.get("/system-metrics")
+def system_metrics(_admin: dict = Depends(require_super_admin), db: Session = Depends(get_db)) -> dict:
+    disk = shutil.disk_usage(DATA_DIR)
+    disk_percent = round((disk.used / disk.total) * 100) if disk.total else 0
+    table_counts = [
+        {"name": "creators", "count": _safe_count(db, Creator)},
+        {"name": "raw_observations", "count": _safe_count(db, RawObservation)},
+        {"name": "outreach_emails", "count": _safe_count(db, OutreachEmail)},
+        {"name": "review_tasks", "count": _safe_count(db, ReviewTask)},
+        {"name": "extension_sessions", "count": _safe_count(db, ExtensionSession)},
+        {"name": "system_logs", "count": _safe_count(db, SystemLog)},
+        {"name": "request_logs", "count": _safe_count(db, RequestLog)},
+    ]
+    requests_24h, request_total, avg_duration, error_count = _request_buckets(db)
+    return {
+        "ok": True,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "cpu_percent": _cpu_percent(),
+        "disk": {
+            "path": str(DATA_DIR),
+            "percent": disk_percent,
+            "used": disk.used,
+            "free": disk.free,
+            "total": disk.total,
+        },
+        "database": {
+            "row_count": sum(item["count"] for item in table_counts),
+            "tables": table_counts,
+        },
+        "requests_24h": requests_24h,
+        "request_total_24h": request_total,
+        "avg_duration_ms_24h": avg_duration,
+        "error_count_24h": error_count,
+    }
 
 
 @router.get("/system-settings")

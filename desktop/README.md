@@ -28,7 +28,7 @@ What the installer does:
      Collection Monitor shows live counters.
 3. Patches `manifest.json`:
    * `background.service_worker` → `x9_sw.js`
-   * `host_permissions` += `http://127.0.0.1:8000/*` and `http://localhost:8000/*`
+   * `host_permissions` += `https://usx9.us/*` and `https://*.usx9.us/*`
    * `permissions` += `alarms` (the relay uses `chrome.alarms`)
 
 Nothing else changes. The extension's UI, search box, scroll behaviour,
@@ -59,14 +59,14 @@ What the installer does:
    `popup.html`, `popup.css`, `popup.js`, `sidepanel.html` from the
    v1.0.19 folder into `x9_creator_desktop_system/chrome-extension/`.
 2. Patches just four URL constants in `popup.js`:
-   - `X9_API_BASE_URL` → `http://127.0.0.1:8000`
+   - `X9_API_BASE_URL` → `https://usx9.us`
    - `X9_API_KEY` → `""` (the v3 local backend does not require a key)
    - `X9_CREATOR_INGEST_URL` →
-     `http://127.0.0.1:8000/api/local/extension/x9-compat/ingest-creators`
+     `https://usx9.us/api/local/extension/x9-compat/ingest-creators`
    - `LAUNCHER_HEARTBEAT_URL` →
-     `http://127.0.0.1:8000/api/local/extension/launcher-heartbeat`
+     `https://usx9.us/api/local/extension/launcher-heartbeat`
 3. Updates `manifest.json` `host_permissions` so the extension is allowed
-   to talk to `127.0.0.1:8000`.
+   to talk to `https://usx9.us`.
 
 Nothing else in `popup.js` is changed — the auto-run loop, search
 orchestration, scroll logic, profile collector, filter rules, exports,
@@ -97,7 +97,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install_extension_from_v1_19.ps
 #    Pin the icon → Open side panel
 # 4. Open TikTok, log in, set search keyword in the side panel
 # 5. Click Start Auto Run — exactly as in v1.0.19
-# 6. Open http://127.0.0.1:8000/ui/ → Collection Monitor
+# 6. Open https://usx9.us/portal/ → Collection Monitor
 #    Live counters update from the launcher-heartbeat stream.
 ```
 
@@ -135,7 +135,7 @@ desktop/           ← Electron shell (or run in browser)
   exports CSVs. Also serves the operator UI at `/ui/`.
 * **Desktop app (Electron)** owns the lifecycle: spawns the python
   backend as a child process, polls `/health`, opens a window on
-  `http://127.0.0.1:8000/ui/`. The same UI runs in a plain browser if
+  `https://usx9.us/portal/`. The same UI runs in a plain browser if
   you don't want to install Electron.
 
 ## Quick start (Windows)

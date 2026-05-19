@@ -12,6 +12,7 @@ is still around (may be stale if writes have already moved to remote).
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
@@ -31,6 +32,7 @@ from ..services.remote_creators import RemoteRepoError
 from ..services.tag_engine import find_creators_by_tags
 from ..utils.contact_methods import CONTACT_CHANNEL_TERMS, contact_types_for, extract_contact_methods
 from ..utils.json_utils import loads_json_list
+from ..utils.source_classify import ALL_SOURCES, classify_source
 
 
 router = APIRouter(prefix="/api/local/creators", tags=["creators"])
@@ -164,6 +166,26 @@ def _contact_channel_match(row: dict, channel: str) -> bool:
     )
 
 
+SOURCE_LABELS = {
+    "tiktok_shop": "TikTok Shop",
+    "x9_leads": "X9 线索",
+    "table_import": "表格导入",
+    "other": "其他",
+}
+
+
+def _creator_source(row: dict) -> str:
+    return classify_source(row.get("platform"), row.get("source"))
+
+
+def _source_tags(row: dict) -> list[str]:
+    tags = [_creator_source(row)]
+    raw_source = str(row.get("source") or "").strip()
+    if raw_source and raw_source not in tags:
+        tags.append(raw_source)
+    return tags
+
+
 # ---------------------------------------------------------------------------
 # Sort
 # ---------------------------------------------------------------------------
@@ -244,6 +266,7 @@ def _apply_sort(rows: list[dict], sort_by: str | None) -> list[dict]:
 def _apply_filters(
     rows: Iterable[dict],
     *,
+    source: str | None,
     queue_type: str | None,
     has_email: bool | None,
     search_keyword: str | None,
@@ -278,6 +301,8 @@ def _apply_filters(
     store_q = store_assigned_contains.lower() if store_assigned_contains else None
 
     for r in rows:
+        if source and source not in {"all", _creator_source(r)}:
+            continue
         if queue_type is not None and r.get("queue_type") != queue_type:
             continue
         if has_email is True and not r.get("has_email"):
@@ -415,6 +440,10 @@ def _serialize(c: dict, signal: dict | None = None) -> dict[str, Any]:
     bio = c.get("bio")
     external_links = c.get("external_links_json")
     contact_methods = extract_contact_methods(email, bio, external_links)
+    source_key = _creator_source(c)
+    category_tags = loads_json_list(c.get("category_tags_json"))
+    if not category_tags and c.get("primary_product_category"):
+        category_tags = [c.get("primary_product_category")]
     return {
         "id": c.get("id"),
         "department_code": c.get("department_code") or "cross_border",
@@ -423,18 +452,37 @@ def _serialize(c: dict, signal: dict | None = None) -> dict[str, Any]:
         "profile_url": c.get("profile_url"),
         "bio": bio,
         "followers_count": c.get("followers_count"),
+        "followers": c.get("followers_count"),
+        "followers_raw": c.get("followers_raw"),
+        "source": source_key,
+        "source_label": SOURCE_LABELS.get(source_key, "其他"),
+        "source_tags": _source_tags(c),
+        "avatar_url": c.get("avatar_url"),
+        "shop_profile_url": c.get("shop_profile_url"),
+        "lead_status": c.get("lead_status"),
         "email": email,
         "has_email": bool(c.get("has_email")),
         "has_contact": bool(contact_methods),
         "contact_methods": contact_methods,
         "contact_types": contact_types_for(email, bio, external_links),
+        "external_links": loads_json_list(external_links),
         "search_keyword": c.get("search_keyword"),
         "collected_at": c.get("collected_at"),
         "last_seen_at": c.get("last_seen_at"),
         "created_at": c.get("created_at"),
+        "updated_at": c.get("updated_at"),
         "primary_product_category": c.get("primary_product_category"),
+        "category_tags": category_tags,
+        "country": c.get("country"),
+        "language": c.get("language"),
+        "tier": c.get("tier") or c.get("outreach_priority"),
         "primary_product_fit_score": c.get("primary_product_fit_score"),
         "feminine_care_fit": c.get("feminine_care_fit"),
+        "commercial_value_score": c.get("commercial_value_score"),
+        "data_quality_score": c.get("data_quality_score"),
+        "contactability_score": c.get("contactability_score"),
+        "content_format_score": c.get("content_format_score"),
+        "content_format_status": c.get("content_format_status"),
         "fit_level": c.get("fit_level"),
         "priority_score": c.get("priority_score"),
         "recommendation_score": c.get("recommendation_score"),
@@ -456,11 +504,25 @@ def _serialize(c: dict, signal: dict | None = None) -> dict[str, Any]:
         "evidence_strength": c.get("evidence_strength"),
         "fit_evidence_sources": loads_json_list(c.get("fit_evidence_source_json")),
         "matched_keywords": loads_json_list(c.get("matched_keywords_json")),
+        "profile_snapshot": _load_json_dict(c.get("profile_snapshot_json")),
+        "tiktok_shop": _load_json_dict(c.get("tiktok_shop_json")),
         # Outreach signals (joined from local outreach_emails)
         "outreach_count": (signal or {}).get("outreach_count", 0),
         "last_outreach_sender_email": (signal or {}).get("last_outreach_sender_email"),
         "last_outreach_at": (signal or {}).get("last_outreach_at"),
     }
+
+
+def _load_json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _serialize_local_creator(c) -> dict[str, Any]:
@@ -475,6 +537,11 @@ def _serialize_local_creator(c) -> dict[str, Any]:
         "profile_url": c.profile_url,
         "bio": c.bio,
         "followers_count": c.followers_count,
+        "followers_raw": c.followers_raw,
+        "source": c.source,
+        "avatar_url": c.avatar_url,
+        "shop_profile_url": c.shop_profile_url,
+        "lead_status": c.lead_status,
         "email": c.email,
         "has_email": c.has_email,
         "external_links_json": c.external_links_json,
@@ -482,9 +549,15 @@ def _serialize_local_creator(c) -> dict[str, Any]:
         "collected_at": c.collected_at.isoformat() if c.collected_at else None,
         "last_seen_at": c.last_seen_at.isoformat() if c.last_seen_at else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
+        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
         "primary_product_category": c.primary_product_category,
         "primary_product_fit_score": c.primary_product_fit_score,
         "feminine_care_fit": c.feminine_care_fit,
+        "commercial_value_score": c.commercial_value_score,
+        "data_quality_score": c.data_quality_score,
+        "contactability_score": c.contactability_score,
+        "content_format_score": c.content_format_score,
+        "content_format_status": c.content_format_status,
         "fit_level": c.fit_level,
         "priority_score": c.priority_score,
         "recommendation_score": c.recommendation_score,
@@ -506,6 +579,8 @@ def _serialize_local_creator(c) -> dict[str, Any]:
         "evidence_strength": c.evidence_strength,
         "fit_evidence_source_json": c.fit_evidence_source_json,
         "matched_keywords_json": c.matched_keywords_json,
+        "profile_snapshot_json": c.profile_snapshot_json,
+        "tiktok_shop_json": c.tiktok_shop_json,
     })
 
 
@@ -518,7 +593,12 @@ def _local_creator_row(c: Creator) -> dict[str, Any]:
         "display_name": c.display_name,
         "profile_url": c.profile_url,
         "bio": c.bio,
+        "followers_raw": c.followers_raw,
         "followers_count": c.followers_count,
+        "source": c.source,
+        "avatar_url": c.avatar_url,
+        "shop_profile_url": c.shop_profile_url,
+        "lead_status": c.lead_status,
         "email": c.email,
         "has_email": c.has_email,
         "external_links_json": c.external_links_json,
@@ -526,9 +606,15 @@ def _local_creator_row(c: Creator) -> dict[str, Any]:
         "collected_at": c.collected_at.isoformat() if c.collected_at else None,
         "last_seen_at": c.last_seen_at.isoformat() if c.last_seen_at else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
+        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
         "primary_product_category": c.primary_product_category,
         "primary_product_fit_score": c.primary_product_fit_score,
         "feminine_care_fit": c.feminine_care_fit,
+        "commercial_value_score": c.commercial_value_score,
+        "data_quality_score": c.data_quality_score,
+        "contactability_score": c.contactability_score,
+        "content_format_score": c.content_format_score,
+        "content_format_status": c.content_format_status,
         "fit_level": c.fit_level,
         "priority_score": c.priority_score,
         "recommendation_score": c.recommendation_score,
@@ -550,6 +636,8 @@ def _local_creator_row(c: Creator) -> dict[str, Any]:
         "evidence_strength": c.evidence_strength,
         "fit_evidence_source_json": c.fit_evidence_source_json,
         "matched_keywords_json": c.matched_keywords_json,
+        "profile_snapshot_json": c.profile_snapshot_json,
+        "tiktok_shop_json": c.tiktok_shop_json,
     }
 
 
@@ -607,6 +695,7 @@ def list_all(
     request: Request,
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
+    source: str | None = Query(default=None),
     queue_type: str | None = None,
     has_email: bool | None = None,
     search_keyword: str | None = None,
@@ -635,6 +724,8 @@ def list_all(
     collected_to: str | None = Query(default=None),
     sort_by: str | None = Query(default="recommended"),
 ) -> dict:
+    if source and source not in {"all", *ALL_SOURCES}:
+        raise HTTPException(status_code=400, detail="source must be all, tiktok_shop, x9_leads, table_import or other")
     collected_start, collected_end = _collected_bounds(
         collected_range, collected_date, collected_from, collected_to
     )
@@ -642,6 +733,7 @@ def list_all(
     rows = _all_creator_rows(department_code)
     rows = _apply_filters(
         rows,
+        source=source,
         queue_type=queue_type,
         has_email=has_email,
         search_keyword=search_keyword,
@@ -676,11 +768,14 @@ def list_all(
 def list_recommended(
     request: Request,
     limit: int = Query(default=200, ge=1, le=1000),
+    source: str | None = Query(default=None),
     collected_range: str | None = Query(default=None),
     collected_date: str | None = Query(default=None),
     collected_from: str | None = Query(default=None),
     collected_to: str | None = Query(default=None),
 ) -> dict:
+    if source and source not in {"all", *ALL_SOURCES}:
+        raise HTTPException(status_code=400, detail="source must be all, tiktok_shop, x9_leads, table_import or other")
     collected_start, collected_end = _collected_bounds(
         collected_range, collected_date, collected_from, collected_to
     )
@@ -688,9 +783,10 @@ def list_recommended(
     department_code = current_department_code(request)
     rows = _all_creator_rows(department_code)
     rows = [r for r in rows if r.get("recommendation_status") in statuses]
-    if collected_start is not None or collected_end is not None:
+    if source is not None or collected_start is not None or collected_end is not None:
         rows = _apply_filters(
             rows,
+            source=source,
             queue_type=None, has_email=None, search_keyword=None,
             handle_contains=None, contact_contains=None, contact_channel=None,
             bio_contains=None, outreach_priority=None,

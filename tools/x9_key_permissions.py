@@ -24,7 +24,7 @@ import time
 from datetime import datetime
 from urllib import request, error
 
-BASE = "http://192.168.1.168:18765"
+BASE = "https://usx9.us"
 
 KEYS = {
     "A_TwXKU": "TwXKU_xzfLt-kNj5b8IzSPxYi27KrcOyd-9DNppYPco",

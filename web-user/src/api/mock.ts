@@ -54,7 +54,7 @@ export const MOCKS: Record<string, any | ((qs: string) => any)> = {
       { label: 'TikTok 登录有效', value: '✓ 已登录' },
       { label: 'Gmail 绑定', value: '已绑定 2 个账户' },
       { label: '插件最近心跳', value: '18 秒前' },
-      { label: '今日采集进度', value: '184 / 250 (74%)' },
+      { label: '当前任务进度', value: '184 / 250 (74%)' },
       { label: '当前部门', value: 'cross_border' },
       { label: '系统版本', value: '2.4.1' },
     ],

@@ -40,10 +40,10 @@ foreach ($f in $files) {
 # Patch popup.js URL constants -> v3 local backend.
 $popup = Join-Path $DEST "popup.js"
 $content = Get-Content -Raw $popup
-$content = $content -replace "const X9_API_BASE_URL = 'http://192\.168\.1\.168:18765';", "const X9_API_BASE_URL = 'http://127.0.0.1:8000';"
+$content = $content -replace "const X9_API_BASE_URL = '[^']*';", "const X9_API_BASE_URL = 'https://usx9.us';"
 $content = $content -replace "const X9_API_KEY = '[^']*';", "const X9_API_KEY = '';"
 $content = $content -replace "const X9_CREATOR_INGEST_URL = `\$\{X9_API_BASE_URL\}/api/ingest/creators`;", "const X9_CREATOR_INGEST_URL = `${X9_API_BASE_URL}/api/local/extension/x9-compat/ingest-creators`;"
-$content = $content -replace "const LAUNCHER_HEARTBEAT_URL = 'http://127\.0\.0\.1:18766/api/heartbeat';", "const LAUNCHER_HEARTBEAT_URL = 'http://127.0.0.1:8000/api/local/extension/launcher-heartbeat';"
+$content = $content -replace "const LAUNCHER_HEARTBEAT_URL = '[^']*';", "const LAUNCHER_HEARTBEAT_URL = 'https://usx9.us/api/local/extension/launcher-heartbeat';"
 Set-Content -Path $popup -Value $content -Encoding UTF8
 Write-Host "  patched popup.js URL constants"
 
@@ -53,8 +53,8 @@ $manifest = Get-Content -Raw $manifestPath | ConvertFrom-Json
 $manifest.version = "2.0"
 $manifest.host_permissions = @(
   "https://www.tiktok.com/*",
-  "http://127.0.0.1:8000/*",
-  "http://localhost:8000/*"
+  "https://usx9.us/*",
+  "https://*.usx9.us/*"
 )
 # Also drop the X-API-Key requirement since the v3 backend doesn't use it.
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $manifestPath

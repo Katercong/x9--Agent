@@ -13,7 +13,7 @@ npm install
 
 # 开发态启动
 npm run dev
-# 浏览器打开 http://localhost:5173
+# 浏览器打开 https://usx9.us
 
 # 生产构建
 npm run build
@@ -132,7 +132,7 @@ API 客户端在 [src/api/client.ts](src/api/client.ts),hooks 在 [src/hooks/use
 # 一键构建并部署到后端
 cd web
 scripts\build-deploy.bat
-# 浏览器打开 http://localhost:18765/web-preview/
+# 浏览器打开 https://usx9.us/web-preview/
 ```
 
 ## 仍是示意的部分

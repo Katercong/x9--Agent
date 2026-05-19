@@ -18,6 +18,8 @@ ALL_SOURCES = (SOURCE_SHOP, SOURCE_X9_LEADS, SOURCE_TABLE_IMPORT, SOURCE_OTHER)
 def classify_source(platform: str | None, source: str | None) -> str:
     p = (platform or "").lower()
     s = (source or "").lower()
+    if s in {SOURCE_SHOP, SOURCE_X9_LEADS, SOURCE_TABLE_IMPORT, SOURCE_OTHER}:
+        return s
     if p == "tiktok_shop" or "tiktok_shop" in s:
         return SOURCE_SHOP
     if "table_import" in s:

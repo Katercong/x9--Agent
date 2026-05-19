@@ -4,10 +4,10 @@ import { SideDrawer } from '@/components/drawer/SideDrawer';
 import { Pill } from '@/components/Pill';
 import {
   useOutreachTemplates, usePreviewOutreach, useCreateDraft, usePatchDraft, useSendDraft, useOutreachHistory,
-  useGmailAccounts,
+  useGmailAccounts, useGmailDeleteAccount,
 } from '@/hooks/useApi';
 import { shortRelative } from '@/lib/format';
-import type { Creator, OutreachTemplate } from '@/api/types';
+import type { Creator } from '@/api/types';
 
 interface Props {
   creator: Creator | null;
@@ -21,7 +21,7 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
   const [step, setStep] = useState<Step>('template');
   const [tplId, setTplId] = useState<string>('');
   const [tone, setTone] = useState<string>('friendly');
-  const [useAi, setUseAi] = useState(true);
+  const [useAi, setUseAi] = useState(false);
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [toEmail, setToEmail] = useState('');
@@ -35,23 +35,35 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
   const createDraft = useCreateDraft();
   const patchDraft = usePatchDraft();
   const sendDraft = useSendDraft();
+  const deleteGmail = useGmailDeleteAccount();
 
   const templates = tplsQ.data?.items ?? [];
   const accounts = accountsQ.data?.items ?? [];
   const defaultAcc = accounts.find((a) => a.is_default === 1) || accounts[0];
   const history = historyQ.data?.items ?? [];
+  const hasGmailAccount = accounts.length > 0;
+  const canSaveDraft = Boolean(toEmail.trim() && subject.trim() && body.trim());
+  const canSendDraft = Boolean(draftId && hasGmailAccount && toEmail.trim() && !sendDraft.isPending);
+  const gmailReturnTo = typeof window !== 'undefined' ? `${window.location.pathname}${window.location.search}` : '/';
+  const gmailConnectHref = `/api/local/outreach/gmail/connect?return_to=${encodeURIComponent(gmailReturnTo)}`;
 
   // Reset on close / creator change
   useEffect(() => {
     if (!open || !creator) return;
     setStep('template');
     setTplId(templates.find((t) => t.is_default === 1)?.id || templates[0]?.id || '');
+    setUseAi(false);
     setSubject('');
     setBody('');
     setToEmail(creator.email || '');
     setDraftId(null);
     setSentSummary('');
   }, [open, creator?.id]);
+
+  useEffect(() => {
+    if (!open || !creator || tplId || templates.length === 0) return;
+    setTplId(templates.find((t) => t.is_default === 1)?.id || templates[0]?.id || '');
+  }, [open, creator?.id, templates, tplId]);
 
   const onPreview = () => {
     if (!creator) return;
@@ -70,6 +82,7 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
   const onSaveDraft = () => {
     if (!creator) return;
     if (!toEmail) { alert('收件邮箱必填'); return; }
+    if (!subject.trim() || !body.trim()) { alert('请先生成并确认邮件内容'); return; }
     if (!draftId) {
       createDraft.mutate(
         {
@@ -94,6 +107,8 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
 
   const onSend = () => {
     if (!draftId) return;
+    if (!defaultAcc) { alert('请先连接 Gmail 账户'); return; }
+    if (!toEmail.trim()) { alert('收件邮箱必填'); return; }
     if (!confirm('确认发送此邮件?')) return;
     sendDraft.mutate(
       { id: draftId, body: { confirm: true, update_creator_status: true, from_account_id: defaultAcc?.id } },
@@ -104,6 +119,12 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
         },
       },
     );
+  };
+
+  const onDisconnectGmail = () => {
+    if (!defaultAcc) return;
+    if (!confirm(`断开 ${defaultAcc.email} 后，此账号将无法继续用该 Gmail 发送邮件。确认断开?`)) return;
+    deleteGmail.mutate(defaultAcc.id, { onSuccess: () => accountsQ.refetch() });
   };
 
   const onReset = () => {
@@ -128,16 +149,16 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
             <>
               <button onClick={onClose} className="btn">取消</button>
               {step === 'template' && (
-                <button onClick={onPreview} disabled={preview.isPending || !tplId} className="btn btn-primary">
-                  <Sparkles size={12} />{useAi ? 'AI 生成预览' : '渲染预览'} <ArrowRight size={12} />
+                <button onClick={onPreview} disabled={preview.isPending || (tplsQ.isLoading && !tplId)} className="btn btn-primary">
+                  <Sparkles size={12} />{useAi ? 'AI 润色预览' : '快速生成预览'} <ArrowRight size={12} />
                 </button>
               )}
               {(step === 'preview' || step === 'edit') && (
                 <>
-                  <button onClick={onSaveDraft} disabled={createDraft.isPending || patchDraft.isPending} className="btn">
+                  <button onClick={onSaveDraft} disabled={!canSaveDraft || createDraft.isPending || patchDraft.isPending} className="btn">
                     <Save size={12} />保存草稿
                   </button>
-                  <button onClick={onSend} disabled={!draftId || sendDraft.isPending} className="btn btn-primary">
+                  <button onClick={onSend} disabled={!canSendDraft} className="btn btn-primary">
                     <Send size={12} />发送
                   </button>
                 </>
@@ -150,13 +171,23 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
       {/* Gmail account banner */}
       {accounts.length === 0 ? (
         <div className="card card-body mb-3" style={{ background: 'rgb(var(--warn) / 0.12)' }}>
-          <div className="flex items-center gap-2 text-xs text-warn">
-            <AlertOctagon size={14} /> 还没绑定 Gmail 账户 — 请先去 <a href="/settings" className="underline">设置中心</a> 绑定后才能发送
+          <div className="flex items-start gap-2 text-xs text-warn">
+            <AlertOctagon size={14} className="mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <div>还没绑定 Gmail 账户 — 请先 <a href={gmailConnectHref} className="underline font-medium">连接 Gmail</a> 后再发送</div>
+              <div className="text-xxs mt-1 opacity-90">授权后系统会把该 Gmail 绑定到当前登录账号，仅在你确认发送时调用 Gmail API，不读取收件箱；可随时断开。</div>
+            </div>
           </div>
         </div>
       ) : (
-        <div className="text-xxs text-muted mb-3 flex items-center gap-2">
-          <Mail size={11} />发件账户:<span className="text-text font-medium">{defaultAcc?.email}</span>
+        <div className="text-xxs text-muted mb-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <Mail size={11} className="shrink-0" />
+            <span>发件账户:</span><span className="text-text font-medium truncate">{defaultAcc?.email}</span>
+          </div>
+          <button type="button" onClick={onDisconnectGmail} disabled={deleteGmail.isPending} className="underline shrink-0">
+            {deleteGmail.isPending ? '断开中...' : '断开'}
+          </button>
         </div>
       )}
 
@@ -173,7 +204,7 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
                 {i + 1}
               </span>
               <span className={active ? 'text-text font-semibold' : 'text-muted'}>
-                {['选模板', 'AI 预览', '编辑发送', '已发送'][i]}
+                {['生成预览', '预览', '编辑发送', '已发送'][i]}
               </span>
               {i < 3 && <span className="text-muted">›</span>}
             </div>
@@ -181,38 +212,23 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
         })}
       </div>
 
-      {/* Step 1: Template */}
+      {/* Step 1: Generate */}
       {step === 'template' && (
         <div className="space-y-3">
-          <div>
-            <label className="text-xs text-muted block mb-1">选择话术模板</label>
-            <div className="space-y-1.5">
-              {templates.map((t: OutreachTemplate) => (
-                <label key={t.id} className={`flex items-start gap-2 p-2.5 rounded border cursor-pointer transition-colors ${
-                  tplId === t.id ? 'border-accent' : 'border-border hover:border-muted'
-                }`} style={{ background: 'rgb(var(--bg-elev-2))' }}>
-                  <input type="radio" name="tpl" checked={tplId === t.id} onChange={() => setTplId(t.id)} className="mt-1" />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium">{t.name}</span>
-                      <Pill tone={t.language === 'zh' ? 'info' : 'warn'}>{t.language?.toUpperCase()}</Pill>
-                      {t.is_default === 1 && <Pill tone="good">默认</Pill>}
-                    </div>
-                    {t.description && <div className="text-xxs text-muted mt-0.5">{t.description}</div>}
-                    {t.collab_type && <div className="text-xxs text-muted mt-0.5">合作:{t.collab_type} · 语气:{t.tone || '—'}</div>}
-                  </div>
-                </label>
-              ))}
-              {templates.length === 0 && (
-                <div className="text-xxs text-muted">没有模板,先去 <a href="/settings" className="underline">设置中心</a> 创建</div>
-              )}
+          <div className="card card-body">
+            <div className="flex items-start gap-3">
+              <Sparkles size={16} className="text-accent mt-0.5" />
+              <div className="min-w-0">
+                <div className="text-sm font-semibold">生成邮件预览</div>
+                <div className="text-xs text-muted mt-1">默认模板会按合作类型自动匹配。</div>
+              </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="flex items-center gap-2 text-xs">
               <input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} />
-              使用 AI 增强(基于达人画像生成)
+              使用 AI 润色（较慢）
             </label>
             <div>
               <label className="text-xxs text-muted block mb-1">语气</label>
@@ -253,7 +269,7 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
             <div className="text-xxs text-good">✓ AI 已增强 · 上下文已注入 · 可继续手工微调</div>
           )}
           {preview.isPending && (
-            <div className="text-xxs text-muted flex items-center gap-1"><RefreshCw size={11} className="animate-spin" />AI 生成中...</div>
+            <div className="text-xxs text-muted flex items-center gap-1"><RefreshCw size={11} className="animate-spin" />生成中...</div>
           )}
           {draftId && <div className="text-xxs text-muted">草稿 ID: {draftId}</div>}
         </div>

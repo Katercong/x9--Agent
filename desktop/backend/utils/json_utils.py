@@ -23,7 +23,7 @@ def loads_json_list(value: Any) -> list[Any]:
 
 
 def parse_followers_count(raw: str | None) -> int | None:
-    """Parse '844.5K', '1.2M', '12,300', '8366' into an int."""
+    """Parse '844.5K', '1.2M', '12,300', '1.2万 followers' into an int."""
     if raw is None:
         return None
     if isinstance(raw, int):
@@ -33,7 +33,7 @@ def parse_followers_count(raw: str | None) -> int | None:
         return None
     import re
 
-    m = re.match(r"^([\d.]+)\s*([kmb])?$", s)
+    m = re.search(r"([\d.]+)\s*([kmb]|万|萬|亿|億)?", s)
     if not m:
         try:
             return int(float(s))
@@ -41,5 +41,13 @@ def parse_followers_count(raw: str | None) -> int | None:
             return None
     n = float(m.group(1))
     suffix = m.group(2) or ""
-    mult = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}.get(suffix, 1)
+    mult = {
+        "k": 1_000,
+        "m": 1_000_000,
+        "b": 1_000_000_000,
+        "万": 10_000,
+        "萬": 10_000,
+        "亿": 100_000_000,
+        "億": 100_000_000,
+    }.get(suffix, 1)
     return int(n * mult)

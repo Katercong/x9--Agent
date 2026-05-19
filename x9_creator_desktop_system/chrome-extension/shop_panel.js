@@ -10,16 +10,11 @@
     SHOP_SET_SETTINGS: "TSCLB_SHOP_SET_SETTINGS",
   };
 
-  const DEFAULT_ENDPOINT = "http://127.0.0.1:8000/api/local/collector/observations";
+  const DEFAULT_ENDPOINT = "https://usx9.us/api/local/collector/observations";
   const SHOP_API_BASE_KEY = "x9_api_base";
   const SHOP_API_BASE_ACTIVE_KEY = "x9_api_base_active";
   const SHOP_BACKEND_CANDIDATES = [
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
     "https://usx9.us",
-    "http://usx9.us",
-    "http://192.168.1.171:8000",
-    "http://192.168.1.171",
   ];
   let pollTimer = null;
 
@@ -88,7 +83,7 @@
   async function resolveShopEndpoint() {
     const input = document.getElementById("shopEndpointInput");
     const current = (input?.value || "").trim();
-    if (current && current !== DEFAULT_ENDPOINT) {
+    if (current && current !== DEFAULT_ENDPOINT && isUsx9ShopBase(endpointBase(current))) {
       return current;
     }
 
@@ -107,7 +102,7 @@
       }
     }
 
-    return current || DEFAULT_ENDPOINT;
+    return DEFAULT_ENDPOINT;
   }
 
   async function canReachShopBackend(base) {
@@ -132,11 +127,7 @@
       const parsed = new URL(url || "");
       const host = parsed.hostname.toLowerCase();
       const path = parsed.pathname || "/";
-      const knownHost = host === "usx9.us"
-        || host.endsWith(".usx9.us")
-        || host === "localhost"
-        || host === "127.0.0.1"
-        || host === "192.168.1.171";
+      const knownHost = host === "usx9.us" || host.endsWith(".usx9.us");
       const dashboardPath = path === "/"
         || path.startsWith("/portal")
         || path.startsWith("/ui")
@@ -171,16 +162,34 @@
     const override = normalizeShopApiBase(stored[SHOP_API_BASE_KEY]);
     const active = normalizeShopApiBase(stored[SHOP_API_BASE_ACTIVE_KEY]);
     const ordered = [];
-    if (override) ordered.push(override);
+    if (override && isUsx9ShopBase(override) && !ordered.includes(override)) ordered.push(override);
     for (const base of await shopDashboardBaseCandidates()) {
       if (!ordered.includes(base)) ordered.push(base);
     }
-    if (active && !ordered.includes(active)) ordered.push(active);
+    if (active && isUsx9ShopBase(active) && !ordered.includes(active)) ordered.push(active);
     for (const raw of SHOP_BACKEND_CANDIDATES) {
       const base = normalizeShopApiBase(raw);
       if (base && !ordered.includes(base)) ordered.push(base);
     }
     return ordered;
+  }
+
+  function endpointBase(endpoint) {
+    try {
+      return new URL(endpoint).origin;
+    } catch {
+      return "";
+    }
+  }
+
+  function isUsx9ShopBase(base) {
+    try {
+      const parsed = new URL(base);
+      const host = parsed.hostname.toLowerCase();
+      return parsed.protocol === "https:" && (host === "usx9.us" || host.endsWith(".usx9.us"));
+    } catch {
+      return false;
+    }
   }
 
   function startPolling() {
@@ -198,7 +207,8 @@
     try {
       chrome.storage?.local?.get?.(["shopAutoRun"], (got) => {
         const s = got?.shopAutoRun;
-        const ep = (s && s.settings && s.settings.endpoint) || DEFAULT_ENDPOINT;
+        const rawEp = (s && s.settings && s.settings.endpoint) || DEFAULT_ENDPOINT;
+        const ep = isUsx9ShopBase(endpointBase(rawEp)) ? rawEp : DEFAULT_ENDPOINT;
         const inp = document.getElementById("shopEndpointInput");
         if (inp && !inp.value) inp.value = ep;
         // Task count: only seed from storage if user hasn't touched the field.
@@ -213,7 +223,10 @@
 
   function paint(state) {
     const inp = document.getElementById("shopEndpointInput");
-    if (inp && !inp.value) inp.value = (state.settings && state.settings.endpoint) || DEFAULT_ENDPOINT;
+    if (inp && !inp.value) {
+      const rawEp = (state.settings && state.settings.endpoint) || DEFAULT_ENDPOINT;
+      inp.value = isUsx9ShopBase(endpointBase(rawEp)) ? rawEp : DEFAULT_ENDPOINT;
+    }
 
     const pillMap = {
       idle: "闲置", running: "运行中", paused: "已停止", done: "已完成", error: "错误",

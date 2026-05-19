@@ -15,6 +15,7 @@ import type {
   VersionInfo,
   ApiItems,
   DepartmentDashboardSummary,
+  SystemMetrics,
 } from './types';
 
 const BASE = '/api/v1'; // legacy core proxy (resources with NO x9db table)
@@ -76,6 +77,8 @@ export const endpoints = {
     api.get<ListResponse<import('./types').BusinessMetricDaily>>(`${BASE}/data/business_metrics_daily`, params),
   departmentDashboardSummary: () =>
     api.get<DepartmentDashboardSummary>(`${LOCAL}/dashboard/department-summary`),
+  systemMetrics: () =>
+    api.get<SystemMetrics>(`${LOCAL}/admin/system-metrics`),
 
   // Auth / Users
   users: () => api.get<ApiItems<User>>(`${BASE}/auth/users`),

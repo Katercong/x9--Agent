@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 from dataclasses import dataclass
@@ -71,22 +71,17 @@ class Settings:
     remote_table: str = os.getenv("REMOTE_TABLE", "tk_creators")
     remote_timeout: float = float(os.getenv("REMOTE_TIMEOUT", "10"))
 
-    # ----- Embedded Gmail OAuth client (zero-config "涓€閿繛鎺?) -----
-    # The maintainer of this project creates **one** OAuth 2.0 Client of
-    # type "Desktop app" in Google Cloud Console and pastes the values
-    # below (or sets them via env vars on deploy). Every BD member who
-    # uses the app can then click "杩炴帴 Gmail" and authorize through
-    # Google directly 鈥?no per-user Google Cloud setup.
-    #
-    # For Desktop OAuth clients Google explicitly allows embedding the
-    # client_secret in distributed binaries; it's a public identifier,
-    # not a true secret. (See Google docs: "Installed application types".)
-    #
-    # If a user drops their own ``data/gmail_client_secret.json`` it
-    # takes precedence over these defaults.
+    # ----- Gmail OAuth client -----
+    # The deployed server owns one Google OAuth Web client. Users authorize
+    # their own Gmail accounts through Google, and the server exchanges the
+    # authorization code for tokens bound to the logged-in local user.
+    # Keep the client secret and token encryption key server-side only.
+    # If a user drops their own ``data/gmail_client_secret.json`` it takes
+    # precedence over these defaults.
     gmail_default_client_id: str = os.getenv("GMAIL_DEFAULT_CLIENT_ID", "")
     gmail_default_client_secret: str = os.getenv("GMAIL_DEFAULT_CLIENT_SECRET", "")
     gmail_default_project_id: str = os.getenv("GMAIL_DEFAULT_PROJECT_ID", "x9-creator-leads")
+    gmail_token_encryption_key: str = _env_str("GMAIL_TOKEN_ENCRYPTION_KEY", "")
 
     # ----- Outreach AI writer -----
     # Keep API keys in .env / process env only; never hardcode them in source.

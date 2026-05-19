@@ -535,6 +535,24 @@ def _count_today_rows(conn, table: str, department_code: str | None, department_
     }).scalar() or 0)
 
 
+def _count_since_rows(conn, table: str, department_code: str | None, department_id: int | None, since: date) -> int:
+    cols = _columns(conn, table)
+    if not cols:
+        return 0
+    date_col = "collected_at" if "collected_at" in cols else "created_at" if "created_at" in cols else None
+    if not date_col:
+        return 0
+    where = _scope_where(cols, department_code, department_id)
+    date_filter = f"DATE({date_col}) >= :since"
+    where = f"{where} AND {date_filter}" if where else f" WHERE {date_filter}"
+    sql = f"SELECT COUNT(*) FROM {table}{where}"
+    return int(conn.execute(text(sql), {
+        "department_code": department_code,
+        "department_id": department_id,
+        "since": since.isoformat(),
+    }).scalar() or 0)
+
+
 def _staff_history(conn, department_code: str | None, department_id: int | None) -> dict[str, Any]:
     cols = _columns(conn, "staff")
     if not cols:
@@ -587,9 +605,11 @@ def _stage_rank_total(stage_counts: dict[str, int], min_rank: int) -> int:
 def _build_summary(department_code: str | None) -> dict[str, Any]:
     facts: dict[tuple[str, str], dict[str, Any]] = {}
     today = datetime.now().date()
+    recent_since = today - timedelta(days=29)
     day_keys = [(today - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
     source_row_counts: dict[str, int] = {}
     source_today_counts: dict[str, int] = {}
+    source_recent_counts: dict[str, int] = {}
     staff_history = {
         "rows": [],
         "totals": {"contacted": 0, "confirmed": 0, "samples": 0, "videos": 0},
@@ -600,11 +620,12 @@ def _build_summary(department_code: str | None) -> dict[str, Any]:
         for table in ("creator", "tk_creators", "creators"):
             source_row_counts[table] = _count_scoped_rows(conn, table, department_code, dept_id)
             source_today_counts[table] = _count_today_rows(conn, table, department_code, dept_id, today)
+            source_recent_counts[table] = _count_since_rows(conn, table, department_code, dept_id, recent_since)
             for row in _rows_from_table(conn, table, department_code, dept_id):
-                _merge_fact(facts, row, source=table)
+                _merge_fact(facts, row, source=row.get("source") or table)
         source_row_counts["raw_observations"] = _count_scoped_rows(conn, "raw_observations", department_code, dept_id)
         source_today_counts["raw_observations"] = _count_today_rows(conn, "raw_observations", department_code, dept_id, today)
-        _merge_raw_observations(conn, facts, department_code)
+        source_recent_counts["raw_observations"] = _count_since_rows(conn, "raw_observations", department_code, dept_id, recent_since)
         _merge_outreach(conn, facts, department_code, dept_id)
         _merge_review_tasks(conn, facts, department_code)
         staff_history = _staff_history(conn, department_code, dept_id)
@@ -650,12 +671,52 @@ def _build_summary(department_code: str | None) -> dict[str, Any]:
             row["authorized"] += 1
 
     staff_totals = staff_history["totals"]
-    raw_creator_total = sum(source_row_counts.values())
-    raw_today_total = sum(source_today_counts.values())
+    bd_history_creators = int(staff_totals.get("contacted", 0))
+    bd_history_confirmed = int(staff_totals.get("confirmed", 0))
+    bd_history_samples = int(staff_totals.get("samples", 0))
+    bd_history_videos = int(staff_totals.get("videos", 0))
+    for staff_row in staff_history["rows"]:
+        owner = str(staff_row.get("owner") or "未分配").strip() or "未分配"
+        contacted = int(staff_row.get("contacted") or 0)
+        confirmed = int(staff_row.get("confirmed") or 0)
+        samples = int(staff_row.get("samples") or 0)
+        videos = int(staff_row.get("videos") or 0)
+        if contacted > 0:
+            owner_counts[owner] += contacted
+        row = bd.setdefault(owner, {
+            "owner": owner,
+            "creator_count": 0,
+            "contacted": 0,
+            "confirmed": 0,
+            "samples": 0,
+            "videos": 0,
+            "authorized": 0,
+        })
+        row["creator_count"] += contacted
+        row["contacted"] += contacted
+        row["confirmed"] += confirmed
+        row["samples"] += samples
+        row["videos"] += videos
+    if bd_history_creators > 0:
+        source_counts["BD历史数据"] += bd_history_creators
+
+    processed_row_total = sum(source_row_counts.get(table, 0) for table in ("creator", "tk_creators", "creators"))
+    processed_today_total = sum(source_today_counts.get(table, 0) for table in ("creator", "tk_creators", "creators"))
+    processed_recent_total = sum(source_recent_counts.get(table, 0) for table in ("creator", "tk_creators", "creators"))
+    raw_observations_total = source_row_counts.get("raw_observations", 0)
+    raw_observations_today = source_today_counts.get("raw_observations", 0)
+    raw_observations_recent = source_recent_counts.get("raw_observations", 0)
+    all_channel_total = processed_row_total + raw_observations_total + bd_history_creators
+    all_channel_today = processed_today_total + raw_observations_today
+    all_channel_recent = processed_recent_total + raw_observations_recent
+    unique_creator_total = len(facts)
+    unique_today_creators = sum(
+        1
+        for fact in facts.values()
+        if isinstance(fact.get("first_seen"), date) and fact["first_seen"] == today
+    )
 
     reached_keys = {"contacted", "pending_reply", "confirmed", "sample_shipped", "sample_delivered", "video_published", "ad_authorized", "ad_running"}
-    progressed_keys = {"confirmed", "sample_shipped", "sample_delivered", "video_published", "ad_authorized", "ad_running"}
-
     live_reached = sum(stage_counts.get(key, 0) for key in reached_keys)
     live_confirmed = _stage_rank_total(stage_counts, STAGE_META["confirmed"]["rank"])
     live_samples = _stage_rank_total(stage_counts, STAGE_META["sample_shipped"]["rank"])
@@ -664,15 +725,16 @@ def _build_summary(department_code: str | None) -> dict[str, Any]:
     live_running = stage_counts.get("ad_running", 0)
     dropped_total = stage_counts.get("dropped", 0)
 
-    contacted_total = live_reached + int(staff_totals.get("contacted", 0))
-    confirmed_total = live_confirmed + int(staff_totals.get("confirmed", 0))
-    samples_total = live_samples + int(staff_totals.get("samples", 0))
-    videos_total = live_videos + int(staff_totals.get("videos", 0))
+    contacted_total = live_reached + bd_history_creators
+    confirmed_total = live_confirmed + bd_history_confirmed
+    samples_total = live_samples + bd_history_samples
+    videos_total = live_videos + bd_history_videos
     authorized_total = live_authorized
-    business_total = raw_creator_total + int(staff_totals.get("contacted", 0))
+    business_total = all_channel_total
+    stage_total = unique_creator_total + bd_history_creators
 
     overview_counts = {
-        "prospect": max(business_total - contacted_total - dropped_total, 0),
+        "prospect": max(stage_total - contacted_total - dropped_total, 0),
         "contacted": contacted_total,
         "pending_reply": stage_counts.get("pending_reply", 0),
         "confirmed": confirmed_total,
@@ -695,9 +757,6 @@ def _build_summary(department_code: str | None) -> dict[str, Any]:
         "ad_running": live_running,
         "dropped": dropped_total,
     }
-    for row in staff_history["rows"]:
-        owner_counts[row["owner"]] += row["contacted"]
-
     stage_rows = [
         {"key": key, "name": STAGE_META[key]["label"], "count": stage_display_counts.get(key, 0)}
         for key in STAGE_ORDER
@@ -714,10 +773,33 @@ def _build_summary(department_code: str | None) -> dict[str, Any]:
         },
         "summary": {
             "total_creators": business_total,
-            "today_collected": raw_today_total,
+            "today_collected": all_channel_today,
+            "today_new_creators": all_channel_today,
+            "recent_30d_creators": all_channel_recent,
+            "unique_creators": unique_creator_total,
+            "unique_today_creators": unique_today_creators,
+            "business_unique_creators": unique_creator_total + bd_history_creators,
+            "all_channel_rows_total": all_channel_total,
+            "all_channel_rows_today": all_channel_today,
+            "all_channel_rows_recent_30d": all_channel_recent,
+            "processed_rows_total": processed_row_total,
+            "processed_rows_today": processed_today_total,
+            "processed_rows_recent_30d": processed_recent_total,
+            "raw_observations_total": raw_observations_total,
+            "raw_observations_today": raw_observations_today,
+            "raw_observations_recent_30d": raw_observations_recent,
+            "bd_history_creators": bd_history_creators,
+            "bd_history_contacted": bd_history_creators,
+            "bd_history_confirmed": bd_history_confirmed,
+            "bd_history_samples": bd_history_samples,
+            "bd_history_videos": bd_history_videos,
+            "legacy_staff_contacted": bd_history_creators,
+            "legacy_staff_confirmed": bd_history_confirmed,
+            "legacy_staff_samples": bd_history_samples,
+            "legacy_staff_videos": bd_history_videos,
             "contacted": contacted_total,
             "review_pending": sum(1 for f in facts.values() if f.get("review_pending")),
-            "progressed": confirmed_total + samples_total + videos_total + authorized_total,
+            "progressed": confirmed_total,
         },
         "stage_counts": overview_counts,
         "stage_rows": stage_rows,
@@ -742,6 +824,14 @@ def _build_summary(department_code: str | None) -> dict[str, Any]:
         "source_row_counts": [
             {"name": name, "count": count}
             for name, count in source_row_counts.items()
+        ],
+        "source_today_counts": [
+            {"name": name, "count": count}
+            for name, count in source_today_counts.items()
+        ],
+        "source_recent_counts": [
+            {"name": name, "count": count}
+            for name, count in source_recent_counts.items()
         ],
         "staff_history": staff_history,
     }

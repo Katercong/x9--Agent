@@ -43,7 +43,7 @@ LOCAL_SQLITE = Path(
 )
 LOCAL_TABLE = "creators"
 
-REMOTE_BASE = "http://192.168.1.168:18765"
+REMOTE_BASE = "https://usx9.us"
 REMOTE_KEY = "TwXKU_xzfLt-kNj5b8IzSPxYi27KrcOyd-9DNppYPco"
 DEFAULT_REMOTE_TABLE = "tk_creators"
 

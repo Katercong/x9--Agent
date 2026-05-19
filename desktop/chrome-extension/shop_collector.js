@@ -165,21 +165,26 @@
     return null;
   }
 
-  async function doScanDetail(_opts) {
+  async function doScanDetail(opts) {
     console.log(TAG, "doScanDetail start", location.href);
+    const expectedHandle = normalizeHandle(opts && opts.expectedHandle);
     const t0 = Date.now(); let heading = null;
     while (Date.now() - t0 < 12000) {
       heading = document.querySelector("span.text-head-l");
+      const txt = heading ? (heading.textContent || "").trim() : "";
+      if (expectedHandle && (txt || visibleText(document.body).length > 200)) break;
       if (heading) {
-        const txt = (heading.textContent || "").trim();
-        if (txt && /^[a-z0-9._-]{2,40}$/i.test(txt)) break;
+        if (normalizeHandle(txt)) break;
       }
       await sleep(300);
     }
-    if (!heading) { console.warn(TAG, "no handle heading after 12s"); return { ok: false, error: "detail_handle_not_found", url: location.href }; }
-    console.log(TAG, "handle heading=" + (heading.textContent || "").trim());
+    if (!expectedHandle && !detailHandle()) {
+      console.warn(TAG, "no handle heading after 12s");
+      return { ok: false, error: "detail_handle_not_found", url: location.href };
+    }
+    console.log(TAG, "handle heading=" + (heading ? (heading.textContent || "").trim() : ""));
     await sleep(800);
-    const observation = buildDetailObservation();
+    const observation = buildDetailObservation(expectedHandle);
     console.log(TAG, "scraped handle=" + (observation && observation.creator && observation.creator.handle));
     return { ok: true, observation, source_page_url: location.href };
   }
@@ -267,12 +272,20 @@
     ) || lc || null;
   }
 
-  function buildDetailObservation() {
+  function buildDetailObservation(expectedHandle) {
     const rawDomHtml = trimTo((document.documentElement && document.documentElement.outerHTML) || "", 1500000);
     const fullVisibleText = visibleText(document.body);
     const identityText = truncateAtSimilarSection(fullVisibleText);
-    const handle = detailHandle();
+    const lines = textLines(identityText);
+    const handle = normalizeHandle(expectedHandle) || detailHandle();
     const displayName = detailDisplayName(handle) || handle || document.title;
+    const profile = detailProfile(lines, identityText);
+    const metrics = collectMetricsFromCards();
+    const audience = collectAudience(lines);
+    const brands = collectBrands(lines);
+    const videos = collectVideos();
+    const sections = collectSections(identityText);
+    const locationText = findLocationLine(lines);
     return {
       event_type: "creator_observation", platform: "tiktok_shop",
       creator: {
@@ -280,10 +293,18 @@
         profile_url: handle ? `https://www.tiktok.com/@${handle}` : null,
         shop_profile_url: location.href,
         avatar_url: findAvatarUrl(document),
+        bio: profile && profile.bio ? profile.bio : null,
         followers_raw: findFollowersRaw(identityText), followers_count: null,
       },
       tiktok_shop: {
         source_page_url: location.href,
+        profile,
+        metrics,
+        audience,
+        brands,
+        videos,
+        sections,
+        location_text: locationText,
         raw_capture: {
           page_title: document.title || null,
           page_type: "creator_detail",
@@ -328,11 +349,18 @@
     const heading = document.querySelector("span.text-head-l");
     if (heading) {
       const t = (heading.textContent || "").trim();
-      if (/^[a-z0-9._-]{2,40}$/i.test(t)) return t.toLowerCase();
+      const handle = normalizeHandle(t);
+      if (handle) return handle;
     }
     const title = (document.title || "").trim();
     const tm = title.match(/^([a-z0-9._-]{2,40})\s*\|/i);
     if (tm) return tm[1].toLowerCase();
+    return null;
+  }
+
+  function normalizeHandle(value) {
+    const text = String(value || "").trim().replace(/^@+/, "");
+    if (/^[a-z0-9._-]{2,40}$/i.test(text) && /[a-z]/i.test(text)) return text.toLowerCase();
     return null;
   }
 

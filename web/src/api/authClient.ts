@@ -23,6 +23,12 @@ async function authFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+export interface AuthUserStats {
+  collection: { scope: 'company' | 'department'; total: number; today: number };
+  creators: { owned: number; pending_contact: number; contacted: number };
+  outreach: { total: number; drafts: number; queued: number; sent: number; failed: number; cancelled: number; last_at?: string | null };
+}
+
 export interface AuthUserRow {
   id: string;
   username: string;
@@ -33,6 +39,7 @@ export interface AuthUserRow {
   approval_status: string; // active | pending | rejected | disabled
   is_active: boolean;
   department_name?: string | null;
+  stats?: AuthUserStats;
 }
 
 export const authApi = {

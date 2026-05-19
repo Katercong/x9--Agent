@@ -38,7 +38,7 @@ const FAST_AUTO_SETTINGS = {
 const FAST_PAGE_SETTLE_MS = 350;
 const FAST_SEARCH_SETTLE_MS = 800;
 const FAST_TAB_SETTLE_MS = 700;
-const X9_BACKEND_BASE_URL = 'http://127.0.0.1:8000';
+const X9_BACKEND_BASE_URL = 'https://usx9.us';
 const X9_OBSERVATION_URL = `${X9_BACKEND_BASE_URL}/api/local/collector/observations`;
 const X9_HEARTBEAT_URL = `${X9_BACKEND_BASE_URL}/api/local/extension/heartbeat`;
 const X9_EXTENSION_ID = 'tiktok_creator_lead_browser_1_0_19';
@@ -1490,8 +1490,6 @@ function addSourceVideosAndPendingProfiles(state, videos, keyword) {
       collected_at: now(),
       handled: false
     };
-    sendX9VideoObservation(record, keyword).catch(() => undefined);
-
     if (!state.sourceVideos.some((item) => item.video_url === record.video_url && item.search_keyword === keyword)) {
       state.sourceVideos.push(record);
     }
@@ -1816,8 +1814,6 @@ function ensureSourceVideoRecord(state, video, keyword) {
   if (!video?.video_url || !video?.creator_username || !video?.creator_profile_url) {
     return false;
   }
-  sendX9VideoObservation(video, keyword).catch(() => undefined);
-
   const targetKey = getTikTokVideoIdentityKey(video.video_url);
   const targetUrl = canonicalUrl(video.video_url);
   const exists = state.sourceVideos.some((item) => {
@@ -2094,8 +2090,13 @@ async function sendX9SkippedProfileObservation(skipped, keyword) {
 }
 
 async function sendX9VideoObservation(video, keyword) {
-  const payload = buildX9VideoObservation(video, keyword);
-  return postX9Observation(payload);
+  return {
+    ok: true,
+    action: 'skipped',
+    reason: 'source_video_seed_only',
+    handle: normalizeUsername(video?.creator_username) || normalizeUsername(extractUsernameFromTikTokUrl(video?.creator_profile_url)) || '',
+    search_keyword: keyword || video?.search_keyword || ''
+  };
 }
 
 async function postX9Observation(payload) {
@@ -2261,12 +2262,6 @@ async function syncX9StoredState(reason) {
 
 function buildX9BackfillObservations(state) {
   const observations = [];
-  for (const video of state.sourceVideos || []) {
-    const payload = buildX9VideoObservation(video, video.search_keyword);
-    if (payload) {
-      observations.push(payload);
-    }
-  }
   for (const lead of state.leads || []) {
     const payload = buildX9ProfileObservation(
       profileFromLead(lead),
@@ -3009,11 +3004,7 @@ async function clickVideoCloseButtonOnce(preferredTabId = null) {
 const X9_API_BASE_KEY = "x9_api_base";
 const X9_API_BASE_ACTIVE_KEY = "x9_api_base_active";
 const X9_BACKEND_CANDIDATES = [
-  "http://localhost:8000",
-  "http://127.0.0.1:8000",
-  "http://usx9.us",
-  "http://192.168.1.171:8000",
-  "http://192.168.1.171",
+  "https://usx9.us",
 ];
 
 function x9JoinPath(base, path) {

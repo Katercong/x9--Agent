@@ -153,12 +153,14 @@ def run_full_pipeline(
 
 
 def _creator_to_dict(creator: Creator, repeat_discovery: dict[str, Any] | None = None) -> dict:
+    shop = _load_json_dict(creator.tiktok_shop_json)
+    shop_text = _shop_signal_text(shop)
     return {
         "platform": creator.platform,
-        "search_keyword": creator.search_keyword,
-        "bio": creator.bio,
+        "search_keyword": creator.search_keyword or _shop_search_keyword(shop),
+        "bio": _join_texts(creator.bio, shop_text),
         "source_video_url": creator.source_video_url,
-        "source_video_title": creator.source_video_title,
+        "source_video_title": _join_texts(creator.source_video_title, _shop_video_titles(shop)),
         "source_video_description": creator.source_video_description,
         "handle": creator.handle,
         "display_name": creator.display_name,
@@ -170,6 +172,107 @@ def _creator_to_dict(creator: Creator, repeat_discovery: dict[str, Any] | None =
         "hashtags": [],
         "repeat_discovery": repeat_discovery or {},
     }
+
+
+def _load_json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _shop_search_keyword(shop: dict[str, Any]) -> str:
+    profile = shop.get("profile") if isinstance(shop.get("profile"), dict) else {}
+    categories = profile.get("categories") if isinstance(profile.get("categories"), list) else []
+    return str(
+        shop.get("category_text")
+        or profile.get("primary_category")
+        or next((item for item in categories if item), "")
+        or ""
+    )
+
+
+def _shop_signal_text(shop: dict[str, Any]) -> str:
+    if not shop:
+        return ""
+    parts: list[str] = []
+    for key in (
+        "category_text",
+        "gmv_raw",
+        "gpm_raw",
+        "avg_commission_rate_raw",
+        "detail_text_excerpt",
+        "detail_signal_lines",
+        "detail_sections",
+        "profile",
+        "metrics",
+        "audience",
+        "brands",
+        "videos",
+        "sections",
+        "location_text",
+    ):
+        _append_shop_text(parts, shop.get(key))
+    return _limit_text("\n".join(parts), 30000)
+
+
+def _shop_video_titles(shop: dict[str, Any]) -> str:
+    videos = shop.get("videos")
+    if not isinstance(videos, list):
+        return ""
+    titles = []
+    for item in videos[:30]:
+        if isinstance(item, dict):
+            title = item.get("title")
+        else:
+            title = item
+        if title:
+            titles.append(str(title))
+    return _limit_text("\n".join(titles), 10000)
+
+
+def _append_shop_text(parts: list[str], value: Any) -> None:
+    if value in (None, "", [], {}):
+        return
+    if isinstance(value, str):
+        text = value.strip()
+        if text:
+            parts.append(text)
+        return
+    if isinstance(value, (int, float)):
+        parts.append(str(value))
+        return
+    if isinstance(value, list):
+        for item in value[:120]:
+            _append_shop_text(parts, item)
+            if len(parts) >= 240:
+                break
+        return
+    if isinstance(value, dict):
+        for key, item in list(value.items())[:120]:
+            if str(key) in {"raw_dom_html", "card_html"}:
+                continue
+            if isinstance(item, (str, int, float)):
+                text = str(item).strip()
+                if text:
+                    parts.append(f"{key}: {text}")
+            else:
+                _append_shop_text(parts, item)
+            if len(parts) >= 240:
+                break
+
+
+def _join_texts(*values: Any) -> str:
+    return "\n".join(str(v).strip() for v in values if str(v or "").strip())
+
+
+def _limit_text(value: str, limit: int) -> str:
+    return value[:limit]
 
 
 def _repeat_discovery_for_creators(db: Session, creators: list[Creator]) -> dict[str, dict[str, Any]]:
@@ -238,11 +341,30 @@ def _add_repeat_observation(state: dict[str, Any], payload: dict[str, Any], obs:
         "bio": (payload.get("creator") or {}).get("bio") or "",
         "source_video_title": source_video.get("title") or "",
         "source_video_description": source_video.get("description") or "",
+        "tiktok_shop": _raw_shop_signal_text(payload),
     }
     for category in _categories_for_sources(sources):
         state["tag_supports"][category].add(support_key)
     if find_keyword_hits(COMMERCE_SIGNAL_KEYWORDS, sources):
         state["commerce_supports"].add(support_key)
+
+
+def _raw_shop_signal_text(payload: dict[str, Any]) -> str:
+    shop = payload.get("tiktok_shop") if isinstance(payload.get("tiktok_shop"), dict) else {}
+    if not shop:
+        return ""
+    list_item = shop.get("list_item") if isinstance(shop.get("list_item"), dict) else {}
+    raw_capture = shop.get("raw_capture") if isinstance(shop.get("raw_capture"), dict) else {}
+    parts = [
+        list_item.get("category_text"),
+        list_item.get("gmv_raw"),
+        list_item.get("gpm_raw"),
+        list_item.get("avg_commission_rate_raw"),
+        list_item.get("card_visible_text"),
+        raw_capture.get("page_title"),
+        shop.get("raw_visible_text"),
+    ]
+    return _limit_text(_join_texts(*parts), 30000)
 
 
 def _categories_for_sources(sources: dict[str, str]) -> set[str]:

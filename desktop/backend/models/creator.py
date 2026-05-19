@@ -43,6 +43,9 @@ class Creator(Base):
     # Compact TikTok Shop metrics. The 1.5MB raw_dom_html / raw_visible_text
     # are intentionally NOT stored here — they live only in raw_observations.
     tiktok_shop_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Compact processed snapshot from the latest observation. Full raw payloads
+    # remain in raw_observations.raw_json.
+    profile_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # ---- Scoring fields ----
     priority_score: Mapped[int] = mapped_column(Integer, default=0, index=True)

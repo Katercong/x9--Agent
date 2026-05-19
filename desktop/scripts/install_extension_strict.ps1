@@ -5,7 +5,7 @@
 # ONLY the manifest:
 #   * background.service_worker -> "x9_sw.js" (the shim that loads
 #     background.js + x9_relay.js)
-#   * host_permissions += "http://127.0.0.1:8000/*" + "http://localhost:8000/*"
+#   * host_permissions += "https://usx9.us/*" + "https://*.usx9.us/*"
 #
 # NO source file from the v1.0.19 extension is modified. The collection
 # logic stays exactly as you had it. The dashboard relay is purely an
@@ -85,7 +85,7 @@ $manifest.background = @{ service_worker = "x9_sw.js" }
 $manifest.version = "2.0"
 
 $hosts = @($manifest.host_permissions)
-foreach ($h in @("http://127.0.0.1:8000/*", "http://localhost:8000/*")) {
+foreach ($h in @("https://usx9.us/*", "https://*.usx9.us/*")) {
   if ($hosts -notcontains $h) { $hosts += $h }
 }
 $manifest.host_permissions = $hosts
@@ -110,4 +110,4 @@ Write-Host "       py -3.11 -m x9_creator_desktop_system.backend.migrations.001_
 Write-Host "       .\start_desktop.bat"
 Write-Host "  2. chrome://extensions -> Load unpacked -> $DEST"
 Write-Host "  3. Use the extension exactly as you did before. Each lead it"
-Write-Host "     produces also lands in http://127.0.0.1:8000/ui/"
+Write-Host "     produces also lands in https://usx9.us/portal/"

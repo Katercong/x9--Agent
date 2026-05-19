@@ -70,6 +70,14 @@ export function useDepartmentDashboardSummary() {
   return useQuery({ queryKey: ['dashboard', 'department-summary'], queryFn: () => endpoints.departmentDashboardSummary() });
 }
 
+export function useSystemMetrics() {
+  return useQuery({
+    queryKey: ['admin', 'system-metrics'],
+    queryFn: () => endpoints.systemMetrics(),
+    refetchInterval: 10_000,
+  });
+}
+
 export function useUsers() {
   return useQuery({ queryKey: ['auth', 'users'], queryFn: () => endpoints.users() });
 }

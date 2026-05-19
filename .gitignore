@@ -65,3 +65,4 @@ Thumbs.db
 logs/
 *.err.log
 *.out.log
+/web-user/dist/

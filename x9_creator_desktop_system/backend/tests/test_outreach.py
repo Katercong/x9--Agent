@@ -252,7 +252,9 @@ def test_create_draft_then_patch_then_send(client, sample_creator):
     assert sent["status"] == "sent"
     assert sent["gmail_message_id"] == "abc123"
     mock_send.assert_called_once()
-    assert mock_send.call_args.kwargs["user_id"] is None
+    current_user = client.get("/api/local/auth/me").json()["user"]
+    assert mock_send.call_args.kwargs["user_id"] == current_user["id"]
+    assert mock_send.call_args.kwargs["include_shared"] is False
     # creator current_status should now be "已建联"
     creator_after = client.get(f"/api/local/creators/{sample_creator}").json()
     assert creator_after["current_status"] == "已建联"
@@ -323,7 +325,7 @@ def test_gmail_status_does_not_crash_without_creds(client):
     assert "authorized" in body
 
 
-def test_admin_gmail_status_includes_legacy_unbound_account(client):
+def test_admin_gmail_status_excludes_legacy_unbound_account(client):
     account_id = "gmail_legacy_unbound"
     with SessionLocal() as session:
         session.query(GmailAccount).filter_by(id=account_id).delete()
@@ -343,15 +345,130 @@ def test_admin_gmail_status_includes_legacy_unbound_account(client):
         r = client.get("/api/local/outreach/gmail/status")
         assert r.status_code == 200
         accounts = r.json()["accounts"]
-        assert any(account["id"] == account_id for account in accounts)
+        assert not any(account["id"] == account_id for account in accounts)
     finally:
         with SessionLocal() as session:
             session.query(GmailAccount).filter_by(id=account_id).delete()
             session.commit()
 
 
-def test_department_user_sees_shared_gmail_account():
-    account_id = "gmail_shared_visible_to_department"
+def test_matching_legacy_gmail_account_is_claimed_by_current_user():
+    account_id = "gmail_legacy_claimed_by_user"
+    with SessionLocal() as session:
+        user = auth_service.upsert_user(
+            session,
+            username="gmail_claim_user",
+            email="claim-user@example.com",
+            password="TempPass123!",
+            role="department_user",
+            department_code="cross_border",
+            approval_status=auth_service.ACTIVE_STATUS,
+        )
+        session.query(GmailAccount).filter_by(id=account_id).delete()
+        session.query(GmailAccount).filter_by(email="claim-user@example.com").delete()
+        session.add(
+            GmailAccount(
+                id=account_id,
+                email="claim-user@example.com",
+                display_name="Claim User",
+                token_json="{}",
+                is_default=1,
+                is_active=1,
+            )
+        )
+        user_id = user.id
+        token, _ = auth_service.create_session_for_user(session, user, entry_scope="workspace")
+
+    c = TestClient(app)
+    c.cookies.set(auth_service.SESSION_COOKIE, token)
+    try:
+        r = c.get("/api/local/outreach/gmail/status")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["authorized"] is True
+        assert any(account["id"] == account_id for account in body["accounts"])
+        with SessionLocal() as session:
+            row = session.get(GmailAccount, account_id)
+            assert row is not None
+            assert row.user_id == user_id
+    finally:
+        with SessionLocal() as session:
+            session.query(GmailAccount).filter_by(id=account_id).delete()
+            session.commit()
+
+
+def test_gmail_upsert_rejects_account_bound_to_other_user():
+    account_id = "gmail_owned_by_other_user"
+    email = "owned-gmail@example.com"
+    with SessionLocal() as session:
+        session.query(GmailAccount).filter_by(id=account_id).delete()
+        session.query(GmailAccount).filter_by(email=email).delete()
+        session.add(
+            GmailAccount(
+                id=account_id,
+                user_id="owner_a",
+                department_code="cross_border",
+                email=email,
+                display_name="Owned Gmail",
+                token_json="{}",
+                is_default=1,
+                is_active=1,
+            )
+        )
+        session.commit()
+
+        with pytest.raises(gmail_service.GmailNotAuthorizedError):
+            gmail_service._upsert_authorized_account(
+                session,
+                user_email=email,
+                raw_token_json='{"refresh_token":"new"}',
+                label=None,
+                user_id="owner_b",
+                department_code="cross_border",
+            )
+    with SessionLocal() as session:
+        session.query(GmailAccount).filter_by(id=account_id).delete()
+        session.commit()
+
+
+def test_gmail_upsert_claims_unowned_account_for_authorizing_user():
+    account_id = "gmail_unowned_claimed_on_authorize"
+    email = "claim-on-authorize@example.com"
+    raw_token = '{"refresh_token":"new"}'
+    with SessionLocal() as session:
+        session.query(GmailAccount).filter_by(id=account_id).delete()
+        session.query(GmailAccount).filter_by(email=email).delete()
+        session.add(
+            GmailAccount(
+                id=account_id,
+                email=email,
+                display_name="Claim On Authorize",
+                token_json="{}",
+                is_default=0,
+                is_active=1,
+            )
+        )
+        session.commit()
+
+        row = gmail_service._upsert_authorized_account(
+            session,
+            user_email=email,
+            raw_token_json=raw_token,
+            label="workspace",
+            user_id="owner_b",
+            department_code="cross_border",
+        )
+        assert row.id == account_id
+        assert row.user_id == "owner_b"
+        assert row.department_code == "cross_border"
+        assert row.is_default == 1
+        assert gmail_service._token_json_from_storage(row.token_json) == raw_token
+        session.commit()
+    with SessionLocal() as session:
+        session.query(GmailAccount).filter_by(id=account_id).delete()
+        session.commit()
+def test_department_user_does_not_see_shared_gmail_account():
+    account_id = "gmail_shared_hidden_from_department"
     with SessionLocal() as session:
         user = auth_service.upsert_user(
             session,
@@ -380,8 +497,8 @@ def test_department_user_sees_shared_gmail_account():
         r = c.get("/api/local/outreach/gmail/status")
         assert r.status_code == 200
         body = r.json()
-        assert body["authorized"] is True
-        assert any(account["id"] == account_id for account in body["accounts"])
+        assert body["authorized"] is False
+        assert not any(account["id"] == account_id for account in body["accounts"])
     finally:
         with SessionLocal() as session:
             session.query(GmailAccount).filter_by(id=account_id).delete()

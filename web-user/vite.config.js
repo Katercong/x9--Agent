@@ -8,14 +8,12 @@ export default defineConfig({
     },
     server: {
         port: 5174,
-        host: '0.0.0.0',
-        // Proxy /api/local to desktop backend so dev mode hits real APIs.
+        // Proxy /api/local to the live backend so dev mode never depends on a local API port.
         proxy: {
             '/api/local': {
-                target: 'http://localhost:8000',
+                target: 'https://usx9.us',
                 changeOrigin: true,
-                secure: false,
-                cookieDomainRewrite: 'localhost',
+                secure: true,
             },
         },
     },

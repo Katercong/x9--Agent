@@ -43,6 +43,29 @@ function Avatar({ name, bg }: { name: string; bg: string }) {
   );
 }
 
+
+function fmt(n: number | null | undefined) {
+  return new Intl.NumberFormat('zh-CN').format(Number(n || 0));
+}
+
+function scopeLabel(scope: string | undefined) {
+  return scope === 'company' ? '全公司' : '部门';
+}
+
+function StatLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-2 leading-5">
+      <span className="text-xxs text-muted whitespace-nowrap">{label}</span>
+      <span className="text-xs num font-semibold text-gray-800 whitespace-nowrap">{value}</span>
+    </div>
+  );
+}
+
+function StatCell({ children }: { children: React.ReactNode }) {
+  return <div className="min-w-[132px] space-y-0.5">{children}</div>;
+}
+
+
 function PendingRegistrations({ onChanged }: { onChanged: () => void }) {
   const { data, isLoading, error, refetch } = useAuthUsers();
   const [busy, setBusy] = useState<string | null>(null);
@@ -198,7 +221,6 @@ function AllUsers() {
   const { data, isLoading, error, refetch } = useAuthUsers();
   const [editing, setEditing] = useState<AuthUserRow | null>(null);
   const users = data?.items ?? [];
-
   const columns: Column<AuthUserRow>[] = [
     {
       key: 'user', header: '用户',
@@ -222,6 +244,33 @@ function AllUsers() {
       },
     },
     { key: 'dept', header: '部门', cell: (r) => <span className="text-xs">{r.department_name || '—'}</span> },
+    {
+      key: 'collectionStats', header: '采集', width: '150px',
+      cell: (r) => (
+        <StatCell>
+          <StatLine label={`${scopeLabel(r.stats?.collection?.scope)}总量`} value={fmt(r.stats?.collection?.total)} />
+          <StatLine label="今日采集" value={fmt(r.stats?.collection?.today)} />
+        </StatCell>
+      ),
+    },
+    {
+      key: 'creatorStats', header: '达人 / 建联', width: '160px',
+      cell: (r) => (
+        <StatCell>
+          <StatLine label="负责达人" value={fmt(r.stats?.creators?.owned)} />
+          <StatLine label="已建联" value={fmt(r.stats?.creators?.contacted)} />
+        </StatCell>
+      ),
+    },
+    {
+      key: 'outreachStats', header: '邮件建联', width: '170px',
+      cell: (r) => (
+        <StatCell>
+          <StatLine label="已发送" value={fmt(r.stats?.outreach?.sent)} />
+          <StatLine label="草稿 / 失败" value={`${fmt(r.stats?.outreach?.drafts)} / ${fmt(r.stats?.outreach?.failed)}`} />
+        </StatCell>
+      ),
+    },
     {
       key: 'status', header: '状态',
       cell: (r) => {

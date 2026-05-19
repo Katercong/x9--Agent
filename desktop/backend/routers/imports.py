@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..services.departments import current_department_code
-from ..services.creator_table_import import import_creator_table, template_csv_bytes
+from ..services.creator_table_import import import_creator_table, template_csv_bytes, template_xlsx_bytes
 
 
 router = APIRouter(prefix="/api/local/import", tags=["import"])
@@ -18,6 +18,15 @@ def creator_import_template() -> Response:
         content=template_csv_bytes(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="creator-import-template.csv"'},
+    )
+
+
+@router.get("/creators/template.xlsx")
+def creator_import_template_xlsx() -> Response:
+    return Response(
+        content=template_xlsx_bytes(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="creator-import-template.xlsx"'},
     )
 
 

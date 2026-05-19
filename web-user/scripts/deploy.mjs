@@ -32,4 +32,4 @@ if (existsSync(DEST)) {
 console.log('[deploy] Copying', SRC, '→', DEST);
 copyDir(SRC, DEST);
 console.log('[deploy] Done. Mount path: /portal/');
-console.log('[deploy] Reachable at: http://localhost:8000/portal/');
+console.log('[deploy] Reachable at: https://usx9.us/portal/');

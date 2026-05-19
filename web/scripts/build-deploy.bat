@@ -17,5 +17,5 @@ if errorlevel 1 (
     popd
     exit /b 1
 )
-echo [build-deploy] All done. Visit http://localhost:18765/web-preview/
+echo [build-deploy] All done. Visit https://usx9.us/web-preview/
 popd

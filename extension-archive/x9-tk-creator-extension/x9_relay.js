@@ -9,12 +9,7 @@ const X9_DASHBOARD_COMMAND_MESSAGE = "X9_DASHBOARD_COMMAND";
 // Candidates tried in order when no user override is set. Whichever responds
 // first to a heartbeat becomes the cached "active" base.
 const X9_API_BASE_CANDIDATES = [
-  "http://localhost:8000",
-  "http://127.0.0.1:8000",
   "https://usx9.us",
-  "http://usx9.us",
-  "http://192.168.1.171:8000",
-  "http://192.168.1.171",
 ];
 
 function joinPath(base, path) {
@@ -374,7 +369,7 @@ async function dispatchShopDashboardCommand(command) {
 
 async function resolveCollectorEndpoint() {
   const base = await resolveApiBase();
-  return joinPath(base || "http://127.0.0.1:8000", "/api/local/collector/observations");
+  return joinPath(base || "https://usx9.us", "/api/local/collector/observations");
 }
 
 async function openSidePanelIfPossible() {

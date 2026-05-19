@@ -7,7 +7,7 @@
 | 项目 | 路径 | 后端 | 访问 URL |
 |---|---|---|---|
 | **web/** (管理端 · 4 角色 × 24 页) | `F:\X9_AI_system\web\` | core / FastAPI :18765 | http://localhost:18765/**web-preview/** |
-| **web-user/** (用户端 · 8 页) | `F:\X9_AI_system\web-user\` | desktop / FastAPI :8000 | http://localhost:8000/**portal/** |
+| **web-user/** (用户端 · 8 页) | `F:\X9_AI_system\web-user\` | desktop / FastAPI | https://usx9.us/**portal/** |
 
 ### 部署到生产
 

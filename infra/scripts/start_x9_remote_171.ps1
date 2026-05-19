@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$RemoteApiUrl = "http://192.168.1.171:18765"
+$RemoteApiUrl = "https://usx9.us"
 $StartDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 function Find-SystemDir {
@@ -130,8 +130,8 @@ try {
   Stop-OldBackendOn8000
 
   Write-Host ""
-  Write-Host "Starting UI: http://127.0.0.1:8000/ui/"
-  Start-Process "http://127.0.0.1:8000/ui/"
+  Write-Host "Starting UI: https://usx9.us/portal/"
+  Start-Process "https://usx9.us/portal/"
   & py -3.11 -m uvicorn $AppModule --host 127.0.0.1 --port 8000
 } finally {
   Pop-Location

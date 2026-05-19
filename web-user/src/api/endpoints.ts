@@ -20,7 +20,7 @@ export const endpoints = {
   dbStatus: () => api.get<AppStatus>('/db/status'),
 
   // Business / Shared
-  businessDashboard: () => api.get<BusinessDashboard>('/admin/business-dashboard'),
+  businessDashboard: () => api.get<BusinessDashboard>('/dashboard/department-summary'),
 
   // Creators
   creators: (params?: Record<string, unknown>) =>
@@ -64,13 +64,13 @@ export const endpoints = {
   createOutreachTemplate: (body: Partial<OutreachTemplate>) =>
     api.post<OutreachTemplate>('/outreach/templates', body),
   patchOutreachTemplate: (id: string, body: Partial<OutreachTemplate>) =>
-    api.put<OutreachTemplate>(`/outreach/templates/${id}`, body),
+    api.patch<OutreachTemplate>(`/outreach/templates/${id}`, body),
   deleteOutreachTemplate: (id: string) => api.del<{ ok: boolean }>(`/outreach/templates/${id}`),
 
   previewOutreach: (creator_id: string | number, body: {
     template_id?: string; language?: string; use_ai?: boolean;
     tone?: string; max_length?: number; n?: 1 | 2 | 3;
-    sender_name?: string; sender_signature?: string; script_keywords?: string[];
+    sender_name?: string; sender_signature?: string; script_keywords?: string;
   }) => api.post<PreviewResult>(`/outreach/preview/${encodeURIComponent(String(creator_id))}`, body),
 
   createDraft: (body: Partial<OutreachDraft> & { creator_id: string | number; to_email: string; subject: string; body: string }) =>
@@ -78,7 +78,7 @@ export const endpoints = {
   listDrafts: (params?: Record<string, unknown>) =>
     api.get<ListResp<OutreachDraft>>('/outreach/drafts', params),
   patchDraft: (id: string, body: Partial<OutreachDraft>) =>
-    api.put<OutreachDraft>(`/outreach/draft/${id}`, body),
+    api.patch<OutreachDraft>(`/outreach/draft/${id}`, body),
   deleteDraft: (id: string) => api.del<{ ok: boolean }>(`/outreach/draft/${id}`),
   sendDraft: (id: string, body: { confirm?: boolean; update_creator_status?: boolean; from_account_id?: string }) =>
     api.post<OutreachDraft>(`/outreach/send/${id}`, { confirm: true, ...body }),
@@ -101,5 +101,5 @@ export const endpoints = {
 
   // ---------- Review tasks write ----------
   patchReviewTask: (id: string | number, body: ReviewTaskUpdate) =>
-    api.put<ReviewTask>(`/review-tasks/${encodeURIComponent(String(id))}`, body),
+    api.patch<ReviewTask>(`/review-tasks/${encodeURIComponent(String(id))}`, body),
 };

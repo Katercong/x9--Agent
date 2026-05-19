@@ -13,12 +13,7 @@ const X9_LEGACY_WORKER_IDS = [
 // Candidates tried in order when no user override is set. Whichever responds
 // first to a heartbeat becomes the cached "active" base.
 const X9_API_BASE_CANDIDATES = [
-  "http://localhost:8000",
-  "http://127.0.0.1:8000",
   "https://usx9.us",
-  "http://usx9.us",
-  "http://192.168.1.171:8000",
-  "http://192.168.1.171",
 ];
 
 function joinPath(base, path) {
@@ -34,11 +29,7 @@ function dashboardBaseFromUrl(url) {
     const parsed = new URL(url || "");
     const host = parsed.hostname.toLowerCase();
     const path = parsed.pathname || "/";
-    const knownHost = host === "usx9.us"
-      || host.endsWith(".usx9.us")
-      || host === "localhost"
-      || host === "127.0.0.1"
-      || host === "192.168.1.171";
+    const knownHost = host === "usx9.us" || host.endsWith(".usx9.us");
     const dashboardPath = path === "/"
       || path.startsWith("/portal")
       || path.startsWith("/ui")
@@ -79,7 +70,9 @@ async function setActiveApiBase(base) {
 }
 
 async function getCandidateOrder() {
-  const { override, active } = await getStoredApiBase();
+  const stored = await getStoredApiBase();
+  const override = allowedApiBase(stored.override);
+  const active = allowedApiBase(stored.active);
   // Explicit user override always wins.
   if (override) return [normalizeApiBase(override)];
   // Prefer the currently open X9 dashboard origin, then the last working one.
@@ -94,6 +87,22 @@ async function getCandidateOrder() {
     if (base && !ordered.includes(base)) ordered.push(base);
   }
   return ordered;
+}
+
+function allowedApiBase(base) {
+  const normalized = normalizeApiBase(base);
+  if (!normalized) return "";
+  try {
+    const parsed = new URL(normalized);
+    const host = parsed.hostname.toLowerCase();
+    if (parsed.protocol === "https:" && (host === "usx9.us" || host.endsWith(".usx9.us"))) {
+      return normalized;
+    }
+  } catch {
+    return "";
+  }
+  chrome.storage.local.remove([X9_API_BASE_KEY, X9_API_BASE_ACTIVE_KEY]).catch(() => undefined);
+  return "";
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -214,8 +223,13 @@ function buildLeadIngestItem(lead) {
     bio: lead.bio || "",
     followers: numericFollowerCount(lead.followers_count, lead.followers_raw),
     followers_raw: lead.followers_raw || "",
+    following_raw: lead.following_raw || "",
+    likes_raw: lead.likes_raw || "",
     email: lead.email || "",
+    emails: parseJsonArray(lead.emails_json || lead.emails),
     external_links: parseJsonArray(lead.external_links),
+    visible_text: lead.visible_text || "",
+    source_url: lead.source_url || lead.current_url || "",
     source: "tiktok_creator_lead_browser",
     current_status: "prospect",
     search_keyword: lead.search_keyword || "",
@@ -225,7 +239,7 @@ function buildLeadIngestItem(lead) {
     notes: `filter=qualified message=${safeNoteValue(lead.lead_status || "lead_saved")}`,
     last_seen_at: lead.last_seen_at || lead.collected_at || new Date().toISOString(),
   };
-  return hasDirectContact(item) ? item : null;
+  return item;
 }
 
 function buildSkippedIngestItem(skipped) {
@@ -242,8 +256,13 @@ function buildSkippedIngestItem(skipped) {
     bio: skipped.bio || "",
     followers: numericFollowerCount(skipped.followers_count, skipped.followers_raw),
     followers_raw: skipped.followers_raw || "",
+    following_raw: skipped.following_raw || "",
+    likes_raw: skipped.likes_raw || "",
     email: skipped.email || "",
+    emails: parseJsonArray(skipped.emails_json || skipped.emails),
     external_links: parseJsonArray(skipped.external_links),
+    visible_text: skipped.visible_text || "",
+    source_url: skipped.source_url || skipped.current_url || "",
     source: "tiktok_creator_lead_browser",
     current_status: "dropped",
     search_keyword: skipped.search_keyword || "",
@@ -253,19 +272,7 @@ function buildSkippedIngestItem(skipped) {
     notes: `filter=${safeNoteValue(reason)} message=skipped`,
     last_seen_at: skipped.checked_at || skipped.last_seen_at || new Date().toISOString(),
   };
-  return hasDirectContact(item) ? item : null;
-}
-
-function hasDirectContact(item) {
-  const email = String(item.email || "");
-  if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(email)) {
-    return true;
-  }
-  const linkText = JSON.stringify(item.external_links || []);
-  const text = `${item.bio || ""} ${linkText}`.toLowerCase();
-  return /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(text)
-    || /(whats\s*app|whatsapp|wa\.me|api\.whatsapp\.com|chat\.whatsapp\.com|telegram|t\.me\/|telegram\.me|line\.me|lin\.ee|facebook\.com|fb\.me|m\.me\/|dm me|dm for|direct message|message me|instagram\.com|insta|ig[:\s@]|tel:)/i.test(text)
-    || /(?:\+|00)?\d[\d\s().-]{7,}\d/.test(text);
+  return item;
 }
 
 function buildRelayKey(item) {
@@ -435,7 +442,7 @@ async function dispatchShopDashboardCommand(command) {
 
 async function resolveCollectorEndpoint() {
   const base = await resolveApiBase();
-  return joinPath(base || "http://127.0.0.1:8000", "/api/local/collector/observations");
+  return joinPath(base || "https://usx9.us", "/api/local/collector/observations");
 }
 
 async function openSidePanelIfPossible() {

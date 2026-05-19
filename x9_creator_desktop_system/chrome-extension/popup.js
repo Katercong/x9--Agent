@@ -38,7 +38,7 @@ const FAST_AUTO_SETTINGS = {
 const FAST_PAGE_SETTLE_MS = 350;
 const FAST_SEARCH_SETTLE_MS = 800;
 const FAST_TAB_SETTLE_MS = 700;
-const X9_BACKEND_BASE_URL = 'http://127.0.0.1:8000';
+const X9_BACKEND_BASE_URL = 'https://usx9.us';
 const X9_EXTENSION_ID = 'tiktok_creator_lead_browser_1_0_19';
 const X9_WORKER_ID = 'tiktok_creator_lead_browser_1_0_19';
 const X9_ACCOUNT_ID = 'local_tiktok_account';
@@ -1488,8 +1488,6 @@ function addSourceVideosAndPendingProfiles(state, videos, keyword) {
       collected_at: now(),
       handled: false
     };
-    sendX9VideoObservation(record, keyword).catch(() => undefined);
-
     if (!state.sourceVideos.some((item) => item.video_url === record.video_url && item.search_keyword === keyword)) {
       state.sourceVideos.push(record);
     }
@@ -1814,8 +1812,6 @@ function ensureSourceVideoRecord(state, video, keyword) {
   if (!video?.video_url || !video?.creator_username || !video?.creator_profile_url) {
     return false;
   }
-  sendX9VideoObservation(video, keyword).catch(() => undefined);
-
   const targetKey = getTikTokVideoIdentityKey(video.video_url);
   const targetUrl = canonicalUrl(video.video_url);
   const exists = state.sourceVideos.some((item) => {
@@ -1983,6 +1979,8 @@ function buildLead(profile, keyword, source, currentUrl, title) {
     email: profile.email,
     emails_json: JSON.stringify(profile.emails || []),
     external_links: JSON.stringify(profile.external_links || []),
+    visible_text: profile.visible_text || '',
+    source_url: profile.source_url || currentUrl || '',
     source_video_url: source?.source_video_url || currentUrl,
     source_video_title: source?.source_video_title || title || '',
     source_video_description: source?.source_video_description || '',
@@ -2009,6 +2007,21 @@ function buildX9ProfileObservation(profile, keyword, source, currentUrl, title, 
     account_id: X9_ACCOUNT_ID,
     search_keyword: keyword || null,
     current_status: currentStatus,
+    raw_profile: {
+      username: profile?.username || null,
+      nickname: profile?.nickname || null,
+      profile_url: profile?.profile_url || null,
+      bio: profile?.bio || null,
+      followers_raw: profile?.followers_raw || null,
+      followers_count: Number.isFinite(profile?.followers_count) ? profile.followers_count : null,
+      following_raw: profile?.following_raw || null,
+      likes_raw: profile?.likes_raw || null,
+      email: profile?.email || null,
+      emails: Array.isArray(profile?.emails) ? profile.emails : [],
+      external_links: Array.isArray(profile?.external_links) ? profile.external_links : [],
+      visible_text: profile?.visible_text || null,
+      source_url: profile?.source_url || currentUrl || null
+    },
     creator: {
       handle,
       display_name: profile?.nickname || handle,
@@ -2016,9 +2029,14 @@ function buildX9ProfileObservation(profile, keyword, source, currentUrl, title, 
       bio: profile?.bio || null,
       followers_raw: profile?.followers_raw || null,
       followers_count: Number.isFinite(profile?.followers_count) ? profile.followers_count : null,
+      following_raw: profile?.following_raw || null,
+      likes_raw: profile?.likes_raw || null,
       current_status: currentStatus,
       email: profile?.email || null,
-      external_links: Array.isArray(profile?.external_links) ? profile.external_links : []
+      emails: Array.isArray(profile?.emails) ? profile.emails : [],
+      external_links: Array.isArray(profile?.external_links) ? profile.external_links : [],
+      visible_text: profile?.visible_text || null,
+      source_url: profile?.source_url || currentUrl || null
     },
     source_video: {
       video_url: source?.source_video_url || currentUrl || null,
@@ -2092,8 +2110,13 @@ async function sendX9SkippedProfileObservation(skipped, keyword) {
 }
 
 async function sendX9VideoObservation(video, keyword) {
-  const payload = buildX9VideoObservation(video, keyword);
-  return postX9Observation(payload);
+  return {
+    ok: true,
+    action: 'skipped',
+    reason: 'source_video_seed_only',
+    handle: normalizeUsername(video?.creator_username) || normalizeUsername(extractUsernameFromTikTokUrl(video?.creator_profile_url)) || '',
+    search_keyword: keyword || video?.search_keyword || ''
+  };
 }
 
 async function postX9Observation(payload) {
@@ -2283,12 +2306,6 @@ async function syncX9StoredState(reason) {
 
 function buildX9BackfillObservations(state) {
   const observations = [];
-  for (const video of state.sourceVideos || []) {
-    const payload = buildX9VideoObservation(video, video.search_keyword);
-    if (payload) {
-      observations.push(payload);
-    }
-  }
   for (const lead of state.leads || []) {
     const payload = buildX9ProfileObservation(
       profileFromLead(lead),
@@ -2328,7 +2345,12 @@ function profileFromLead(item) {
     bio: item.bio || '',
     followers_raw: item.followers_raw || '',
     followers_count: Number.isFinite(item.followers_count) ? item.followers_count : Number(item.followers_count),
+    following_raw: item.following_raw || '',
+    likes_raw: item.likes_raw || '',
     email: item.email || '',
+    emails: parseX9JsonArray(item.emails_json || item.emails),
+    visible_text: item.visible_text || '',
+    source_url: item.source_url || '',
     external_links: parseX9JsonArray(item.external_links)
   };
 }
@@ -3031,12 +3053,7 @@ async function clickVideoCloseButtonOnce(preferredTabId = null) {
 const X9_API_BASE_KEY = "x9_api_base";
 const X9_API_BASE_ACTIVE_KEY = "x9_api_base_active";
 const X9_BACKEND_CANDIDATES = [
-  "http://localhost:8000",
-  "http://127.0.0.1:8000",
   "https://usx9.us",
-  "http://usx9.us",
-  "http://192.168.1.171:8000",
-  "http://192.168.1.171",
 ];
 
 function x9JoinPath(base, path) {
@@ -3052,11 +3069,7 @@ function x9DashboardBaseFromUrl(url) {
     const parsed = new URL(url || "");
     const host = parsed.hostname.toLowerCase();
     const path = parsed.pathname || "/";
-    const knownHost = host === "usx9.us"
-      || host.endsWith(".usx9.us")
-      || host === "localhost"
-      || host === "127.0.0.1"
-      || host === "192.168.1.171";
+    const knownHost = host === "usx9.us" || host.endsWith(".usx9.us");
     const dashboardPath = path === "/"
       || path.startsWith("/portal")
       || path.startsWith("/ui")
@@ -3088,8 +3101,8 @@ async function x9DashboardBaseCandidates() {
 
 async function x9BuildBackendCandidateOrder() {
   const stored = await chrome.storage.local.get([X9_API_BASE_KEY, X9_API_BASE_ACTIVE_KEY]).catch(() => ({}));
-  const override = x9NormalizeApiBase(stored[X9_API_BASE_KEY]);
-  const active = x9NormalizeApiBase(stored[X9_API_BASE_ACTIVE_KEY]);
+  const override = x9AllowedBackendBase(stored[X9_API_BASE_KEY]);
+  const active = x9AllowedBackendBase(stored[X9_API_BASE_ACTIVE_KEY]);
   const ordered = [];
   if (override) ordered.push(override);
   for (const base of await x9DashboardBaseCandidates()) {
@@ -3101,6 +3114,22 @@ async function x9BuildBackendCandidateOrder() {
     if (base && !ordered.includes(base)) ordered.push(base);
   }
   return ordered;
+}
+
+function x9AllowedBackendBase(base) {
+  const normalized = x9NormalizeApiBase(base);
+  if (!normalized) return "";
+  try {
+    const parsed = new URL(normalized);
+    const host = parsed.hostname.toLowerCase();
+    if (parsed.protocol === "https:" && (host === "usx9.us" || host.endsWith(".usx9.us"))) {
+      return normalized;
+    }
+  } catch {
+    return "";
+  }
+  chrome.storage.local.remove([X9_API_BASE_KEY, X9_API_BASE_ACTIVE_KEY]).catch(() => undefined);
+  return "";
 }
 
 async function x9DetectBackend(candidates) {
@@ -3121,8 +3150,8 @@ async function x9LoadBackendUI() {
   if (!input || !status) return;
 
   const stored = await chrome.storage.local.get([X9_API_BASE_KEY, X9_API_BASE_ACTIVE_KEY]);
-  const override = stored[X9_API_BASE_KEY] || "";
-  const active = stored[X9_API_BASE_ACTIVE_KEY] || "";
+  const override = x9AllowedBackendBase(stored[X9_API_BASE_KEY]);
+  const active = x9AllowedBackendBase(stored[X9_API_BASE_ACTIVE_KEY]);
   input.value = override;
   if (override) {
     status.textContent = `已固定:${override}`;
@@ -3137,6 +3166,10 @@ async function x9SaveBackend() {
   const input = document.getElementById("x9BackendInput");
   const status = document.getElementById("x9BackendStatus");
   const val = (input?.value || "").trim().replace(/\/+$/, "");
+  if (val && !x9AllowedBackendBase(val)) {
+    status.textContent = "只允许 https://usx9.us";
+    return;
+  }
   if (!val) {
     // Clear the override → fall back to auto-detect
     await chrome.storage.local.remove(X9_API_BASE_KEY);

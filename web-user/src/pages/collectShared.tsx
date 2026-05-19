@@ -12,6 +12,11 @@ export const ACCENTS = {
 
 export type Accent = (typeof ACCENTS)[keyof typeof ACCENTS];
 
+export const CHART_TEXT = '#334155';
+export const CHART_AXIS = '#64748b';
+export const CHART_GRID = 'rgba(148,163,184,0.22)';
+export const CHART_AXIS_LINE = 'rgba(148,163,184,0.38)';
+
 // Inject the staggered load-in keyframes once (self-contained — does not
 // touch the portal's shared stylesheet).
 let injected = false;
@@ -72,7 +77,7 @@ export function CollectHeader({
   );
 }
 
-// 7-day area series tuned for the dark theme.
+// 7-day area series tuned for light dashboard cards.
 export function dailyAreaOption(daily: DailyPoint[], color: string) {
   return {
     grid: { top: 16, right: 16, bottom: 24, left: 36 },
@@ -80,15 +85,15 @@ export function dailyAreaOption(daily: DailyPoint[], color: string) {
     xAxis: {
       type: 'category',
       data: daily.map((d) => d.date.slice(5)),
-      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.12)' } },
-      axisLabel: { fontSize: 11, color: 'rgba(255,255,255,0.55)' },
+      axisLine: { lineStyle: { color: CHART_AXIS_LINE } },
+      axisLabel: { fontSize: 11, color: CHART_AXIS },
       axisTick: { show: false },
     },
     yAxis: {
       type: 'value',
       minInterval: 1,
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.07)' } },
-      axisLabel: { fontSize: 11, color: 'rgba(255,255,255,0.55)' },
+      splitLine: { lineStyle: { color: CHART_GRID } },
+      axisLabel: { fontSize: 11, color: CHART_AXIS },
     },
     series: [
       {

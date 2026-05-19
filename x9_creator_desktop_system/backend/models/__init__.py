@@ -10,6 +10,7 @@ from .gmail_account import GmailAccount
 from .outreach_email import OutreachEmail
 from .outreach_template import OutreachTemplate
 from .raw_observation import RawObservation
+from .request_log import RequestLog
 from .review_task import ReviewTask
 from .system_log import SystemLog
 from .tag_definition import TagDefinition
@@ -27,6 +28,7 @@ __all__ = [
     "OutreachEmail",
     "OutreachTemplate",
     "RawObservation",
+    "RequestLog",
     "ReviewTask",
     "SystemLog",
     "TagDefinition",

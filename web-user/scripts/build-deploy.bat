@@ -16,5 +16,5 @@ if errorlevel 1 (
     popd
     exit /b 1
 )
-echo [build-deploy] All done. Visit http://localhost:8000/portal/
+echo [build-deploy] All done. Visit https://usx9.us/portal/
 popd

@@ -5,7 +5,7 @@ import io
 import json
 import re
 import zipfile
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from xml.etree import ElementTree as ET
 
@@ -50,16 +50,53 @@ HEADER_ALIASES = {
     "handle": "handle",
     "username": "handle",
     "user_name": "handle",
+    "uniqueid": "handle",
+    "unique_id": "handle",
+    "author": "handle",
+    "author_username": "handle",
+    "author_unique_id": "handle",
+    "creator": "handle",
+    "creator_handle": "handle",
+    "creator_username": "handle",
+    "profile_handle": "handle",
+    "tiktok_handle": "handle",
+    "tiktok_username": "handle",
     "platform": "platform",
     "平台": "platform",
     "主页链接": "profile_url",
     "达人主页": "profile_url",
+    "url": "profile_url",
+    "link": "profile_url",
+    "profile_link": "profile_url",
     "profile": "profile_url",
     "profile_url": "profile_url",
+    "profileurl": "profile_url",
+    "creator_url": "profile_url",
+    "author_url": "profile_url",
+    "tiktok_url": "profile_url",
+    "tiktok_profile": "profile_url",
+    "主页": "profile_url",
+    "个人主页": "profile_url",
     "display_name": "display_name",
+    "displayname": "display_name",
+    "name": "display_name",
+    "nickname": "display_name",
+    "nick_name": "display_name",
+    "author_name": "display_name",
+    "creator_name": "display_name",
     "昵称": "display_name",
     "显示名称": "display_name",
     "bio": "bio",
+    "signature": "bio",
+    "description": "bio",
+    "desc": "bio",
+    "profile_bio": "bio",
+    "bio_text": "bio",
+    "raw_text": "raw_text",
+    "visible_text": "raw_text",
+    "profile_text": "raw_text",
+    "content": "raw_text",
+    "text": "raw_text",
     "简介": "bio",
     "达人简介": "bio",
     "个人描述": "bio",
@@ -68,7 +105,12 @@ HEADER_ALIASES = {
     "language": "language",
     "语言": "language",
     "followers": "followers",
+    "follower": "followers",
     "followers_count": "followers",
+    "follower_count": "followers",
+    "followers_raw": "followers",
+    "fans": "followers",
+    "fans_count": "followers",
     "粉丝": "followers",
     "粉丝数": "followers",
     "tier": "tier",
@@ -111,8 +153,12 @@ HEADER_ALIASES = {
     "负责人": "owner_bd",
     "bd负责人": "owner_bd",
     "search_keyword": "search_keyword",
+    "keyword": "search_keyword",
+    "query": "search_keyword",
     "关键词": "search_keyword",
     "source_video_url": "source_video_url",
+    "video_url": "source_video_url",
+    "source_url": "source_video_url",
     "来源视频": "source_video_url",
     "source_video_title": "source_video_title",
     "视频标题": "source_video_title",
@@ -135,6 +181,7 @@ def import_creator_table(
     rows = parse_table(content, filename=filename)
     inserted = 0
     updated = 0
+    skipped = 0
     failed = 0
     errors: list[dict[str, Any]] = []
     samples: list[dict[str, Any]] = []
@@ -159,13 +206,18 @@ def import_creator_table(
             result = ingest_observation(db, payload, auto_process=True)
             if result.get("action") == "inserted":
                 inserted += 1
-            else:
+            elif result.get("action") == "updated":
                 updated += 1
+            elif result.get("action") == "skipped":
+                skipped += 1
+            else:
+                failed += 1
             if len(samples) < 10:
                 samples.append({
                     "row": idx,
                     "handle": handle,
                     "action": result.get("action"),
+                    "reason": result.get("reason"),
                     "pipeline": result.get("pipeline"),
                 })
         except ValueError as exc:
@@ -182,6 +234,7 @@ def import_creator_table(
         "upserted": upserted,
         "updated": updated,
         "inserted": inserted,
+        "skipped": skipped,
         "failed": failed,
         "errors": errors,
         "items": samples,
@@ -201,7 +254,7 @@ def parse_csv(content: bytes) -> list[dict[str, Any]]:
     text = _decode_text(content)
     sample = text[:4096]
     try:
-        dialect = csv.Sniffer().sniff(sample)
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
     except csv.Error:
         dialect = csv.excel
     reader = csv.DictReader(io.StringIO(text), dialect=dialect)
@@ -213,6 +266,35 @@ def parse_csv(content: bytes) -> list[dict[str, Any]]:
 
 
 def parse_xlsx(content: bytes) -> list[dict[str, Any]]:
+    try:
+        return _parse_xlsx_openpyxl(content)
+    except ImportError:
+        return _parse_xlsx_minimal(content)
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"invalid xlsx file: {exc}") from exc
+
+
+def _parse_xlsx_openpyxl(content: bytes) -> list[dict[str, Any]]:
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    try:
+        if not workbook.worksheets:
+            return []
+        sheet = workbook.worksheets[0]
+        rows: list[list[str]] = []
+        for raw_row in sheet.iter_rows(values_only=True):
+            values = [_xlsx_python_value(value) for value in raw_row]
+            if any(_cell(value) for value in values):
+                rows.append(values)
+        return _rows_to_dicts(rows)
+    finally:
+        workbook.close()
+
+
+def _parse_xlsx_minimal(content: bytes) -> list[dict[str, Any]]:
     with zipfile.ZipFile(io.BytesIO(content)) as zf:
         shared = _xlsx_shared_strings(zf)
         sheet_name = _first_sheet_path(zf)
@@ -230,6 +312,10 @@ def parse_xlsx(content: bytes) -> list[dict[str, Any]]:
             values.append(_xlsx_cell_value(cell, shared, ns))
         rows.append(values)
 
+    return _rows_to_dicts(rows)
+
+
+def _rows_to_dicts(rows: list[list[str]]) -> list[dict[str, Any]]:
     if not rows:
         return []
     headers = [str(x).strip() for x in rows[0]]
@@ -237,7 +323,10 @@ def parse_xlsx(content: bytes) -> list[dict[str, Any]]:
     for values in rows[1:]:
         if not any(_cell(v) for v in values):
             continue
-        out.append({headers[i] if i < len(headers) else f"column_{i + 1}": _cell(v) for i, v in enumerate(values)})
+        out.append({
+            headers[i] if i < len(headers) and headers[i] else f"column_{i + 1}": _cell(v)
+            for i, v in enumerate(values)
+        })
     return out
 
 
@@ -250,6 +339,10 @@ def normalize_row(row: dict[str, Any]) -> dict[str, Any]:
             out[mapped] = _cell(value)
     if not out.get("handle") and out.get("profile_url"):
         out["handle"] = _handle_from_url(str(out["profile_url"]))
+    if not out.get("handle"):
+        out["handle"] = _infer_handle(row, out)
+    if out.get("handle") and not out.get("profile_url"):
+        out["profile_url"] = f"https://www.tiktok.com/@{str(out['handle']).strip().lstrip('@')}"
     return out
 
 
@@ -298,6 +391,17 @@ def row_to_observation(row: dict[str, Any]) -> dict[str, Any]:
             "description": row.get("source_video_description") or None,
             "hashtags": [],
         },
+        "raw_profile": {
+            "username": handle,
+            "nickname": row.get("display_name") or handle,
+            "profile_url": row.get("profile_url") or f"https://www.tiktok.com/@{handle}",
+            "bio": row.get("bio") or None,
+            "raw_text": row.get("raw_text") or None,
+            "followers_raw": row.get("followers_raw") or row.get("followers") or None,
+            "followers_count": followers,
+            "email": row.get("email") or None,
+            "external_links": external_links,
+        },
         "import_row": row,
         "category_tags": _category_tags(row.get("category_tags")),
         "import_meta": {
@@ -317,7 +421,33 @@ def template_csv_bytes() -> bytes:
     out = io.StringIO()
     writer = csv.DictWriter(out, fieldnames=CREATOR_IMPORT_FIELDS)
     writer.writeheader()
-    writer.writerow({
+    writer.writerow(_template_sample_row())
+    return out.getvalue().encode("utf-8-sig")
+
+
+def template_xlsx_bytes() -> bytes:
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    try:
+        sheet = workbook.active
+        sheet.title = "creators"
+        sheet.append(CREATOR_IMPORT_FIELDS)
+        sample = _template_sample_row()
+        sheet.append([sample.get(field, "") for field in CREATOR_IMPORT_FIELDS])
+        sheet.freeze_panes = "A2"
+        for idx, field in enumerate(CREATOR_IMPORT_FIELDS, start=1):
+            sheet.column_dimensions[_excel_column(idx)].width = max(14, min(32, len(field) + 2))
+
+        out = io.BytesIO()
+        workbook.save(out)
+        return out.getvalue()
+    finally:
+        workbook.close()
+
+
+def _template_sample_row() -> dict[str, str]:
+    return {
         "handle": "test_creator_001",
         "platform": "tiktok",
         "profile_url": "https://www.tiktok.com/@test_creator_001",
@@ -330,11 +460,18 @@ def template_csv_bytes() -> bytes:
         "category_tags": '["lifestyle"]',
         "source": "table_import",
         "quality_score": "0.85",
-        "current_status": "已建联",
+        "current_status": "pending_contact",
         "store_assigned": "X9x9 Shop 01",
         "owner_bd": "Mercy",
-    })
-    return out.getvalue().encode("utf-8-sig")
+    }
+
+
+def _excel_column(index: int) -> str:
+    letters = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        letters = chr(ord("A") + remainder) + letters
+    return letters
 
 
 def _xlsx_shared_strings(zf: zipfile.ZipFile) -> list[str]:
@@ -368,6 +505,18 @@ def _xlsx_cell_value(cell: ET.Element, shared: list[str], ns: dict[str, str]) ->
         idx = _int_or_none(raw)
         return shared[idx] if idx is not None and 0 <= idx < len(shared) else ""
     return str(raw or "").strip()
+
+
+def _xlsx_python_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ", timespec="seconds")
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
 
 
 def _column_index(ref: str) -> int:
@@ -404,6 +553,12 @@ def _int_or_none(value: Any) -> int | None:
     text = _cell(value).replace(",", "")
     if not text:
         return None
+    compact = re.search(r"^(\d+(?:\.\d+)?)([kmb]|万|亿)$", text.strip(), re.IGNORECASE)
+    if compact:
+        number = float(compact.group(1))
+        suffix = compact.group(2).lower()
+        multipliers = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000, "万": 10_000, "亿": 100_000_000}
+        return int(number * multipliers.get(suffix, 1))
     try:
         return int(float(text))
     except ValueError:
@@ -422,8 +577,58 @@ def _float_or_none(value: Any) -> float | None:
 
 
 def _handle_from_url(value: str) -> str:
-    match = re.search(r"/@([^/?#]+)", value or "")
-    return match.group(1).strip() if match else ""
+    match = re.search(r"(?:tiktok\.com|vm\.tiktok\.com|www\.tiktok\.com)/@([^/?#\s]+)", value or "", re.IGNORECASE)
+    if not match:
+        match = re.search(r"/@([^/?#\s]+)", value or "")
+    return _clean_handle(match.group(1)) if match else ""
+
+
+def _infer_handle(original: dict[str, Any], normalized: dict[str, Any]) -> str:
+    values = [str(v) for v in list(normalized.values()) + list(original.values()) if _cell(v)]
+    for value in values:
+        handle = _handle_from_url(value)
+        if handle:
+            return handle
+
+    likely_keys = (
+        "handle", "username", "unique", "author", "creator", "profile",
+        "url", "link", "text", "content", "raw",
+    )
+    for source in (normalized, original):
+        for key, value in source.items():
+            text = _cell(value)
+            if not text:
+                continue
+            key_text = _norm_header(key)
+            if not any(term in key_text for term in likely_keys):
+                continue
+            handle = _handle_from_text(text)
+            if handle:
+                return handle
+    return ""
+
+
+def _handle_from_text(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    handle = _clean_handle(text)
+    if handle:
+        return handle
+    match = re.search(r"(?<![\w.])@([A-Za-z0-9._-]{2,64})(?![\w.-]*\.[A-Za-z]{2,})", text)
+    return _clean_handle(match.group(1)) if match else ""
+
+
+def _clean_handle(value: str) -> str:
+    text = str(value or "").strip().strip('"\'`').lstrip("@")
+    text = text.split("?", 1)[0].split("#", 1)[0].strip().strip("/")
+    if not text or "@" in text or "/" in text or "\\" in text:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9._-]{2,64}", text):
+        return ""
+    if "." in text and text.rsplit(".", 1)[-1].lower() in {"com", "net", "org", "co", "io"}:
+        return ""
+    return text
 
 
 def _instagram_handle(value: Any) -> str:

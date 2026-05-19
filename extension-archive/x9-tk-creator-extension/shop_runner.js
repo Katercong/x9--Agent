@@ -17,7 +17,7 @@
   };
 
   const DEFAULT_SETTINGS = {
-    endpoint: "http://127.0.0.1:8000/api/local/collector/observations",
+    endpoint: "https://usx9.us/api/local/collector/observations",
     source: "tiktok_shop_creator_lead_browser_extension_2_2",
     workerId: "tiktok_shop_creator_lead_browser_2_2",
     taskCount: 20,

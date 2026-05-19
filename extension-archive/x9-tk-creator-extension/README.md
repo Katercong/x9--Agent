@@ -11,10 +11,10 @@ X9 仪表盘上行采集 + TIKTOK全自动采集监控。
    cd F:\AI Agent\Auto boker grab\x9_creator_desktop_system
    start_desktop.bat
    ```
-   后端在 `http://127.0.0.1:8000`。
+   后端在 `https://usx9.us`。
 4. 浏览器开 `https://affiliate-us.tiktok.com/connection/creator`
 5. 点扩展图标（或打开侧边栏） → 顶部红框 **TIKTOK全自动采集监控**
-6. 后端地址默认 `http://127.0.0.1:8000/api/local/collector/observations`，需要换就改一下
+6. 后端地址默认 `https://usx9.us/api/local/collector/observations`
 7. 点 **▶ 开始**
 
 插件接管：
@@ -41,7 +41,7 @@ X9 仪表盘上行采集 + TIKTOK全自动采集监控。
 
 需要后端能接收 `POST /api/local/collector/observations`，payload `platform = "tiktok_shop"` 走 TikTok Shop ingest service。这部分是 Stage 1 后端（已落地、41 + 16 + 7 + 5 个测试全过）。
 
-采集完到 `http://localhost:8000/ui/` 点 **TIKTOK全自动采集监控** tab 看入库的达人列表 / 详情；需要 CSV 时在后端页面手动导出。
+采集完到 `https://usx9.us/portal/` 看入库的达人列表 / 详情；需要 CSV 时在后端页面手动导出。
 
 ## 常见排错
 

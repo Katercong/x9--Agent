@@ -35,9 +35,30 @@ export const chartColors = {
 };
 
 export function mergeChartOption(opt: any): any {
-  return {
+  const merged = {
     ...baseChartOption,
     ...opt,
     textStyle: { ...(baseChartOption.textStyle || {}), ...(opt.textStyle || {}) },
   };
+  if (opt.tooltip) {
+    merged.tooltip = {
+      ...(baseChartOption.tooltip || {}),
+      ...opt.tooltip,
+      textStyle: {
+        ...(baseChartOption.tooltip?.textStyle || {}),
+        ...(opt.tooltip.textStyle || {}),
+      },
+    };
+  }
+  if (opt.legend) {
+    merged.legend = {
+      ...(baseChartOption.legend || {}),
+      ...opt.legend,
+      textStyle: {
+        ...(baseChartOption.legend?.textStyle || {}),
+        ...(opt.legend.textStyle || {}),
+      },
+    };
+  }
+  return merged;
 }

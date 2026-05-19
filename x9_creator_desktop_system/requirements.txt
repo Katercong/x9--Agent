@@ -7,6 +7,7 @@ python-dotenv
 email-validator
 requests
 httpx
+openpyxl>=3.1
 pytest
 
 # --- Outreach (Gmail send) ---
@@ -16,3 +17,4 @@ pytest
 google-auth
 google-auth-oauthlib
 google-api-python-client
+cryptography>=42

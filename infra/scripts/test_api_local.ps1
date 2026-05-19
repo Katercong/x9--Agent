@@ -18,11 +18,11 @@
 
   Usage:
     .\test_api_local.ps1
-    .\test_api_local.ps1 -BaseUrl http://127.0.0.1:8000 -User superadmin -Pass 'X9@2026'
+    .\test_api_local.ps1 -BaseUrl https://usx9.us -User superadmin -Pass 'X9@2026'
     .\test_api_local.ps1 -OutFile F:\X9_AI_system\docs\api_health_2026-05-18.md
 #>
 param(
-  [string]$BaseUrl = "http://127.0.0.1:8000",
+  [string]$BaseUrl = "https://usx9.us",
   [string]$User    = "superadmin",
   [string]$Pass    = "X9@2026",
   [string]$OutFile = ""

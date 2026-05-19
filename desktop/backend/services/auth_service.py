@@ -15,7 +15,10 @@ from ..config import settings
 from ..database.connection import SessionLocal
 from ..models.app_session import AppSession
 from ..models.app_user import AppUser
+from ..models.creator import Creator
 from ..models.gmail_account import GmailAccount
+from ..models.outreach_email import OutreachEmail
+from ..models.raw_observation import RawObservation
 from ..utils.id_utils import new_id
 from .departments import DEFAULT_DEPARTMENT, DEPARTMENTS, department_slug, normalize_department_code
 
@@ -270,6 +273,136 @@ def user_to_dict(
     }
 
 
+
+CONTACTED_CREATOR_STATUSES = {"已建联", "待回复", "已寄样", "视频已发布", "contacted", "replied", "sample_sent", "video_published"}
+PENDING_CONTACT_STATUSES = {"待建联", "pending_contact", "prospect"}
+
+
+def _norm_stat_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _user_aliases(user: AppUser) -> set[str]:
+    raw_email = normalize_email(user.email)
+    visible_email = public_email(user.email)
+    values = {
+        user.id,
+        user.username,
+        user.display_name,
+        raw_email,
+        visible_email,
+    }
+    for email in (raw_email, visible_email):
+        if email and "@" in email:
+            values.add(email.split("@", 1)[0])
+    return {_norm_stat_key(v) for v in values if _norm_stat_key(v)}
+
+
+def _matches_user_alias(value: Any, aliases: set[str]) -> bool:
+    return _norm_stat_key(value) in aliases
+
+
+def _as_date(value: Any):
+    if value is None:
+        return None
+    if hasattr(value, "date"):
+        return value.date()
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        try:
+            return datetime.strptime(text.split(".", 1)[0], "%Y-%m-%d %H:%M:%S").date()
+        except ValueError:
+            return None
+
+
+def _as_iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _empty_user_stats() -> dict[str, Any]:
+    return {
+        "collection": {"scope": "department", "total": 0, "today": 0},
+        "creators": {"owned": 0, "pending_contact": 0, "contacted": 0},
+        "outreach": {"total": 0, "drafts": 0, "queued": 0, "sent": 0, "failed": 0, "cancelled": 0, "last_at": None},
+    }
+
+
+def _user_activity_stats(db: Session, users: list[AppUser]) -> dict[str, dict[str, Any]]:
+    if not users:
+        return {}
+    today = datetime.now().date()
+    raw_company = {"total": 0, "today": 0}
+    raw_by_dept: dict[str, dict[str, int]] = {}
+    raw_rows = db.execute(select(RawObservation.department_code, RawObservation.created_at, RawObservation.collected_at)).all()
+    for department_code, created_at, collected_at in raw_rows:
+        day = _as_date(collected_at) or _as_date(created_at)
+        is_today = day == today
+        raw_company["total"] += 1
+        if is_today:
+            raw_company["today"] += 1
+        dept = normalize_department_code(department_code, default=DEFAULT_DEPARTMENT) or DEFAULT_DEPARTMENT
+        bucket = raw_by_dept.setdefault(dept, {"total": 0, "today": 0})
+        bucket["total"] += 1
+        if is_today:
+            bucket["today"] += 1
+
+    creators = list(db.scalars(select(Creator)).all())
+    outreach_rows = list(db.scalars(select(OutreachEmail)).all())
+
+    out: dict[str, dict[str, Any]] = {}
+    for user in users:
+        role = normalize_role(user.role)
+        aliases = _user_aliases(user)
+        stats = _empty_user_stats()
+        if role in COMPANY_WIDE_ROLES and not user.department_code:
+            stats["collection"] = {"scope": "company", **raw_company}
+        else:
+            dept = normalize_department_code(user.department_code, default=DEFAULT_DEPARTMENT) or DEFAULT_DEPARTMENT
+            stats["collection"] = {"scope": "department", **raw_by_dept.get(dept, {"total": 0, "today": 0})}
+
+        owned_creators = [c for c in creators if _matches_user_alias(c.owner_bd, aliases)]
+        owned_ids = {c.id for c in owned_creators}
+        stats["creators"]["owned"] = len(owned_creators)
+        stats["creators"]["pending_contact"] = sum(
+            1 for c in owned_creators if _norm_stat_key(c.current_status) in {_norm_stat_key(v) for v in PENDING_CONTACT_STATUSES}
+        )
+        stats["creators"]["contacted"] = sum(
+            1 for c in owned_creators if _norm_stat_key(c.current_status) in {_norm_stat_key(v) for v in CONTACTED_CREATOR_STATUSES}
+        )
+
+        user_outreach = []
+        for email in outreach_rows:
+            if _matches_user_alias(email.created_by, aliases):
+                user_outreach.append(email)
+            elif not email.created_by and email.creator_id in owned_ids:
+                user_outreach.append(email)
+        stats["outreach"]["total"] = len(user_outreach)
+        for email in user_outreach:
+            status = _norm_stat_key(email.status)
+            if status == "draft":
+                stats["outreach"]["drafts"] += 1
+            elif status == "queued":
+                stats["outreach"]["queued"] += 1
+            elif status == "sent":
+                stats["outreach"]["sent"] += 1
+            elif status == "failed":
+                stats["outreach"]["failed"] += 1
+            elif status == "cancelled":
+                stats["outreach"]["cancelled"] += 1
+        latest = max((email.sent_at or email.created_at for email in user_outreach if (email.sent_at or email.created_at)), default=None)
+        stats["outreach"]["last_at"] = _as_iso(latest)
+        out[user.id] = stats
+    return out
+
+
 def list_users(db: Session, actor: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     rows = list(db.scalars(select(AppUser).order_by(AppUser.role.asc(), AppUser.username.asc())).all())
     actor_role = normalize_role(actor.get("role")) if actor else SUPER_ADMIN_ROLE
@@ -277,11 +410,13 @@ def list_users(db: Session, actor: dict[str, Any] | None = None) -> list[dict[st
         rows = [row for row in rows if normalize_role(row.role) in {DEPARTMENT_ADMIN_ROLE, DEPARTMENT_USER_ROLE}]
     elif actor_role not in {SUPER_ADMIN_ROLE, COMPANY_ADMIN_ROLE}:
         rows = []
+    stats_by_user = _user_activity_stats(db, rows)
     return [
         {
             **user_to_dict(row, entry_scope=("admin" if normalize_role(row.role) in ADMIN_ROLES else "workspace")),
             "role": normalize_role(row.role),
             "department_code": row.department_code,
+            "stats": stats_by_user.get(row.id, _empty_user_stats()),
         }
         for row in rows
     ]

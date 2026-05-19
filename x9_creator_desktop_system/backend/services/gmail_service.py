@@ -29,7 +29,7 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, false, or_
 from sqlalchemy.orm import Session
 
 from ..config import DATA_DIR, settings
@@ -46,6 +46,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
     "openid",
 ]
+
+TOKEN_JSON_ENCRYPTED_PREFIX = "enc:v1:"
+_TOKEN_CRYPTO_WARNING_EMITTED = False
 
 
 class GmailNotConfiguredError(RuntimeError):
@@ -85,7 +88,7 @@ def _redirect_uri() -> str:
     public_base_url = _public_base_url()
     if public_base_url:
         return f"{public_base_url}/api/local/outreach/gmail/callback"
-    return f"http://localhost:{os.getenv('BACKEND_PORT', '8000')}/api/local/outreach/gmail/callback"
+    return "https://usx9.us/api/local/outreach/gmail/callback"
 
 
 def public_base_url() -> str | None:
@@ -140,7 +143,7 @@ def public_javascript_origins() -> list[str]:
     """Return configured browser origins for GIS popup OAuth.
 
     This is public metadata from Google's OAuth client JSON; it lets the UI
-    switch from 127.0.0.1 to localhost when the client only allows localhost.
+    verify the current page origin against the configured live OAuth origins.
     """
     try:
         config = _client_config()
@@ -272,7 +275,10 @@ def build_auth_url(
     """
     _, _, Flow, _, _ = _require_google()
     flow = Flow.from_client_config(
-        _client_config(), scopes=SCOPES, redirect_uri=_redirect_uri()
+        _client_config(),
+        scopes=SCOPES,
+        redirect_uri=_redirect_uri(),
+        autogenerate_code_verifier=False,
     )
     state_payload = {
         "label": label or "",
@@ -364,7 +370,7 @@ def handle_oauth_callback(
     works for both flows:
 
     * Loopback redirect (Desktop client) — ``redirect_uri`` defaults to
-      ``http://localhost:<port>/api/local/outreach/gmail/callback``.
+      ``https://usx9.us/api/local/outreach/gmail/callback``.
     * Google Identity Services popup (Web client) — frontend passes
       ``"postmessage"`` here.
     """
@@ -374,6 +380,7 @@ def handle_oauth_callback(
         scopes=SCOPES,
         redirect_uri=redirect_uri or _redirect_uri(),
         state=state or None,
+        autogenerate_code_verifier=False,
     )
     flow.fetch_token(code=code)
     creds = flow.credentials
@@ -381,42 +388,20 @@ def handle_oauth_callback(
     user_email = _fetch_user_email(creds) or "unknown@gmail.com"
     label = _decode_state_label(state)
 
-    token_json = creds.to_json() if hasattr(creds, "to_json") else json.dumps({})
+    raw_token_json = creds.to_json() if hasattr(creds, "to_json") else json.dumps({})
 
     with SessionLocal() as session:
-        existing = session.query(GmailAccount).filter(GmailAccount.email == user_email).first()
-        if existing is not None and existing.user_id and user_id and existing.user_id != user_id:
-            raise GmailNotAuthorizedError("This Gmail account is already linked to another local user.")
-        if existing is None:
-            existing = GmailAccount(
-                id=new_id("gma"),
-                user_id=user_id,
-                department_code=department_code,
-                email=user_email,
-                display_name=user_email.split("@")[0],
-                label=label,
-                token_json=token_json,
-                is_default=0,
-                is_active=1,
-            )
-            session.add(existing)
-        else:
-            existing.token_json = token_json
-            existing.is_active = 1
-            existing.user_id = user_id or existing.user_id
-            existing.department_code = department_code or existing.department_code
-            if label:
-                existing.label = label
-        # If this is the first account for the current user, mark it default.
-        default_q = session.query(GmailAccount).filter(GmailAccount.is_active == 1)
-        if user_id:
-            default_q = default_q.filter(GmailAccount.user_id == user_id)
-        if default_q.filter(GmailAccount.is_default == 1).count() == 0:
-            existing.is_default = 1
+        account = _upsert_authorized_account(
+            session,
+            user_email=user_email,
+            raw_token_json=raw_token_json,
+            label=label,
+            user_id=user_id,
+            department_code=department_code,
+        )
         session.commit()
-        session.refresh(existing)
-        return _account_to_dict(existing)
-
+        session.refresh(account)
+        return _account_to_dict(account)
 
 def remove_account(account_id: str, user_id: str | None = None, *, allow_all: bool = False) -> bool:
     """Soft-delete an account. Returns False if id was unknown."""
@@ -424,7 +409,7 @@ def remove_account(account_id: str, user_id: str | None = None, *, allow_all: bo
         row = session.get(GmailAccount, account_id)
         if row is None:
             return False
-        if not allow_all and user_id and row.user_id != user_id:
+        if not allow_all and (not user_id or row.user_id != user_id):
             return False
         was_default = bool(row.is_default)
         owner_id = row.user_id
@@ -446,7 +431,7 @@ def set_default_account(account_id: str, user_id: str | None = None, *, allow_al
         target = session.get(GmailAccount, account_id)
         if target is None or not target.is_active:
             return False
-        if not allow_all and user_id and target.user_id != user_id:
+        if not allow_all and (not user_id or target.user_id != user_id):
             return False
         q = session.query(GmailAccount)
         if target.user_id:
@@ -464,6 +449,53 @@ def revoke_all(user_id: str | None = None) -> None:
         if user_id:
             q = q.filter(GmailAccount.user_id == user_id)
         q.delete()
+        session.commit()
+
+
+def claim_matching_unowned_account(
+    *,
+    user_id: str | None,
+    email: str | None,
+    department_code: str | None = None,
+) -> None:
+    """Attach a legacy shared Gmail row to the matching logged-in user.
+
+    Older builds stored admin Gmail tokens with ``user_id=NULL``. The new
+    per-account sending model should not expose those rows as shared, but
+    if the Gmail address exactly matches the current local user's email we
+    can safely migrate ownership without forcing a fresh OAuth round-trip.
+    """
+    if not user_id or not email:
+        return
+    normalized_email = str(email).strip().lower()
+    if not normalized_email:
+        return
+    with SessionLocal() as session:
+        row = (
+            session.query(GmailAccount)
+            .filter(
+                GmailAccount.email == normalized_email,
+                GmailAccount.user_id.is_(None),
+                GmailAccount.is_active == 1,
+            )
+            .first()
+        )
+        if row is None:
+            return
+        row.user_id = str(user_id)
+        row.department_code = department_code
+        has_default = (
+            session.query(GmailAccount)
+            .filter(
+                GmailAccount.user_id == str(user_id),
+                GmailAccount.is_active == 1,
+                GmailAccount.is_default == 1,
+            )
+            .count()
+            > 0
+        )
+        if not has_default:
+            row.is_default = 1
         session.commit()
 
 
@@ -508,10 +540,14 @@ def send_email(
                 "No authorized Gmail account. Connect one in the outreach modal first."
             )
 
-        creds = Credentials.from_authorized_user_info(json.loads(account.token_json), scopes=SCOPES)
+        stored_token_json = account.token_json or "{}"
+        raw_token_json = _token_json_from_storage(stored_token_json)
+        creds = Credentials.from_authorized_user_info(json.loads(raw_token_json), scopes=SCOPES)
+        if not _token_json_is_encrypted(stored_token_json) and _token_cipher() is not None:
+            account.token_json = _token_json_to_storage(raw_token_json)
         if not creds.valid and getattr(creds, "refresh_token", None):
             creds.refresh(Request())
-            account.token_json = creds.to_json()
+            account.token_json = _token_json_to_storage(creds.to_json())
 
         sender = account.email
         raw = _build_mime_message(
@@ -570,7 +606,7 @@ def migrate_legacy_token_if_present() -> None:
             email=email,
             display_name=email.split("@")[0],
             label="legacy",
-            token_json=json.dumps(payload, ensure_ascii=False),
+            token_json=_token_json_to_storage(json.dumps(payload, ensure_ascii=False)),
             is_default=1 if existing_count == 0 else 0,
             is_active=1,
         )
@@ -588,6 +624,108 @@ def migrate_legacy_token_if_present() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _upsert_authorized_account(
+    session: Session,
+    *,
+    user_email: str,
+    raw_token_json: str,
+    label: str | None,
+    user_id: str | None,
+    department_code: str | None,
+) -> GmailAccount:
+    normalized_email = (user_email or "").strip().lower() or "unknown@gmail.com"
+    existing = session.query(GmailAccount).filter(GmailAccount.email == normalized_email).first()
+    if existing is not None and existing.user_id and existing.user_id != user_id:
+        raise GmailNotAuthorizedError("This Gmail account is already linked to another local user.")
+    if existing is not None and existing.user_id and not user_id:
+        raise GmailNotAuthorizedError("Login is required before connecting this Gmail account.")
+
+    stored_token_json = _token_json_to_storage(raw_token_json)
+    if existing is None:
+        existing = GmailAccount(
+            id=new_id("gma"),
+            user_id=user_id,
+            department_code=department_code,
+            email=normalized_email,
+            display_name=normalized_email.split("@")[0],
+            label=label,
+            token_json=stored_token_json,
+            is_default=0,
+            is_active=1,
+        )
+        session.add(existing)
+    else:
+        existing.token_json = stored_token_json
+        existing.is_active = 1
+        existing.user_id = user_id or existing.user_id
+        existing.department_code = department_code or existing.department_code
+        if label:
+            existing.label = label
+
+    default_q = session.query(GmailAccount).filter(GmailAccount.is_active == 1)
+    if user_id:
+        default_q = default_q.filter(GmailAccount.user_id == user_id)
+    if default_q.filter(GmailAccount.is_default == 1).count() == 0:
+        existing.is_default = 1
+    return existing
+
+
+def _token_json_is_encrypted(stored_token_json: str | None) -> bool:
+    return bool(stored_token_json and stored_token_json.startswith(TOKEN_JSON_ENCRYPTED_PREFIX))
+
+
+def _token_json_to_storage(raw_token_json: str) -> str:
+    cipher = _token_cipher()
+    if cipher is None:
+        _warn_plaintext_token_storage_once()
+        return raw_token_json
+    encrypted = cipher.encrypt(raw_token_json.encode("utf-8")).decode("ascii")
+    return f"{TOKEN_JSON_ENCRYPTED_PREFIX}{encrypted}"
+
+
+def _token_json_from_storage(stored_token_json: str) -> str:
+    if not _token_json_is_encrypted(stored_token_json):
+        return stored_token_json
+    cipher = _token_cipher()
+    if cipher is None:
+        raise GmailNotAuthorizedError(
+            "Stored Gmail token is encrypted, but the token encryption key or dependency is unavailable."
+        )
+    encrypted = stored_token_json[len(TOKEN_JSON_ENCRYPTED_PREFIX):]
+    try:
+        return cipher.decrypt(encrypted.encode("ascii")).decode("utf-8")
+    except Exception as exc:
+        raise GmailNotAuthorizedError("Stored Gmail token cannot be decrypted. Reconnect Gmail.") from exc
+
+
+def _token_cipher() -> Any | None:
+    material = (
+        os.getenv("GMAIL_TOKEN_ENCRYPTION_KEY")
+        or os.getenv("X9_TOKEN_ENCRYPTION_KEY")
+        or settings.gmail_token_encryption_key
+        or os.getenv("X9_OAUTH_STATE_SECRET")
+        or settings.gmail_default_client_secret
+    )
+    if not material:
+        return None
+    try:
+        from cryptography.fernet import Fernet  # type: ignore
+    except ImportError:
+        return None
+    key = base64.urlsafe_b64encode(hashlib.sha256(material.encode("utf-8")).digest())
+    return Fernet(key)
+
+
+def _warn_plaintext_token_storage_once() -> None:
+    global _TOKEN_CRYPTO_WARNING_EMITTED
+    if _TOKEN_CRYPTO_WARNING_EMITTED:
+        return
+    _TOKEN_CRYPTO_WARNING_EMITTED = True
+    logger.warning(
+        "Gmail tokens are being stored without field encryption. Install cryptography and set GMAIL_TOKEN_ENCRYPTION_KEY."
+    )
+
+
 def _visible_accounts_query(
     session: Session,
     *,
@@ -597,7 +735,7 @@ def _visible_accounts_query(
 ):
     q = session.query(GmailAccount).filter(GmailAccount.is_active == 1)
     if not user_id and not department_code:
-        return q
+        return q if include_shared else q.filter(false())
 
     clauses = []
     if user_id:
@@ -625,7 +763,7 @@ def _account_visible_to(
     include_shared: bool = True,
 ) -> bool:
     if not user_id and not department_code:
-        return True
+        return include_shared
     if user_id and account.user_id == user_id:
         return True
     if include_shared and account.user_id is None:
@@ -750,7 +888,13 @@ def _fetch_user_email(creds: Any) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def diagnose(request_origin: str | None = None) -> list[dict[str, str]]:
+def diagnose(
+    request_origin: str | None = None,
+    *,
+    user_id: str | None = None,
+    department_code: str | None = None,
+    include_shared: bool = True,
+) -> list[dict[str, str]]:
     """Return structured diagnostics about the Gmail OAuth setup.
 
     The frontend renders these so a non-engineer can see WHY the connect
@@ -803,11 +947,30 @@ def diagnose(request_origin: str | None = None) -> list[dict[str, str]]:
             ),
             "action": (
                 "1) 在 Google Cloud Console 把当前 origin 登记进去 (推荐同时登 "
-                "http://localhost:8000-8005 和 http://127.0.0.1:8000-8005); 2) 重新 "
+                "https://usx9.us); 2) 重新 "
                 "打开页面;或 3) 直接点 '继续浏览器跳转' 走 loopback 流程。"
             ),
         })
 
+    explicit_token_key = bool(
+        os.getenv("GMAIL_TOKEN_ENCRYPTION_KEY")
+        or os.getenv("X9_TOKEN_ENCRYPTION_KEY")
+        or settings.gmail_token_encryption_key
+    )
+    if _token_cipher() is None:
+        out.append({
+            "level": "warn",
+            "code": "token_encryption_unavailable",
+            "message": "Gmail token 字段级加密未启用。",
+            "action": "安装 cryptography,设置 GMAIL_TOKEN_ENCRYPTION_KEY,然后重启后端并重新授权 Gmail。",
+        })
+    elif not explicit_token_key:
+        out.append({
+            "level": "warn",
+            "code": "token_encryption_uses_fallback_key",
+            "message": "Gmail token 已加密,但使用的是回退密钥材料。",
+            "action": "生产环境请设置独立的 GMAIL_TOKEN_ENCRYPTION_KEY,避免 OAuth secret 轮换影响 token 解密。",
+        })
     if _legacy_token_path().exists():
         out.append({
             "level": "warn",
@@ -816,7 +979,7 @@ def diagnose(request_origin: str | None = None) -> list[dict[str, str]]:
             "action": "应用启动会自动迁移到 gmail_accounts 表;迁移完成后可删除旧文件。",
         })
 
-    if not is_authorized():
+    if not is_authorized(user_id=user_id, department_code=department_code, include_shared=include_shared):
         out.append({
             "level": "info",
             "code": "no_account_yet",

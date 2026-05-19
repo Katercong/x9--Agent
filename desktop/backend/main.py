@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import time
+from datetime import datetime, timedelta
+
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import UI_DIR, settings
 from .database import SessionLocal, init_db
+from .models.request_log import RequestLog
 from .routers import (
     admin,
     app as app_router,
@@ -117,11 +121,41 @@ def _home_for_user(user: dict) -> str:
     return "/d/dashboard"
 
 
+def _should_log_request(path: str) -> bool:
+    if path in {"/health", "/favicon.ico"}:
+        return False
+    if path.startswith(("/assets/", "/portal/assets/", "/ui/assets/")):
+        return False
+    return True
+
+
+def _write_request_log(method: str, path: str, status_code: int, duration_ms: int) -> None:
+    if not _should_log_request(path):
+        return
+    try:
+        with SessionLocal() as db:
+            db.add(
+                RequestLog(
+                    method=method[:10],
+                    path=path[:300],
+                    status_code=int(status_code),
+                    duration_ms=max(0, int(duration_ms)),
+                )
+            )
+            cutoff = datetime.utcnow() - timedelta(days=7)
+            db.query(RequestLog).filter(RequestLog.ts < cutoff).delete(synchronize_session=False)
+            db.commit()
+    except Exception:
+        # Monitoring must never break the product path.
+        pass
+
+
 @app.middleware("http")
 async def require_dashboard_login(request, call_next):
     path = request.url.path
+    started_at = time.perf_counter()
     user = None
-    if path.startswith(("/api/local", "/api/v1", "/a/", "/c/", "/d/", "/admin/")) or path == "/":
+    if path.startswith(("/api/local", "/api/v1", "/a/", "/c/", "/d/", "/admin/", "/portal")) or path == "/":
         with SessionLocal() as db:
             user = auth_service.current_user_from_token(
                 db,
@@ -148,7 +182,21 @@ async def require_dashboard_login(request, call_next):
             ) or role == spa_role
             if not allowed:
                 return RedirectResponse(url=_home_for_user(user), status_code=303)
-    return await call_next(request)
+    if (
+        (path == "/portal" or path.startswith("/portal/"))
+        and not path.startswith("/portal/assets/")
+        and user
+        and user.get("role") in {"super_admin", "company_admin", "department_admin"}
+    ):
+        return RedirectResponse(url=_home_for_user(user), status_code=303)
+    response = await call_next(request)
+    _write_request_log(
+        request.method,
+        path,
+        getattr(response, "status_code", 0) or 0,
+        int((time.perf_counter() - started_at) * 1000),
+    )
+    return response
 
 
 @app.get("/health")
@@ -466,7 +514,18 @@ def app_js() -> FileResponse:
     return FileResponse(UI_DIR / "app.js", media_type="application/javascript", headers=NO_STORE_HEADERS)
 
 
-# Serve the desktop UI from /ui/. Electron points its BrowserWindow here.
+@app.get("/ui")
+def legacy_ui_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/portal/", status_code=307)
+
+
+@app.get("/ui/")
+def legacy_ui_slash_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/portal/", status_code=307)
+
+
+# Serve legacy static assets from /ui/ for login/admin pages; /ui and /ui/
+# themselves redirect to the React portal above.
 if UI_DIR.exists():
     app.mount("/ui", StaticFiles(directory=str(UI_DIR), html=True), name="ui")
 

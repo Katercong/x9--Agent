@@ -1,4 +1,9 @@
 /* X9 creator lead dashboard. Served directly by FastAPI, no build step. */
+if (window.location.pathname === "/ui" || window.location.pathname === "/ui/") {
+  window.location.replace("/portal/");
+  throw new Error("Redirecting legacy /ui/ entry to /portal/.");
+}
+
 const API = "/api/local";
 const LANG_KEY = "x9_ui_language";
 const OPERATOR_KEY = "x9_operator_name";
@@ -2675,18 +2680,7 @@ function startGmailRedirectAuth(triggerBtn) {
 function ensureGmailOAuthOrigin(info) {
   const allowed = Array.isArray(info.javascript_origins) ? info.javascript_origins : [];
   if (!allowed.length || allowed.includes(window.location.origin)) return false;
-  const current = new URL(window.location.href);
-  const candidates = [];
-  if (current.hostname === "127.0.0.1") {
-    const next = new URL(window.location.href);
-    next.hostname = "localhost";
-    candidates.push(next);
-  }
-  if (current.hostname === "localhost") {
-    const next = new URL(window.location.href);
-    next.hostname = "127.0.0.1";
-    candidates.push(next);
-  }
+  const candidates = [new URL(window.location.pathname + window.location.search + window.location.hash, "https://usx9.us")];
   const match = candidates.find((url) => allowed.includes(url.origin));
   if (!match) {
     return "redirect";

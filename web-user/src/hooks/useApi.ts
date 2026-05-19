@@ -12,7 +12,11 @@ export function useAppStatus() {
 }
 
 export function useDbStats() {
-  return useQuery({ queryKey: ['db', 'stats'], queryFn: () => endpoints.dbStats() });
+  return useQuery({
+    queryKey: ['db', 'stats'],
+    queryFn: () => endpoints.dbStats(),
+    refetchInterval: 10_000,
+  });
 }
 
 export function useDbStatus() {
@@ -35,6 +39,14 @@ export function useRecommended(params?: Params) {
   return useQuery({
     queryKey: ['creators', 'recommended', params],
     queryFn: () => endpoints.creatorsRecommended(params),
+  });
+}
+
+export function useCreator(id?: string | number) {
+  return useQuery({
+    queryKey: ['creator', id],
+    queryFn: () => endpoints.creator(id!),
+    enabled: id !== undefined && id !== null && String(id).length > 0,
   });
 }
 

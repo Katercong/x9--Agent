@@ -5,7 +5,7 @@ import { EChart } from '@/components/charts/EChart';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
-import { useCreators, useOutreach, useProducts, useStaff } from '@/hooks/useApi';
+import { useCreators, useOutreach, useProducts, useStaff, useDepartmentDashboardSummary } from '@/hooks/useApi';
 import { trendByDay, recentNDays, groupByOutreachStatus, groupByOwner, staffStats } from '@/lib/derive';
 import { chartPalette } from '@/lib/colors';
 import { formatDate } from '@/lib/format';
@@ -31,14 +31,16 @@ export default function Overview() {
   const outreach = useOutreach({ limit: 1000, order_by: 'created_at:desc' });
   const products = useProducts({ limit: 200 });
   const staff = useStaff({ limit: 100 });
+  const dashboard = useDepartmentDashboardSummary();
 
-  const loading = creators.isLoading || outreach.isLoading || products.isLoading;
-  const error = creators.error || outreach.error || products.error;
+  const loading = creators.isLoading || outreach.isLoading || products.isLoading || dashboard.isLoading;
+  const error = creators.error || outreach.error || products.error || dashboard.error;
 
   const creatorList = creators.data?.items ?? [];
   const outreachList = outreach.data?.items ?? [];
   const productList = products.data?.items ?? [];
   const staffList = staff.data?.items ?? [];
+  const summary = dashboard.data?.summary;
 
   const statusMap = groupByOutreachStatus(outreachList);
   const activeDepts = new Set(creatorList.map((c) => c.store_assigned).filter(Boolean)).size;
@@ -71,13 +73,13 @@ export default function Overview() {
   });
 
   const overviewKpis = [
-    { label: '总达人', value: creators.data?.total ?? 0, icon: Users, bg: '#e0e7ff', fg: '#4f46e5' },
+    { label: '总达人', value: summary?.total_creators ?? creators.data?.total ?? 0, icon: Users, bg: '#e0e7ff', fg: '#4f46e5' },
     { label: '建联事件', value: outreach.data?.total ?? 0, icon: ShoppingCart, bg: '#d1fae5', fg: '#16a34a' },
     { label: 'SKU 总数', value: products.data?.total ?? 0, icon: Wallet, bg: '#cffafe', fg: '#0891b2' },
     { label: '已联系(BD 累计)', value: totalContacted, icon: TrendingUp, bg: '#fed7aa', fg: '#ea580c' },
     { label: '活跃店铺', value: activeDepts, icon: Building2, bg: '#ede9fe', fg: '#7c3aed' },
     { label: '在投视频', value: outreachList.filter((o) => o.video_url).length, icon: Video, bg: '#fce7f3', fg: '#db2777' },
-    { label: '近 30 天新达人', value: recentNDays(creatorList as any, 30), icon: ArrowUpRight, bg: '#fef3c7', fg: '#ca8a04' },
+    { label: '近 30 天新达人', value: summary?.recent_30d_creators ?? recentNDays(creatorList as any, 30), icon: ArrowUpRight, bg: '#fef3c7', fg: '#ca8a04' },
     { label: '已放弃', value: statusMap['dropped'] || 0, icon: AlertOctagon, bg: '#fee2e2', fg: '#dc2626' },
   ];
 

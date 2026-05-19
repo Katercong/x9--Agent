@@ -18,7 +18,7 @@ from ..models.extension_run_progress import ExtensionRunProgress
 from ..models.extension_session import ExtensionSession
 from ..services.departments import DEFAULT_DEPARTMENT, current_department_code, department_where, normalize_department_code
 from ..utils.id_utils import new_id
-from ..utils.json_utils import dumps_json
+from ..utils.json_utils import dumps_json, parse_followers_count
 
 
 router = APIRouter(prefix="/api/local/extension", tags=["extension"])
@@ -436,6 +436,28 @@ def _parse_x9_notes(notes: str | None) -> dict[str, str]:
     return out
 
 
+def _first_text(item: dict, *keys: str) -> str | None:
+    for key in keys:
+        value = item.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _x9_links(item: dict):
+    return (
+        item.get("external_links")
+        or item.get("links")
+        or item.get("profile_links")
+        or item.get("websites")
+        or item.get("website")
+        or []
+    )
+
+
 @router.post("/x9-compat/ingest-creators")
 def x9_compat_ingest(body: dict, request: Request, db: Session = Depends(get_db)) -> dict:
     from ..services.collector_service import ingest_observation
@@ -450,7 +472,18 @@ def x9_compat_ingest(body: dict, request: Request, db: Session = Depends(get_db)
             continue
         notes_meta = _parse_x9_notes(item.get("notes"))
         keyword = notes_meta.get("keyword") or item.get("search_keyword") or None
-        followers = item.get("followers")
+        followers = item.get("followers", item.get("followers_count"))
+        followers_raw = _first_text(item, "followers_raw", "followers_text", "followersLabel")
+        if not followers_raw and isinstance(followers, str):
+            followers_raw = followers
+        followers_count = None
+        if isinstance(followers, (int, float)):
+            followers_count = int(followers)
+        elif followers_raw:
+            followers_count = parse_followers_count(followers_raw)
+        visible_text = _first_text(item, "visible_text", "raw_visible_text", "profile_text", "raw_text", "text")
+        external_links = _x9_links(item)
+        current_status = item.get("current_status") or ("dropped" if notes_meta.get("filter") in {"no_email", "missing_contact"} else None)
         collected_at = (
             item.get("collected_at")
             or item.get("last_seen_at")
@@ -468,31 +501,55 @@ def x9_compat_ingest(body: dict, request: Request, db: Session = Depends(get_db)
             "worker_id": item.get("worker_id"),
             "account_id": item.get("account_id"),
             "search_keyword": keyword,
+            "current_status": current_status,
+            "lead_status": item.get("lead_status") or item.get("status") or ("skipped" if current_status == "dropped" else None),
+            "filter_reason": item.get("filter_reason") or notes_meta.get("filter"),
+            "filter_message": item.get("filter_message") or notes_meta.get("message"),
             "creator": {
                 "handle": handle,
                 "display_name": item.get("display_name") or item.get("nickname") or "",
                 "profile_url": item.get("profile_url") or f"https://www.tiktok.com/@{handle}",
                 "bio": item.get("bio"),
-                "followers_raw": item.get("followers_raw"),
-                "followers_count": int(followers) if isinstance(followers, (int, float)) else None,
-                "current_status": item.get("current_status"),
+                "followers_raw": followers_raw,
+                "followers_count": followers_count,
+                "following_raw": item.get("following_raw"),
+                "likes_raw": item.get("likes_raw"),
+                "current_status": current_status,
                 "email": item.get("email"),
-                "external_links": item.get("external_links") or [],
+                "emails": item.get("emails") or item.get("emails_json") or [],
+                "external_links": external_links,
+                "visible_text": visible_text,
+                "source_url": item.get("source_url") or item.get("current_url"),
             },
             "source_video": (
                 {
-                    "video_url": item.get("source_video_url"),
+                    "video_url": item.get("source_video_url") or item.get("video_url"),
                     "title": item.get("source_video_title"),
                     "description": item.get("source_video_description"),
                     "hashtags": [],
                 }
-                if item.get("source_video_url") else None
+                if (item.get("source_video_url") or item.get("video_url")) else None
             ),
+            "raw_profile": item.get("raw_profile") or {
+                "username": item.get("handle") or item.get("username"),
+                "nickname": item.get("display_name") or item.get("nickname"),
+                "profile_url": item.get("profile_url"),
+                "bio": item.get("bio"),
+                "followers_raw": followers_raw,
+                "followers_count": followers_count,
+                "following_raw": item.get("following_raw"),
+                "likes_raw": item.get("likes_raw"),
+                "email": item.get("email"),
+                "emails": item.get("emails") or item.get("emails_json") or [],
+                "external_links": external_links,
+                "visible_text": visible_text,
+                "source_url": item.get("source_url") or item.get("current_url"),
+            },
             "collected_at": collected_at,
         }
         try:
             r = ingest_observation(db, observation)
-            r["dropped_by_extension"] = item.get("current_status") == "dropped"
+            r["dropped_by_extension"] = current_status == "dropped"
             r["filter_reason"] = notes_meta.get("filter")
             results.append(r)
         except ValueError as exc:

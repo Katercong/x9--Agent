@@ -261,6 +261,18 @@ export interface BusinessMetricDaily {
 export interface DepartmentDashboardSummaryMetrics {
   total_creators: number;
   today_collected: number;
+  today_new_creators?: number;
+  recent_30d_creators?: number;
+  unique_creators?: number;
+  all_channel_rows_total?: number;
+  all_channel_rows_today?: number;
+  all_channel_rows_recent_30d?: number;
+  processed_rows_total?: number;
+  processed_rows_today?: number;
+  processed_rows_recent_30d?: number;
+  raw_observations_total?: number;
+  raw_observations_today?: number;
+  raw_observations_recent_30d?: number;
   contacted: number;
   review_pending: number;
   progressed: number;
@@ -325,6 +337,8 @@ export interface DepartmentDashboardSummary {
   bd_rows: DepartmentDashboardBdRow[];
   source_counts: DepartmentDashboardOwnerRow[];
   source_row_counts?: DepartmentDashboardOwnerRow[];
+  source_today_counts?: DepartmentDashboardOwnerRow[];
+  source_recent_counts?: DepartmentDashboardOwnerRow[];
   staff_history?: {
     rows: DepartmentDashboardStaffHistoryRow[];
     totals: {
@@ -334,6 +348,27 @@ export interface DepartmentDashboardSummary {
       videos: number;
     };
   };
+}
+
+export interface SystemMetrics {
+  ok: boolean;
+  generated_at: string;
+  cpu_percent?: number | null;
+  disk: {
+    path: string;
+    percent: number;
+    used: number;
+    free: number;
+    total: number;
+  };
+  database: {
+    row_count: number;
+    tables: { name: string; count: number }[];
+  };
+  requests_24h: { hour: string; count: number }[];
+  request_total_24h: number;
+  avg_duration_ms_24h: number;
+  error_count_24h: number;
 }
 
 export interface KeywordSnapshot {

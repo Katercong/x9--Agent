@@ -433,6 +433,7 @@ def preview_email(creator_id: str, body: PreviewIn, request: Request, db: Sessio
 @router.post("/draft")
 def create_draft(body: DraftIn, request: Request, db: Session = Depends(get_db)) -> dict:
     department_code = current_department_code(request)
+    current_user = getattr(request.state, "current_user", None) or {}
     creator = _resolve_creator(db, body.creator_id, department_code)
     template = None
     rendered_subject = body.subject
@@ -477,6 +478,7 @@ def create_draft(body: DraftIn, request: Request, db: Session = Depends(get_db))
         ai_versions_json=json.dumps(body.ai_versions, ensure_ascii=False) if body.ai_versions else None,
         ai_tone=body.ai_tone,
         ai_language=body.ai_language,
+        created_by=current_user.get("id") or current_user.get("identity"),
     )
     db.add(draft)
     db.commit()
@@ -567,11 +569,13 @@ def send_draft(draft_id: str, body: SendIn, request: Request, db: Session = Depe
     if not draft.to_email or "@" not in draft.to_email:
         raise HTTPException(status_code=400, detail=f"invalid recipient: {draft.to_email!r}")
 
+    current_user = getattr(request.state, "current_user", None) or {}
+    if not draft.created_by:
+        draft.created_by = current_user.get("id") or current_user.get("identity")
     draft.status = "queued"
     db.commit()
 
     try:
-        current_user = getattr(request.state, "current_user", None) or {}
         result = gmail_service.send_email(
             to_email=draft.to_email,
             subject=draft.subject,
@@ -662,39 +666,58 @@ def email_history(creator_id: str, request: Request, db: Session = Depends(get_d
 
 
 def _gmail_user_scope(current_user: dict[str, Any] | None) -> str | None:
-    """Admins manage shared/legacy Gmail accounts; department users are scoped."""
+    """Every logged-in account uses its own Gmail authorization."""
     current_user = current_user or {}
-    if current_user.get("role") in {"company_admin", "super_admin"}:
-        return None
     return current_user.get("id")
 
 
 def _gmail_scope(current_user: dict[str, Any] | None) -> dict[str, Any]:
     current_user = current_user or {}
-    if current_user.get("role") in {"company_admin", "super_admin"}:
-        return {"user_id": None, "department_code": None, "include_shared": True}
+    gmail_service.claim_matching_unowned_account(
+        user_id=current_user.get("id"),
+        email=current_user.get("email"),
+        department_code=current_user.get("department_code"),
+    )
     return {
         "user_id": current_user.get("id"),
         "department_code": current_user.get("department_code"),
-        "include_shared": True,
+        "include_shared": False,
     }
 
 
 def _gmail_save_owner(current_user: dict[str, Any] | None) -> dict[str, str | None]:
     current_user = current_user or {}
-    if current_user.get("role") in {"company_admin", "super_admin"}:
-        return {"user_id": None, "department_code": None}
     return {
         "user_id": current_user.get("id"),
         "department_code": current_user.get("department_code"),
     }
+
+
+def _gmail_feedback_redirect(
+    state: str | None,
+    *,
+    status: str,
+    msg: str | None = None,
+    email: str | None = None,
+) -> RedirectResponse:
+    from urllib.parse import quote_plus
+
+    target = gmail_service.decode_state_return_to(state) or "/portal/"
+    sep = "&" if "?" in target else "?"
+    parts = [f"gmail={quote_plus(status)}"]
+    if msg:
+        parts.append(f"msg={quote_plus(msg)}")
+    if email:
+        parts.append(f"email={quote_plus(email)}")
+    return RedirectResponse(url=f"{target}{sep}{'&'.join(parts)}", status_code=302)
 
 
 @router.get("/gmail/status")
 def gmail_status(request: Request) -> dict:
     current_user = getattr(request.state, "current_user", None) or {}
     request_origin = (request.headers.get("origin") or "").rstrip("/") or None
-    snapshot = gmail_service.status(**_gmail_scope(current_user))
+    gmail_scope = _gmail_scope(current_user)
+    snapshot = gmail_service.status(**gmail_scope)
     origins = snapshot.get("accounts") and gmail_service.public_javascript_origins() or gmail_service.public_javascript_origins()
     snapshot["current_origin"] = request_origin
     snapshot["origin_match"] = bool(request_origin and origins and request_origin in origins)
@@ -703,7 +726,7 @@ def gmail_status(request: Request) -> dict:
         snapshot["redirect_uri_callback"] = (
             f"{request_origin}/api/local/outreach/gmail/callback"
         )
-    snapshot["diagnostics"] = gmail_service.diagnose(request_origin)
+    snapshot["diagnostics"] = gmail_service.diagnose(request_origin, **gmail_scope)
     return {"ok": True, **snapshot}
 
 
@@ -721,6 +744,7 @@ def gmail_client_info(request: Request) -> dict:
         raise HTTPException(status_code=400, detail="Gmail OAuth client not configured")
     request_origin = (request.headers.get("origin") or "").rstrip("/") or None
     origins = gmail_service.public_javascript_origins()
+    gmail_scope = _gmail_scope(getattr(request.state, "current_user", None))
     return {
         "ok": True,
         "client_id": client_id,
@@ -728,14 +752,14 @@ def gmail_client_info(request: Request) -> dict:
         "javascript_origins": origins,
         "current_origin": request_origin,
         "origin_match": bool(request_origin and origins and request_origin in origins),
-        "diagnostics": gmail_service.diagnose(request_origin),
+        "diagnostics": gmail_service.diagnose(request_origin, **gmail_scope),
     }
 
 
 class GmailExchangeIn(BaseModel):
     code: str
     # GIS popup mode issues the code against the page origin, for example
-    # ``http://localhost:8000``. Older builds sent the legacy literal
+    # ``https://usx9.us``. Older builds sent the legacy literal
     # ``postmessage``; the route below normalizes that using the Origin
     # header so cached frontend code can still complete authorization.
     redirect_uri: str | None = None
@@ -787,8 +811,7 @@ def gmail_list_accounts(request: Request) -> dict:
 @router.delete("/gmail/accounts/{account_id}")
 def gmail_remove_account(account_id: str, request: Request) -> dict:
     current_user = getattr(request.state, "current_user", None) or {}
-    is_admin = current_user.get("role") in {"company_admin", "super_admin"}
-    if not gmail_service.remove_account(account_id, user_id=current_user.get("id"), allow_all=is_admin):
+    if not gmail_service.remove_account(account_id, user_id=current_user.get("id"), allow_all=False):
         raise HTTPException(status_code=404, detail="account not found")
     return {"ok": True}
 
@@ -796,8 +819,7 @@ def gmail_remove_account(account_id: str, request: Request) -> dict:
 @router.post("/gmail/accounts/{account_id}/default")
 def gmail_set_default(account_id: str, request: Request) -> dict:
     current_user = getattr(request.state, "current_user", None) or {}
-    is_admin = current_user.get("role") in {"company_admin", "super_admin"}
-    if not gmail_service.set_default_account(account_id, user_id=current_user.get("id"), allow_all=is_admin):
+    if not gmail_service.set_default_account(account_id, user_id=current_user.get("id"), allow_all=False):
         raise HTTPException(status_code=404, detail="account not found or inactive")
     return {"ok": True}
 
@@ -808,15 +830,17 @@ def gmail_auth_url(
     label: str | None = Query(default=None),
     return_to: str | None = Query(default=None),
 ) -> dict:
+    current_user = getattr(request.state, "current_user", None)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="login required before connecting Gmail")
     try:
-        current_user = getattr(request.state, "current_user", None)
-        owner = _gmail_save_owner(current_user) if current_user else {}
+        owner = _gmail_save_owner(current_user)
         info = gmail_service.build_auth_url(
             label=label,
             return_to=return_to,
             user_id=owner.get("user_id"),
             department_code=owner.get("department_code"),
-            owner_verified=bool(current_user),
+            owner_verified=True,
         )
     except gmail_service.GmailNotConfiguredError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -865,7 +889,7 @@ def gmail_connect(
             f"<p>{escape(str(exc))}</p>"
             "<p>请按 <code>backend/README_OUTREACH.md</code> 把 Google OAuth "
             "客户端 JSON 放到 <code>data/gmail_client_secret.json</code>，再点连接。</p>"
-            "<p><a href='/ui/'>← 返回控制台</a></p>"
+            "<p><a href='/portal/'>← 返回控制台</a></p>"
             "</body></html>"
         )
         return HTMLResponse(body, status_code=400)
@@ -881,24 +905,31 @@ def gmail_callback(
 ):
     """Google redirects the browser here after consent.
 
-    On success/failure we 302 back to the dashboard with a query flag so
-    the SPA can show a toast and re-open the outreach modal it was on.
+    On success/failure we 302 back to the originating SPA path with a
+    query flag so the frontend can show a concrete binding result.
     """
-    from urllib.parse import quote_plus
-
     if error:
-        return RedirectResponse(
-            url=f"/ui/?gmail=error&msg={quote_plus(error)}", status_code=302
-        )
+        return _gmail_feedback_redirect(state, status="error", msg=error)
     if not code:
-        return RedirectResponse(
-            url="/ui/?gmail=error&msg=missing_code", status_code=302
-        )
+        return _gmail_feedback_redirect(state, status="error", msg="missing_code")
+    if not state:
+        return _gmail_feedback_redirect(state, status="error", msg="missing_state")
+    state_payload = gmail_service.decode_state_payload(state, verify_signature=True)
+    if not state_payload:
+        return _gmail_feedback_redirect(state, status="error", msg="invalid_state")
+
     current_user = getattr(request.state, "current_user", None)
     state_owner = gmail_service.decode_state_owner(state)
     has_verified_state_owner = bool(state_owner.get("owner_verified"))
+    if (
+        current_user
+        and state_owner.get("user_id")
+        and state_owner.get("user_id") != current_user.get("id")
+    ):
+        return _gmail_feedback_redirect(state, status="error", msg="state_user_mismatch")
     if not current_user and not has_verified_state_owner:
         return RedirectResponse(url="/login?gmail=login_required", status_code=302)
+
     try:
         owner = _gmail_save_owner(current_user) if current_user else state_owner
         result = gmail_service.handle_oauth_callback(
@@ -908,27 +939,14 @@ def gmail_callback(
             department_code=owner.get("department_code"),
         )
     except gmail_service.GmailNotConfiguredError as exc:
-        return RedirectResponse(
-            url=f"/ui/?gmail=error&msg={quote_plus(str(exc))}", status_code=302
-        )
+        return _gmail_feedback_redirect(state, status="error", msg=str(exc))
     except gmail_service.GmailNotAuthorizedError as exc:
-        return RedirectResponse(
-            url=f"/ui/?gmail=error&msg={quote_plus(str(exc))}", status_code=302
-        )
+        return _gmail_feedback_redirect(state, status="error", msg=str(exc))
     except Exception as exc:
-        return RedirectResponse(
-            url=f"/ui/?gmail=error&msg={quote_plus(str(exc))}", status_code=302
-        )
+        return _gmail_feedback_redirect(state, status="error", msg=str(exc))
+
     email = result.get("email") or ""
-    return_to = gmail_service.decode_state_return_to(state)
-    if return_to:
-        sep = "&" if "?" in return_to else "?"
-        return RedirectResponse(
-            url=f"{return_to}{sep}gmail=ok&email={quote_plus(email)}",
-            status_code=302,
-        )
-    target = f"/workspace/{(current_user or {}).get('department_slug') or 'cross-border'}/"
-    return RedirectResponse(url=f"{target}?gmail=ok&email={quote_plus(email)}", status_code=302)
+    return _gmail_feedback_redirect(state, status="ok", email=email)
 
 
 @router.post("/gmail/disconnect")

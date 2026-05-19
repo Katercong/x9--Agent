@@ -52,6 +52,8 @@ _JSON_COLS = {
     "evidence_text_json",
     "risk_tags_json",
     "positive_tags_json",
+    "profile_snapshot_json",
+    "tiktok_shop_json",
 }
 
 
@@ -114,6 +116,10 @@ def _decode_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
     return out
 
 
+def _normalize_handle_lookup(value: str | None) -> str:
+    return str(value or "").strip().lstrip("@").lower()
+
+
 def _direct_columns(conn) -> set[str]:
     table = _direct_table()
     rows = conn.execute(
@@ -159,10 +165,20 @@ def _direct_get_by_id(creator_id: int | str) -> dict | None:
 
 def _direct_get_by_handle(platform: str, handle: str) -> dict | None:
     table = _direct_table()
+    platform_key = str(platform or "tiktok").strip().lower()
+    handle_key = _normalize_handle_lookup(handle)
     with engine.connect() as conn:
         row = conn.execute(
-            text(f"SELECT * FROM {table} WHERE platform = :platform AND handle = :handle LIMIT 1"),
-            {"platform": platform, "handle": handle},
+            text(
+                f"""
+                SELECT *
+                FROM {table}
+                WHERE lower(trim(platform)) = :platform
+                  AND lower(trim(handle)) IN (:handle, :at_handle)
+                LIMIT 1
+                """
+            ),
+            {"platform": platform_key, "handle": handle_key, "at_handle": f"@{handle_key}"},
         ).mappings().first()
     return _decode_row(dict(row)) if row else None
 
@@ -186,9 +202,19 @@ def _direct_bulk_upsert(rows: list[dict]) -> dict:
                     continue
                 existing = None
                 if fields.get("platform") and fields.get("handle"):
+                    platform_key = str(fields["platform"]).strip().lower()
+                    handle_key = _normalize_handle_lookup(fields["handle"])
                     existing = conn.execute(
-                        text(f"SELECT id FROM {table} WHERE platform = :platform AND handle = :handle LIMIT 1"),
-                        {"platform": fields["platform"], "handle": fields["handle"]},
+                        text(
+                            f"""
+                            SELECT id
+                            FROM {table}
+                            WHERE lower(trim(platform)) = :platform
+                              AND lower(trim(handle)) IN (:handle, :at_handle)
+                            LIMIT 1
+                            """
+                        ),
+                        {"platform": platform_key, "handle": handle_key, "at_handle": f"@{handle_key}"},
                     ).mappings().first()
                 if existing:
                     update_cols = [c for c in fields if c not in {"platform", "handle", "id"}]
