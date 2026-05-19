@@ -66,3 +66,4 @@ logs/
 *.err.log
 *.out.log
 /web-user/dist/
+/web-user/.vite/
