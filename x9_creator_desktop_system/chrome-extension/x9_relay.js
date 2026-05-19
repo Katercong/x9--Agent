@@ -25,6 +25,50 @@ function joinPath(base, path) {
   return `${String(base).replace(/\/+$/, "")}${path}`;
 }
 
+function normalizeApiBase(base) {
+  return String(base || "").replace(/\/+$/, "");
+}
+
+function dashboardBaseFromUrl(url) {
+  try {
+    const parsed = new URL(url || "");
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname || "/";
+    const knownHost = host === "usx9.us"
+      || host.endsWith(".usx9.us")
+      || host === "localhost"
+      || host === "127.0.0.1"
+      || host === "192.168.1.171";
+    const dashboardPath = path === "/"
+      || path.startsWith("/portal")
+      || path.startsWith("/ui")
+      || path === "/d"
+      || path.startsWith("/d/");
+    if (!/^https?:$/.test(parsed.protocol) || !knownHost || !dashboardPath) {
+      return "";
+    }
+    return parsed.origin;
+  } catch {
+    return "";
+  }
+}
+
+async function getDashboardBaseCandidates() {
+  const [activeTabs, allTabs] = await Promise.all([
+    chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []),
+    chrome.tabs.query({}).catch(() => []),
+  ]);
+  const orderedTabs = [...activeTabs, ...allTabs];
+  const bases = [];
+  for (const tab of orderedTabs) {
+    const base = dashboardBaseFromUrl(tab?.url);
+    if (base && !bases.includes(base)) {
+      bases.push(base);
+    }
+  }
+  return bases;
+}
+
 async function getStoredApiBase() {
   const o = await chrome.storage.local.get([X9_API_BASE_KEY, X9_API_BASE_ACTIVE_KEY]);
   return { override: o[X9_API_BASE_KEY] || "", active: o[X9_API_BASE_ACTIVE_KEY] || "" };
@@ -37,12 +81,17 @@ async function setActiveApiBase(base) {
 async function getCandidateOrder() {
   const { override, active } = await getStoredApiBase();
   // Explicit user override always wins.
-  if (override) return [override];
-  // Otherwise try the last working one first, then walk the candidate list.
+  if (override) return [normalizeApiBase(override)];
+  // Prefer the currently open X9 dashboard origin, then the last working one.
   const ordered = [];
-  if (active) ordered.push(active);
+  for (const base of await getDashboardBaseCandidates()) {
+    if (!ordered.includes(base)) ordered.push(base);
+  }
+  const normalizedActive = normalizeApiBase(active);
+  if (normalizedActive && !ordered.includes(normalizedActive)) ordered.push(normalizedActive);
   for (const c of X9_API_BASE_CANDIDATES) {
-    if (!ordered.includes(c)) ordered.push(c);
+    const base = normalizeApiBase(c);
+    if (base && !ordered.includes(base)) ordered.push(base);
   }
   return ordered;
 }

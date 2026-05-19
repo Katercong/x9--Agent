@@ -79,7 +79,7 @@ export default function Dashboard() {
     review_pending: 0,
     progressed: 0,
   };
-  const stageCounts = data?.stage_counts ?? {};
+  const overviewCounts = Object.fromEntries((data?.overview ?? []).map((row) => [row.key, row.count]));
   const trend7 = data?.trend_7d ?? [];
   const recent7 = trend7.reduce((sum, row) => sum + row.count, 0);
   const categoryCounts = data?.category_counts?.length ? data.category_counts : [{ name: '未填写', value: 0 }];
@@ -89,7 +89,7 @@ export default function Dashboard() {
     .slice(0, 8);
 
   const topRow = [
-    { label: '总达人', value: summary.total_creators, subLabel: '全部达人去重数', delta: null as number | null },
+    { label: '总达人', value: summary.total_creators, subLabel: '全平台累计数', delta: null as number | null },
     { label: '今日采集', value: summary.today_collected, delta: null },
     { label: '已建联', value: summary.contacted, delta: null },
     { label: '待审核', value: summary.review_pending, delta: null },
@@ -97,16 +97,16 @@ export default function Dashboard() {
   ];
 
   const overview = [
-    { label: '潜在线索', value: stageCounts.prospect || 0 },
-    { label: '已联系', value: stageCounts.contacted || 0 },
-    { label: '已确认', value: stageCounts.confirmed || 0 },
-    { label: '待回复', value: stageCounts.pending_reply || 0 },
+    { label: '潜在线索', value: overviewCounts.prospect || 0 },
+    { label: '已联系', value: overviewCounts.contacted || 0 },
+    { label: '已确认', value: overviewCounts.confirmed || 0 },
+    { label: '待回复', value: overviewCounts.pending_reply || 0 },
     { label: '近 7 天新增', value: recent7 },
-    { label: '已寄样', value: stageCounts.sample_shipped || 0 },
-    { label: '样品签收', value: stageCounts.sample_delivered || 0 },
-    { label: '视频已发', value: stageCounts.video_published || 0 },
-    { label: '已授权', value: stageCounts.ad_authorized || 0 },
-    { label: '广告投放中', value: stageCounts.ad_running || 0 },
+    { label: '已寄样', value: overviewCounts.sample_shipped || 0 },
+    { label: '样品签收', value: overviewCounts.sample_delivered || 0 },
+    { label: '视频已发', value: overviewCounts.video_published || 0 },
+    { label: '已授权', value: overviewCounts.ad_authorized || 0 },
+    { label: '广告投放中', value: overviewCounts.ad_running || 0 },
   ];
 
   const donutData = (data?.stage_rows ?? [])
@@ -246,7 +246,7 @@ export default function Dashboard() {
           <div className="card lg:col-span-2">
             <div className="px-4 pt-3 pb-2">
               <h3 className="text-sm font-semibold text-gray-800">BD 历史跟进数据</h3>
-              <div className="text-xxs text-muted mt-0.5">来自 staff.note 月度统计，和上方总达人去重口径分开展示</div>
+              <div className="text-xxs text-muted mt-0.5">来自 staff.note 月度统计，已并入上方全平台统计口径</div>
             </div>
             <div className="px-2 pb-3">
               <DataTable

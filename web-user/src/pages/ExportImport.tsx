@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ArrowDownToLine, ArrowUpToLine, FileSpreadsheet, FileText, Filter } from 'lucide-react';
 
 const exportOptions = [
@@ -23,23 +23,61 @@ const exportOptions = [
 ];
 
 const importTemplates = [
-  { name: '达人导入模板', desc: '必填字段:handle / platform。可选:tier / followers / email 等', url: '/api/local/import/template.csv' },
+  { name: '达人导入模板', desc: '必填字段:handle / platform。可选:tier / followers / email 等', url: '/api/local/import/creators/template.csv' },
 ];
+
+function fileContentType(file: File) {
+  if (file.type) return file.type;
+  const ext = file.name.toLowerCase().split('.').pop();
+  if (ext === 'csv') return 'text/csv; charset=utf-8';
+  if (ext === 'xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  return 'application/octet-stream';
+}
+
+function importSummary(data: any) {
+  const total = data.total_rows ?? 0;
+  const upserted = data.upserted ?? data.imported ?? data.count ?? 0;
+  const failed = data.failed ?? 0;
+  const updated = data.updated ?? 0;
+  const inserted = data.inserted ?? Math.max(0, upserted - updated);
+  const firstError = Array.isArray(data.errors) && data.errors.length > 0
+    ? `\n首个错误: 第 ${data.errors[0].row ?? '-'} 行 ${data.errors[0].detail ?? ''}`
+    : '';
+
+  if (failed > 0) {
+    return `导入完成但有失败: 共 ${total} 行，成功 ${upserted} 行，失败 ${failed} 行${firstError}`;
+  }
+  return `导入成功: 共 ${total} 行，新增 ${inserted} 行，更新 ${updated} 行`;
+}
 
 export default function ExportImport() {
   const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const onUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const ext = file.name.toLowerCase().split('.').pop();
+    if (!['csv', 'xlsx'].includes(ext || '')) {
+      alert('请选择 .csv 或 .xlsx 文件');
+      e.target.value = '';
+      return;
+    }
     setImporting(true);
-    const fd = new FormData();
-    fd.append('file', file);
-    fetch('/api/local/import/creators', { method: 'POST', body: fd, credentials: 'include' })
+    const params = new URLSearchParams({ filename: file.name });
+    fetch(`/api/local/import/creators/table?${params.toString()}`, {
+      method: 'POST',
+      body: file,
+      credentials: 'include',
+      headers: {
+        'Content-Type': fileContentType(file),
+        'X-Filename': file.name,
+      },
+    })
       .then(async (r) => {
         const j = await r.json().catch(() => ({}));
         if (r.ok) {
-          alert(`✓ 导入成功:${j.imported || j.count || 0} 行`);
+          alert(`✓ ${importSummary(j)}`);
         } else {
           alert(`✗ 导入失败:${j.detail || r.statusText}`);
         }
@@ -106,17 +144,23 @@ export default function ExportImport() {
           </div>
           <div className="border border-dashed border-border rounded-md p-6 text-center">
             <input
+              ref={fileInputRef}
               type="file"
-              accept=".csv,.xlsx,.xls"
+              accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               onChange={onUpload}
               disabled={importing}
               className="hidden"
               id="import-file"
             />
-            <label htmlFor="import-file" className="btn btn-primary cursor-pointer">
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={importing}
+              onClick={() => fileInputRef.current?.click()}
+            >
               {importing ? '上传中...' : '选择 CSV / Excel 文件上传'}
-            </label>
-            <div className="text-xxs text-muted mt-2">支持 .csv / .xlsx / .xls,建议先下载模板填好再上传</div>
+            </button>
+            <div className="text-xxs text-muted mt-2">支持 .csv / .xlsx，建议先下载模板填好再上传</div>
           </div>
         </div>
       </div>

@@ -92,16 +92,11 @@
       return current;
     }
 
-    const stored = await chrome.storage.local.get([SHOP_API_BASE_KEY, SHOP_API_BASE_ACTIVE_KEY]).catch(() => ({}));
-    const bases = [
-      stored[SHOP_API_BASE_KEY],
-      stored[SHOP_API_BASE_ACTIVE_KEY],
-      ...SHOP_BACKEND_CANDIDATES,
-    ].filter(Boolean);
+    const bases = await buildShopBackendCandidateOrder();
 
     const seen = new Set();
     for (const rawBase of bases) {
-      const base = String(rawBase).replace(/\/+$/, "");
+      const base = normalizeShopApiBase(rawBase);
       if (!base || seen.has(base)) continue;
       seen.add(base);
       if (await canReachShopBackend(base)) {
@@ -126,6 +121,66 @@
 
   function joinShopPath(base, path) {
     return `${String(base).replace(/\/+$/, "")}${path}`;
+  }
+
+  function normalizeShopApiBase(base) {
+    return String(base || "").replace(/\/+$/, "");
+  }
+
+  function shopDashboardBaseFromUrl(url) {
+    try {
+      const parsed = new URL(url || "");
+      const host = parsed.hostname.toLowerCase();
+      const path = parsed.pathname || "/";
+      const knownHost = host === "usx9.us"
+        || host.endsWith(".usx9.us")
+        || host === "localhost"
+        || host === "127.0.0.1"
+        || host === "192.168.1.171";
+      const dashboardPath = path === "/"
+        || path.startsWith("/portal")
+        || path.startsWith("/ui")
+        || path === "/d"
+        || path.startsWith("/d/");
+      if (!/^https?:$/.test(parsed.protocol) || !knownHost || !dashboardPath) {
+        return "";
+      }
+      return parsed.origin;
+    } catch {
+      return "";
+    }
+  }
+
+  async function shopDashboardBaseCandidates() {
+    const [activeTabs, allTabs] = await Promise.all([
+      chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []),
+      chrome.tabs.query({}).catch(() => []),
+    ]);
+    const bases = [];
+    for (const tab of [...activeTabs, ...allTabs]) {
+      const base = shopDashboardBaseFromUrl(tab?.url);
+      if (base && !bases.includes(base)) {
+        bases.push(base);
+      }
+    }
+    return bases;
+  }
+
+  async function buildShopBackendCandidateOrder() {
+    const stored = await chrome.storage.local.get([SHOP_API_BASE_KEY, SHOP_API_BASE_ACTIVE_KEY]).catch(() => ({}));
+    const override = normalizeShopApiBase(stored[SHOP_API_BASE_KEY]);
+    const active = normalizeShopApiBase(stored[SHOP_API_BASE_ACTIVE_KEY]);
+    const ordered = [];
+    if (override) ordered.push(override);
+    for (const base of await shopDashboardBaseCandidates()) {
+      if (!ordered.includes(base)) ordered.push(base);
+    }
+    if (active && !ordered.includes(active)) ordered.push(active);
+    for (const raw of SHOP_BACKEND_CANDIDATES) {
+      const base = normalizeShopApiBase(raw);
+      if (base && !ordered.includes(base)) ordered.push(base);
+    }
+    return ordered;
   }
 
   function startPolling() {

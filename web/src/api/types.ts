@@ -297,6 +297,16 @@ export interface DepartmentDashboardBdRow {
   authorized: number;
 }
 
+export interface DepartmentDashboardStaffHistoryRow {
+  owner: string;
+  role: string;
+  contacted: number;
+  confirmed: number;
+  samples: number;
+  videos: number;
+  month: string;
+}
+
 export interface DepartmentDashboardSummary {
   ok: boolean;
   generated_at: string;
@@ -314,6 +324,16 @@ export interface DepartmentDashboardSummary {
   owner_counts: DepartmentDashboardOwnerRow[];
   bd_rows: DepartmentDashboardBdRow[];
   source_counts: DepartmentDashboardOwnerRow[];
+  source_row_counts?: DepartmentDashboardOwnerRow[];
+  staff_history?: {
+    rows: DepartmentDashboardStaffHistoryRow[];
+    totals: {
+      contacted: number;
+      confirmed: number;
+      samples: number;
+      videos: number;
+    };
+  };
 }
 
 export interface KeywordSnapshot {

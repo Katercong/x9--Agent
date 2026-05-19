@@ -84,6 +84,7 @@ PUBLIC_API_PATHS = {
     "/api/local/extension/launcher-heartbeat",
     "/api/local/extension/x9-compat/ingest-creators",
     "/api/local/extension/run-progress",
+    "/api/local/extension/download",
 }
 PUBLIC_API_PREFIXES = (
     "/api/local/extension/commands/pending",

@@ -2197,16 +2197,11 @@ async function postX9BackendHeartbeat(reason) {
 }
 
 async function x9ResolveBackendBaseForRuntime() {
-  const stored = await chrome.storage.local.get([X9_API_BASE_KEY, X9_API_BASE_ACTIVE_KEY]).catch(() => ({}));
-  const bases = [
-    stored[X9_API_BASE_KEY],
-    stored[X9_API_BASE_ACTIVE_KEY],
-    ...X9_BACKEND_CANDIDATES,
-  ].filter(Boolean);
+  const bases = await x9BuildBackendCandidateOrder();
 
   const seen = new Set();
   for (const rawBase of bases) {
-    const base = String(rawBase).replace(/\/+$/, '');
+    const base = x9NormalizeApiBase(rawBase);
     if (!base || seen.has(base)) continue;
     seen.add(base);
     try {
@@ -3048,6 +3043,66 @@ function x9JoinPath(base, path) {
   return `${String(base).replace(/\/+$/, "")}${path}`;
 }
 
+function x9NormalizeApiBase(base) {
+  return String(base || "").replace(/\/+$/, "");
+}
+
+function x9DashboardBaseFromUrl(url) {
+  try {
+    const parsed = new URL(url || "");
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname || "/";
+    const knownHost = host === "usx9.us"
+      || host.endsWith(".usx9.us")
+      || host === "localhost"
+      || host === "127.0.0.1"
+      || host === "192.168.1.171";
+    const dashboardPath = path === "/"
+      || path.startsWith("/portal")
+      || path.startsWith("/ui")
+      || path === "/d"
+      || path.startsWith("/d/");
+    if (!/^https?:$/.test(parsed.protocol) || !knownHost || !dashboardPath) {
+      return "";
+    }
+    return parsed.origin;
+  } catch {
+    return "";
+  }
+}
+
+async function x9DashboardBaseCandidates() {
+  const [activeTabs, allTabs] = await Promise.all([
+    chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []),
+    chrome.tabs.query({}).catch(() => []),
+  ]);
+  const bases = [];
+  for (const tab of [...activeTabs, ...allTabs]) {
+    const base = x9DashboardBaseFromUrl(tab?.url);
+    if (base && !bases.includes(base)) {
+      bases.push(base);
+    }
+  }
+  return bases;
+}
+
+async function x9BuildBackendCandidateOrder() {
+  const stored = await chrome.storage.local.get([X9_API_BASE_KEY, X9_API_BASE_ACTIVE_KEY]).catch(() => ({}));
+  const override = x9NormalizeApiBase(stored[X9_API_BASE_KEY]);
+  const active = x9NormalizeApiBase(stored[X9_API_BASE_ACTIVE_KEY]);
+  const ordered = [];
+  if (override) ordered.push(override);
+  for (const base of await x9DashboardBaseCandidates()) {
+    if (!ordered.includes(base)) ordered.push(base);
+  }
+  if (active && !ordered.includes(active)) ordered.push(active);
+  for (const raw of X9_BACKEND_CANDIDATES) {
+    const base = x9NormalizeApiBase(raw);
+    if (base && !ordered.includes(base)) ordered.push(base);
+  }
+  return ordered;
+}
+
 async function x9DetectBackend(candidates) {
   for (const base of candidates) {
     try {
@@ -3110,11 +3165,7 @@ async function x9DetectBackendUI() {
   const status = document.getElementById("x9BackendStatus");
   if (!status) return;
   status.textContent = "检测中…";
-  // If the user has pinned an override, try it first
-  const stored = await chrome.storage.local.get([X9_API_BASE_KEY]);
-  const candidates = stored[X9_API_BASE_KEY]
-    ? [stored[X9_API_BASE_KEY], ...X9_BACKEND_CANDIDATES]
-    : X9_BACKEND_CANDIDATES;
+  const candidates = await x9BuildBackendCandidateOrder();
   const found = await x9DetectBackend(candidates);
   if (found) {
     await chrome.storage.local.set({ [X9_API_BASE_ACTIVE_KEY]: found });
