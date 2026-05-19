@@ -19,8 +19,8 @@ import { EChart } from '@/components/charts/EChart';
 import { PriorityBar } from '@/components/progress/PriorityBar';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { AsyncState } from '@/components/states/States';
-import { useDepartmentDashboardSummary } from '@/hooks/useApi';
-import type { DepartmentDashboardBdRow } from '@/api/types';
+import { useDepartmentDashboardSummary, useStaff } from '@/hooks/useApi';
+import { staffStats } from '@/lib/derive';
 
 const topKpiIcons = [Users, Inbox, ThumbsUp, Clock, Handshake];
 const topKpiBg = ['#e0e7ff', '#d1fae5', '#cffafe', '#fed7aa', '#ede9fe'];
@@ -52,16 +52,14 @@ const stageColors: Record<string, string> = {
   dropped: '#ef4444',
 };
 
-type BdRow = DepartmentDashboardBdRow;
+type BdRow = ReturnType<typeof staffStats>[number];
 
 const bdColumns: Column<BdRow>[] = [
-  { key: 'owner', header: '负责人', cell: (r) => <span className="text-xs">{r.owner}</span> },
-  { key: 'creator_count', header: '达人数', align: 'right', cell: (r) => <span className="text-xs num">{r.creator_count}</span> },
+  { key: 'owner', header: '负责人', cell: (r) => <span className="text-xs">{r.name}</span> },
   { key: 'contacted', header: '已建联', align: 'right', cell: (r) => <span className="text-xs num">{r.contacted}</span> },
   { key: 'confirmed', header: '已确认', align: 'right', cell: (r) => <span className="text-xs num">{r.confirmed}</span> },
   { key: 'samples', header: '已寄样', align: 'right', cell: (r) => <span className="text-xs num">{r.samples}</span> },
   { key: 'videos', header: '已发视频', align: 'right', cell: (r) => <span className="text-xs num">{r.videos}</span> },
-  { key: 'authorized', header: '已授权', align: 'right', cell: (r) => <span className="text-xs num">{r.authorized}</span> },
 ];
 
 function formatDay(value: string) {
@@ -72,6 +70,7 @@ function formatDay(value: string) {
 
 export default function Dashboard() {
   const dashboardQ = useDepartmentDashboardSummary();
+  const staffQ = useStaff({ limit: 100 });
   const data = dashboardQ.data;
   const summary = data?.summary ?? {
     total_creators: 0,
@@ -85,7 +84,9 @@ export default function Dashboard() {
   const recent7 = trend7.reduce((sum, row) => sum + row.count, 0);
   const categoryCounts = data?.category_counts?.length ? data.category_counts : [{ name: '未填写', value: 0 }];
   const ownerRows = (data?.owner_counts ?? []).map((row) => ({ label: row.name, value: row.count }));
-  const bdRows = data?.bd_rows ?? [];
+  const bdRows = staffStats(staffQ.data?.items ?? [])
+    .sort((a, b) => b.contacted - a.contacted)
+    .slice(0, 8);
 
   const topRow = [
     { label: '总达人', value: summary.total_creators, subLabel: '全部达人去重数', delta: null as number | null },
@@ -244,15 +245,15 @@ export default function Dashboard() {
           </div>
           <div className="card lg:col-span-2">
             <div className="px-4 pt-3 pb-2">
-              <h3 className="text-sm font-semibold text-gray-800">BD 跟进明细</h3>
-              <div className="text-xxs text-muted mt-0.5">基于全部达人去重后的负责人阶段统计</div>
+              <h3 className="text-sm font-semibold text-gray-800">BD 历史跟进数据</h3>
+              <div className="text-xxs text-muted mt-0.5">来自 staff.note 月度统计，和上方总达人去重口径分开展示</div>
             </div>
             <div className="px-2 pb-3">
               <DataTable
                 columns={bdColumns}
                 data={bdRows}
-                rowKey={(r) => r.owner}
-                emptyText="暂无 BD 统计数据"
+                rowKey={(r) => r.name}
+                emptyText={staffQ.isLoading ? 'BD 数据加载中...' : staffQ.error ? 'BD 历史数据暂不可用' : '暂无 BD 历史数据'}
                 compact
               />
             </div>
