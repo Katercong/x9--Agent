@@ -23,6 +23,12 @@ class ReviewTaskUpdateIn(BaseModel):
     upgrade_priority: str | None = None
 
 
+def _iso(value) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
 def _serialize(t) -> dict:
     return {
         "id": t.id,
@@ -34,8 +40,8 @@ def _serialize(t) -> dict:
         "reviewer_notes": t.reviewer_notes,
         "review_result": t.review_result,
         "assigned_staff_id": t.assigned_staff_id,
-        "created_at": t.created_at.isoformat() if t.created_at else None,
-        "reviewed_at": t.reviewed_at.isoformat() if t.reviewed_at else None,
+        "created_at": _iso(t.created_at),
+        "reviewed_at": _iso(t.reviewed_at),
     }
 
 

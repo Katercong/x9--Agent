@@ -11,6 +11,16 @@
   };
 
   const DEFAULT_ENDPOINT = "http://127.0.0.1:8000/api/local/collector/observations";
+  const SHOP_API_BASE_KEY = "x9_api_base";
+  const SHOP_API_BASE_ACTIVE_KEY = "x9_api_base_active";
+  const SHOP_BACKEND_CANDIDATES = [
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "https://usx9.us",
+    "http://usx9.us",
+    "http://192.168.1.171:8000",
+    "http://192.168.1.171",
+  ];
   let pollTimer = null;
 
   document.addEventListener("DOMContentLoaded", init);
@@ -32,7 +42,7 @@
   }
 
   async function onStart() {
-    const endpoint = (document.getElementById("shopEndpointInput")?.value || "").trim() || DEFAULT_ENDPOINT;
+    const endpoint = await resolveShopEndpoint();
     const taskCount = Math.max(1, parseInt(document.getElementById("shopTaskCount")?.value || "20", 10) || 20);
     await send(MSG.SHOP_SET_SETTINGS, { settings: { endpoint, taskCount } });
     setStatusPillState("running", "启动中…");
@@ -73,6 +83,49 @@
         resolve({ ok: false, error: String(e && e.message || e) });
       }
     });
+  }
+
+  async function resolveShopEndpoint() {
+    const input = document.getElementById("shopEndpointInput");
+    const current = (input?.value || "").trim();
+    if (current && current !== DEFAULT_ENDPOINT) {
+      return current;
+    }
+
+    const stored = await chrome.storage.local.get([SHOP_API_BASE_KEY, SHOP_API_BASE_ACTIVE_KEY]).catch(() => ({}));
+    const bases = [
+      stored[SHOP_API_BASE_KEY],
+      stored[SHOP_API_BASE_ACTIVE_KEY],
+      ...SHOP_BACKEND_CANDIDATES,
+    ].filter(Boolean);
+
+    const seen = new Set();
+    for (const rawBase of bases) {
+      const base = String(rawBase).replace(/\/+$/, "");
+      if (!base || seen.has(base)) continue;
+      seen.add(base);
+      if (await canReachShopBackend(base)) {
+        await chrome.storage.local.set({ [SHOP_API_BASE_ACTIVE_KEY]: base }).catch(() => undefined);
+        const endpoint = joinShopPath(base, "/api/local/collector/observations");
+        if (input) input.value = endpoint;
+        return endpoint;
+      }
+    }
+
+    return current || DEFAULT_ENDPOINT;
+  }
+
+  async function canReachShopBackend(base) {
+    try {
+      const response = await fetch(joinShopPath(base, "/health"), { method: "GET" });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  function joinShopPath(base, path) {
+    return `${String(base).replace(/\/+$/, "")}${path}`;
   }
 
   function startPolling() {

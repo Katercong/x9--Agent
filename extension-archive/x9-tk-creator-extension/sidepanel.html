@@ -1,128 +1,96 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="sidepanel">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>TikTok 创作者线索采集</title>
+    <title>TikTok 全自动采集</title>
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
     <main class="app">
-      <header class="header">
-        <div>
-          <h1 data-i18n="app.title">TikTok 线索</h1>
-          <p class="subtitle" data-i18n="app.subtitle">公开可见联系方式采集</p>
-        </div>
-        <div class="header-tools">
-          <span class="badge" data-i18n="badge.sidePanel">侧边栏</span>
-          <label class="language-field">
-            <span data-i18n="language.label">语言</span>
-            <select id="languageSelect" aria-label="Language">
-              <option value="zh">中文</option>
-              <option value="en">English</option>
-            </select>
-          </label>
-        </div>
-      </header>
 
-      <label class="field">
-        <span data-i18n="keyword.label">搜索关键词</span>
-        <input id="keywordInput" type="text" placeholder="sanitary pads" data-i18n-placeholder="keyword.placeholder">
-      </label>
+      <div class="top-bar">
+        <button id="langToggle" class="lang-toggle" type="button" title="Switch language">EN</button>
+      </div>
 
-      <section class="stats" aria-live="polite">
-        <div>
-          <strong id="leadCount">0</strong>
-          <span data-i18n="stats.leads">线索</span>
+      <section class="auto-card tt">
+        <div class="card-head">
+          <h2><span data-zh="🎯 TikTok 全自动" data-en="🎯 TikTok Auto">🎯 TikTok 全自动</span></h2>
+          <span class="pill" id="ttStatusPill" data-state="idle" data-zh="闲置" data-en="Idle">闲置</span>
         </div>
-        <div>
-          <strong id="pendingCount">0</strong>
-          <span data-i18n="stats.queue">队列</span>
+        <div class="task-row">
+          <label for="autoProfilesInput" data-zh="任务数" data-en="Task count">任务数</label>
+          <input id="autoProfilesInput" type="number" min="1" max="5000" step="1" value="20">
         </div>
-        <div>
-          <strong id="skippedCount">0</strong>
-          <span data-i18n="stats.skipped">跳过</span>
+        <div class="btn-row">
+          <button id="startAutoBtn" class="btn-start" type="button" data-zh="▶ 开始" data-en="▶ Start">▶ 开始</button>
+          <button id="stopAutoBtn"  class="btn-stop"  type="button" data-zh="⏸ 停止" data-en="⏸ Stop">⏸ 停止</button>
+          <button id="clearBtn"     class="btn-reset" type="button" data-zh="重置" data-en="Reset">重置</button>
         </div>
+        <div class="counts">
+          <div><strong id="leadCount">0</strong><span data-zh="线索" data-en="Leads">线索</span></div>
+          <div><strong id="pendingCount">0</strong><span data-zh="队列" data-en="Queue">队列</span></div>
+          <div><strong id="skippedCount">0</strong><span data-zh="跳过" data-en="Skipped">跳过</span></div>
+          <div><strong id="ttErrorCount">0</strong><span data-zh="错误" data-en="Errors">错误</span></div>
+        </div>
+        <p class="footnote" id="ttFootnote"></p>
       </section>
 
-      <section class="timer" aria-live="polite">
-        <div>
-          <span data-i18n="timer.label">本次运行</span>
-          <strong id="runTimer">00:00:00</strong>
+      <section class="auto-card shop" id="shopPanel">
+        <div class="card-head">
+          <h2><span data-zh="🛒 TikTok Shop 全自动" data-en="🛒 TikTok Shop Auto">🛒 TikTok Shop 全自动</span></h2>
+          <span class="pill" id="shopStatusPill" data-state="idle" data-zh="闲置" data-en="Idle">闲置</span>
         </div>
-        <span id="runTimerMeta" data-i18n="timer.notStarted">未开始</span>
+        <div class="task-row">
+          <label for="shopTaskCount" data-zh="任务数" data-en="Task count">任务数</label>
+          <input id="shopTaskCount" type="number" min="1" max="5000" step="1" value="20">
+        </div>
+        <div class="btn-row">
+          <button id="shopStartBtn" class="btn-start" type="button" data-zh="▶ 开始" data-en="▶ Start">▶ 开始</button>
+          <button id="shopStopBtn"  class="btn-stop"  type="button" data-zh="⏸ 停止" data-en="⏸ Stop">⏸ 停止</button>
+          <button id="shopResetBtn" class="btn-reset" type="button" data-zh="重置" data-en="Reset">重置</button>
+        </div>
+        <div class="counts">
+          <div><strong id="shopCountList">0</strong><span data-zh="队列" data-en="Queue">队列</span></div>
+          <div><strong id="shopCountDetailOk">0</strong><span data-zh="已提取" data-en="Extracted">已提取</span></div>
+          <div><strong id="shopCountDetailFail">0</strong><span data-zh="详情失败" data-en="Detail Fail">详情失败</span></div>
+          <div><strong id="shopCountErrors">0</strong><span data-zh="错误" data-en="Errors">错误</span></div>
+        </div>
+        <p class="footnote" id="shopError"></p>
+        <p class="footnote" id="shopPhase"></p>
+        <p class="footnote" id="shopCurrent"></p>
       </section>
 
-      <section class="actions">
-        <button id="openPanelBtn" type="button" hidden data-i18n="actions.panelReady">侧边栏就绪</button>
-        <button id="openSearchBtn" type="button" hidden data-i18n="actions.search">搜索并点视频</button>
-        <button id="scanPageBtn" type="button" hidden data-i18n="actions.scan">扫描当前页</button>
-        <button id="openNextBtn" type="button" hidden data-i18n="actions.openNext">打开下个主页</button>
-        <button id="startAutoBtn" type="button" data-i18n="actions.start">开始自动运行</button>
-        <button id="stopAutoBtn" type="button" class="danger-lite" data-i18n="actions.stop">停止自动</button>
-        <button id="exportCsvBtn" type="button" data-i18n="actions.exportCsv">导出 CSV</button>
-        <button id="exportExcelBtn" type="button" data-i18n="actions.exportExcel">导出 Excel</button>
-        <button id="exportJsonBtn" type="button" data-i18n="actions.exportJson">导出 JSON</button>
-        <button id="exportBackupBtn" type="button" data-i18n="actions.exportBackup">导出备份</button>
-        <button id="clearBtn" type="button" class="danger" data-i18n="actions.clear">清空本地数据</button>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2 data-i18n="auto.title">自动设置</h2>
-          <span class="mini" data-i18n="auto.subtitle">快速人工节奏</span>
-        </div>
-        <div class="settings-grid">
-          <label>
-            <span data-i18n="auto.target">任务目标</span>
-            <input id="autoProfilesInput" type="number" min="1" max="5000" step="1" value="20">
-          </label>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2 data-i18n="filters.title">线索筛选</h2>
-          <span class="mini" data-i18n="filters.subtitle">只保存符合条件的账号</span>
-        </div>
-        <div class="filter-grid">
-          <label class="check-field">
-            <input id="requireEmailInput" type="checkbox" checked disabled>
-            <span data-i18n="filters.email">必须有可见邮箱</span>
-          </label>
-          <label>
-            <span data-i18n="filters.minFollowers">最低粉丝数</span>
-            <input id="minFollowersInput" type="number" min="0" max="1000000000" step="100" value="1000">
-          </label>
-        </div>
-      </section>
-
-      <p id="status" class="status" data-i18n="status.default">打开已登录的 TikTok 页面，然后从这里开始。</p>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2 data-i18n="queue.title">下一个队列</h2>
-          <button id="copyNextBtn" type="button" class="ghost" data-i18n="queue.copy">复制链接</button>
-        </div>
-        <ul id="queueList" class="list">
-          <li class="empty" data-i18n="queue.empty">暂无待处理主页。</li>
-        </ul>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2 data-i18n="leads.title">最近线索</h2>
-        </div>
-        <ul id="leadList" class="list">
-          <li class="empty" data-i18n="leads.empty">暂无邮箱线索。</li>
-        </ul>
-      </section>
-
-      <section class="notice">
-        <span data-i18n="notice.compliance">不点赞、不评论、不关注、不私信、不发帖、不绕过验证码、不使用代理、不采集隐藏数据。</span>
-      </section>
     </main>
 
+    <div class="legacy-shim" aria-hidden="true">
+      <select id="languageSelect"><option value="zh" selected>中文</option><option value="en">English</option></select>
+      <input id="keywordInput" type="text" value="">
+      <input id="requireEmailInput" type="checkbox" checked>
+      <input id="minFollowersInput" type="number" value="1000">
+      <span id="runTimer">00:00:00</span>
+      <span id="runTimerMeta">未开始</span>
+      <button id="openPanelBtn" type="button"></button>
+      <button id="openSearchBtn" type="button"></button>
+      <button id="scanPageBtn" type="button"></button>
+      <button id="openNextBtn" type="button"></button>
+      <button id="exportCsvBtn" type="button"></button>
+      <button id="exportExcelBtn" type="button"></button>
+      <button id="exportJsonBtn" type="button"></button>
+      <button id="exportBackupBtn" type="button"></button>
+      <button id="copyNextBtn" type="button"></button>
+      <ul id="queueList"><li class="empty"></li></ul>
+      <ul id="leadList"><li class="empty"></li></ul>
+      <p id="status"></p>
+      <input id="shopEndpointInput" type="url" value="http://127.0.0.1:8000/api/local/collector/observations">
+      <input id="x9BackendInput" type="url">
+      <span id="x9BackendStatus"></span>
+      <button id="x9BackendSave" type="button"></button>
+      <button id="x9BackendDetect" type="button"></button>
+    </div>
+
     <script src="popup.js"></script>
+    <script src="shop_panel.js"></script>
+    <script src="i18n_toggle.js"></script>
   </body>
 </html>

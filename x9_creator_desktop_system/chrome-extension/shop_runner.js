@@ -470,6 +470,18 @@
     });
   }
 
+  globalThis.X9_SHOP_COMMANDS = {
+    start(settings) {
+      return handleStart({ settings: settings || {} });
+    },
+    stop() {
+      return handleStop();
+    },
+    setSettings(settings) {
+      return patchState({ settings: settings || {} }).then((state) => ({ ok: true, state }));
+    },
+  };
+
   chrome.tabs.onRemoved.addListener(async (tabId) => {
     const state = await getState();
     if (state.status !== "running") return;

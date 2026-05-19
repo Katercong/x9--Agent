@@ -1,15 +1,38 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { ChevronsLeft, ChevronsRight, Download, X } from 'lucide-react';
+import { ChevronDown, ChevronsLeft, ChevronsRight, Download, X } from 'lucide-react';
 import { useUiStore } from '@/stores/uiStore';
-import { portalMenu } from './menus';
+import { portalMenu, type MenuEntry, type MenuItem } from './menus';
 import { cn } from '@/lib/cn';
+
+function isMenuGroup(entry: MenuEntry): entry is Extract<MenuEntry, { children: MenuItem[] }> {
+  return 'children' in entry;
+}
 
 export default function Sidebar() {
   const { sidebarCollapsed, toggleSidebar, mobileDrawerOpen, closeMobileDrawer } = useUiStore();
   const { pathname } = useLocation();
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const activeGroupKey = portalMenu.find(
+    (entry) => isMenuGroup(entry) && entry.children.some((item) => pathname === item.to),
+  )?.key;
+
+  const toggleGroup = (key: string) => {
+    setOpenGroups((current) => ({ ...current, [key]: !(current[key] ?? true) }));
+  };
+
+  useEffect(() => {
+    if (!activeGroupKey) return;
+    setOpenGroups((current) => {
+      if (current[activeGroupKey] === true || current[activeGroupKey] === undefined) {
+        return current;
+      }
+      return { ...current, [activeGroupKey]: true };
+    });
+  }, [activeGroupKey, pathname]);
 
   // 路由变化时自动关闭移动抽屉
+  useEffect(() => {
   useEffect(() => {
     closeMobileDrawer();
   }, [pathname, closeMobileDrawer]);
@@ -73,36 +96,45 @@ export default function Sidebar() {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto px-2 py-2">
-          {portalMenu.map((item) => (
-            <NavLink
-              key={item.key}
-              to={item.to}
-              className={({ isActive }) =>
-                cn(
-                  'relative flex items-center gap-3 px-3 py-2 my-0.5 rounded text-xs transition-colors',
-                  isActive ? 'text-white font-semibold' : 'text-text/75 hover:text-text hover:bg-white/5',
-                )
-              }
-              style={({ isActive }) =>
-                isActive ? { background: 'rgb(var(--accent) / 0.18)' } : undefined
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  {isActive && (
-                    <span
-                      className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r"
-                      style={{ background: 'rgb(var(--accent))' }}
-                    />
+          {portalMenu.map((entry) => (
+            isMenuGroup(entry) ? (
+              <div key={entry.key} className="my-1">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(entry.key)}
+                  title={entry.label}
+                  aria-expanded={openGroups[entry.key] ?? true}
+                  className={cn(
+                    'w-full relative flex items-center gap-3 px-3 py-2 my-0.5 rounded text-xs transition-colors',
+                    entry.children.some((item) => pathname === item.to)
+                      ? 'text-white font-semibold'
+                      : 'text-text/75 hover:text-text hover:bg-white/5',
                   )}
-                  <item.icon size={16} className="shrink-0" />
-                  {/* 桌面收起态隐藏文字;移动端永远显示 */}
-                  <span className={cn('whitespace-nowrap', sidebarCollapsed && 'md:hidden')}>
-                    {item.label}
+                >
+                  <entry.icon size={16} className="shrink-0" />
+                  <span className={cn('whitespace-nowrap flex-1 text-left', sidebarCollapsed && 'md:hidden')}>
+                    {entry.label}
                   </span>
-                </>
-              )}
-            </NavLink>
+                  <ChevronDown
+                    size={14}
+                    className={cn(
+                      'shrink-0 transition-transform text-muted',
+                      !(openGroups[entry.key] ?? true) && '-rotate-90',
+                      sidebarCollapsed && 'md:hidden',
+                    )}
+                  />
+                </button>
+                {(openGroups[entry.key] ?? true) && (
+                  <div className={cn(!sidebarCollapsed && 'md:pl-4')}>
+                    {entry.children.map((item) => (
+                      <SidebarLink key={item.key} item={item} sidebarCollapsed={sidebarCollapsed} nested />
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <SidebarLink key={entry.key} item={entry} sidebarCollapsed={sidebarCollapsed} />
+            )
           ))}
         </nav>
 
@@ -126,5 +158,41 @@ export default function Sidebar() {
         </div>
       </aside>
     </>
+  );
+}
+
+function SidebarLink({ item, sidebarCollapsed, nested = false }: { item: MenuItem; sidebarCollapsed: boolean; nested?: boolean }) {
+  return (
+    <NavLink
+      to={item.to}
+      title={item.label}
+      aria-label={item.label}
+      className={({ isActive }) =>
+        cn(
+          'relative flex items-center gap-3 px-3 py-2 my-0.5 rounded text-xs transition-colors',
+          nested && !sidebarCollapsed && 'md:py-1.5',
+          isActive ? 'text-white font-semibold' : 'text-text/75 hover:text-text hover:bg-white/5',
+        )
+      }
+      style={({ isActive }) =>
+        isActive ? { background: 'rgb(var(--accent) / 0.18)' } : undefined
+      }
+    >
+      {({ isActive }) => (
+        <>
+          {isActive && (
+            <span
+              className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r"
+              style={{ background: 'rgb(var(--accent))' }}
+            />
+          )}
+          <item.icon size={16} className="shrink-0" />
+          {/* 桌面收起态隐藏文字;移动端永远显示 */}
+          <span className={cn('whitespace-nowrap', sidebarCollapsed && 'md:hidden')}>
+            {item.label}
+          </span>
+        </>
+      )}
+    </NavLink>
   );
 }

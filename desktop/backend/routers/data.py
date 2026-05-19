@@ -87,7 +87,7 @@ def list_resource(
     resource: str,
     request: Request,
     db: Session = Depends(get_db),
-    limit: int = Query(default=50, ge=1, le=500),
+    limit: int = Query(default=50, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     q: str | None = Query(default=None),
     order_by: str | None = Query(default=None),

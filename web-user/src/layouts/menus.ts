@@ -11,14 +11,30 @@ export type MenuItem = {
   icon: LucideIcon;
 };
 
+export type MenuGroup = {
+  key: string;
+  label: string;
+  icon: LucideIcon;
+  children: MenuItem[];
+};
+
+export type MenuEntry = MenuItem | MenuGroup;
+
 // 严格镜像 desktop/backend/ui/index.html 侧边栏顺序
-export const portalMenu: MenuItem[] = [
+export const portalMenu: MenuEntry[] = [
   { key: 'business', label: '业务看板', to: '/business', icon: BarChart3 },
   { key: 'dashboard', label: '仪表盘', to: '/dashboard', icon: LayoutDashboard },
   { key: 'collection', label: '采集监控', to: '/collection', icon: Telescope },
-  { key: 'collect-shop', label: '采集 · TikTok Shop', to: '/collect-shop', icon: Store },
-  { key: 'collect-leads', label: '采集 · X9 线索', to: '/collect-leads', icon: Radar },
-  { key: 'collect-import', label: '采集 · 表格导入', to: '/collect-import', icon: FileSpreadsheet },
+  {
+    key: 'creator-data',
+    label: '达人数据采集',
+    icon: Users,
+    children: [
+      { key: 'collect-shop', label: '采集 · TikTok Shop', to: '/collect-shop', icon: Store },
+      { key: 'collect-leads', label: '采集 · X9 线索', to: '/collect-leads', icon: Radar },
+      { key: 'collect-import', label: '采集 · 表格导入', to: '/collect-import', icon: FileSpreadsheet },
+    ],
+  },
   { key: 'creators-info', label: '达人信息', to: '/creators-info', icon: Users },
   { key: 'recommendations', label: '推荐列表', to: '/recommendations', icon: Sparkles },
   { key: 'review', label: '人工审核', to: '/review', icon: ClipboardCheck },

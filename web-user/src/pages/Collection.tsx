@@ -11,6 +11,27 @@ import { formatCompact, shortRelative } from '@/lib/format';
 import { useQueryClient } from '@tanstack/react-query';
 import type { CollectorObservation } from '@/api/types';
 
+function pickLatestProgress(data: any, preferredWorkerId?: string | null) {
+  if (!data) return {};
+  const rows = data.progress
+    ? [data.progress]
+    : Array.isArray(data.items)
+      ? data.items
+      : [];
+  if (rows.length === 0) return data;
+  const preferred = preferredWorkerId
+    ? rows.find((item: any) => item?.worker_id === preferredWorkerId)
+    : null;
+  const running = rows.find((item: any) => item?.running);
+  if (preferred && (preferred.running || !running)) return preferred;
+  if (running) return running;
+  return [...rows].sort((a: any, b: any) => {
+    const runningDelta = Number(Boolean(b?.running)) - Number(Boolean(a?.running));
+    if (runningDelta) return runningDelta;
+    return String(b?.updated_at || b?.started_at || '').localeCompare(String(a?.updated_at || a?.started_at || ''));
+  })[0] || {};
+}
+
 export default function Collection() {
   const sessQ = useExtensionSessions();
   const dbQ = useDbStats();
@@ -21,12 +42,13 @@ export default function Collection() {
 
   const sessions = sessQ.data?.sessions ?? [];
   const onlineCount = sessions.filter((s: any) => s.online).length;
+  const activeSession = sessions.find((s: any) => s.online) || sessions[0] || null;
   const db: any = dbQ.data || {};
-  const p: any = progressQ.data || {};
+  const p: any = pickLatestProgress(progressQ.data, activeSession?.worker_id);
   const obs = obsQ.data?.items ?? [];
 
-  const obsToday = db.observations ?? db.today_observations ?? 0;
-  const newCreators = db.creators ?? 0;
+  const obsToday = db.today_raw_observations ?? db.raw_observations_today ?? db.today_observations ?? db.observations ?? 0;
+  const newCreators = db.today_creators ?? db.creators_today ?? db.creators ?? 0;
   const done = p.done ?? p.profiles_visited ?? 0;
   const total = p.total ?? (done + (p.profiles_remaining ?? 0));
   const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
@@ -34,7 +56,7 @@ export default function Collection() {
 
   const onCancel = () => {
     cancelCmd.mutate(
-      { command_type: 'cancel_collection', worker_id: sessions[0]?.worker_id || undefined },
+      { command_type: 'cancel_collection', worker_id: activeSession?.worker_id || undefined },
       { onSuccess: () => qc.invalidateQueries({ queryKey: ['run-progress'] }) },
     );
   };
@@ -56,7 +78,7 @@ export default function Collection() {
             icon={Chrome}
             iconBg={onlineCount > 0 ? 'rgb(34 197 94 / 0.18)' : 'rgb(134 145 162 / 0.18)'}
             iconColor={onlineCount > 0 ? '#22c55e' : '#8691a2'}
-            subLabel={sessions[0]?.last_heartbeat_at ? `心跳:${shortRelative(sessions[0].last_heartbeat_at)}` : '无心跳'}
+            subLabel={activeSession?.last_heartbeat_at ? `心跳:${shortRelative(activeSession.last_heartbeat_at)}` : '无心跳'}
           />
           <KpiCard
             label="TikTok 登录"
@@ -73,7 +95,7 @@ export default function Collection() {
         <StartCollectionForm onStarted={() => {
           qc.invalidateQueries({ queryKey: ['run-progress'] });
           qc.invalidateQueries({ queryKey: ['collector', 'recent-observations'] });
-        }} />
+        }} workerId={activeSession?.worker_id} online={onlineCount > 0} />
 
         {/* 流程进度 + 控制 */}
         <div className="card card-body">

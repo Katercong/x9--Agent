@@ -14,15 +14,18 @@ import type {
   KeywordSnapshot,
   VersionInfo,
   ApiItems,
+  DepartmentDashboardSummary,
 } from './types';
 
 const BASE = '/api/v1'; // legacy core proxy (resources with NO x9db table)
 const LOCAL = '/api/local'; // desktop backend = the real x9db
 
-// Resources that exist in the desktop x9db (served by /api/local/data/*).
-// Everything else has no x9db table and stays on the core proxy.
+// Desktop-only resources stay on /api/local/data/*.
+// Core business resources (creators/outreach/staff/products/etc.) must use
+// /api/v1 so the role admin pages read the PostgreSQL business database and
+// pass through the desktop proxy's department scoping.
 const X9DB_RESOURCES = new Set([
-  'creators', 'outreach', 'outreach_emails', 'outreach_templates',
+  'outreach_emails', 'outreach_templates',
   'review_tasks', 'raw_observations', 'extension_sessions',
   'extension_commands', 'extension_run_progress', 'creator_recommendations',
   'creator_tags', 'tag_definitions', 'system_logs', 'audit_log',
@@ -42,11 +45,11 @@ export const endpoints = {
 
   // Typed resource shortcuts
   creators: (params?: Record<string, unknown>) =>
-    api.get<ListResponse<Creator>>(`${LOCAL}/data/creators`, params),
+    api.get<ListResponse<Creator>>(`${BASE}/data/creators`, params),
   products: (params?: Record<string, unknown>) =>
     api.get<ListResponse<Product>>(`${BASE}/data/products`, params),
   outreach: (params?: Record<string, unknown>) =>
-    api.get<ListResponse<Outreach>>(`${LOCAL}/data/outreach`, params),
+    api.get<ListResponse<Outreach>>(`${BASE}/data/outreach`, params),
   productImages: (params?: Record<string, unknown>) =>
     api.get<ListResponse<ProductImage>>(`${BASE}/data/product_images`, params),
   categories: (params?: Record<string, unknown>) =>
@@ -71,6 +74,8 @@ export const endpoints = {
     api.get<ListResponse<import('./types').LlmTokenUsage>>(`${BASE}/data/llm_token_usages`, params),
   businessMetricsDaily: (params?: Record<string, unknown>) =>
     api.get<ListResponse<import('./types').BusinessMetricDaily>>(`${BASE}/data/business_metrics_daily`, params),
+  departmentDashboardSummary: () =>
+    api.get<DepartmentDashboardSummary>(`${LOCAL}/dashboard/department-summary`),
 
   // Auth / Users
   users: () => api.get<ApiItems<User>>(`${BASE}/auth/users`),

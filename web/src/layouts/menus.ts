@@ -36,11 +36,27 @@ export type MenuItem = {
   icon: LucideIcon;
 };
 
-export const departmentMenu: MenuItem[] = [
+export type MenuGroup = {
+  key: string;
+  label: string;
+  icon: LucideIcon;
+  children: MenuItem[];
+};
+
+export type MenuEntry = MenuItem | MenuGroup;
+
+export const departmentMenu: MenuEntry[] = [
   { key: 'd-dashboard', label: '数据看板', to: '/d/dashboard', icon: LayoutDashboard },
-  { key: 'd-collect-shop', label: '采集 · TikTok Shop', to: '/d/collect-shop', icon: Store },
-  { key: 'd-collect-leads', label: '采集 · X9 线索', to: '/d/collect-leads', icon: Radar },
-  { key: 'd-collect-import', label: '采集 · 表格导入', to: '/d/collect-import', icon: FileSpreadsheet },
+  {
+    key: 'd-creator-data',
+    label: '达人数据采集',
+    icon: Users,
+    children: [
+      { key: 'd-collect-shop', label: '采集 · TikTok Shop', to: '/d/collect-shop', icon: Store },
+      { key: 'd-collect-leads', label: '采集 · X9 线索', to: '/d/collect-leads', icon: Radar },
+      { key: 'd-collect-import', label: '采集 · 表格导入', to: '/d/collect-import', icon: FileSpreadsheet },
+    ],
+  },
   { key: 'd-creators', label: '达人管理', to: '/d/creators', icon: Users },
   { key: 'd-leads', label: '线索管理', to: '/d/leads', icon: Search },
   { key: 'd-emails', label: '邮件管理', to: '/d/emails', icon: Mail },
@@ -50,7 +66,7 @@ export const departmentMenu: MenuItem[] = [
   { key: 'd-settings', label: '设置中心', to: '/d/settings', icon: Settings },
 ];
 
-export const companyMenu: MenuItem[] = [
+export const companyMenu: MenuEntry[] = [
   { key: 'c-overview', label: '业绩总览', to: '/c/overview', icon: LayoutDashboard },
   { key: 'c-revenue', label: '营收与利润', to: '/c/revenue', icon: Wallet },
   { key: 'c-departments', label: '部门绩效', to: '/c/departments', icon: Building2 },
@@ -61,12 +77,19 @@ export const companyMenu: MenuItem[] = [
   { key: 'c-events', label: '重要事件', to: '/c/events', icon: CalendarClock },
 ];
 
-export const superMenu: MenuItem[] = [
+export const superMenu: MenuEntry[] = [
   { key: 'a-dashboard', label: '数据看板', to: '/a/dashboard', icon: LayoutDashboard },
   { key: 'a-monitor', label: '系统监控', to: '/a/monitor', icon: Activity },
-  { key: 'a-collect-shop', label: '采集 · TikTok Shop', to: '/a/collect-shop', icon: Store },
-  { key: 'a-collect-leads', label: '采集 · X9 线索', to: '/a/collect-leads', icon: Radar },
-  { key: 'a-collect-import', label: '采集 · 表格导入', to: '/a/collect-import', icon: FileSpreadsheet },
+  {
+    key: 'a-creator-data',
+    label: '达人数据采集',
+    icon: Users,
+    children: [
+      { key: 'a-collect-shop', label: '采集 · TikTok Shop', to: '/a/collect-shop', icon: Store },
+      { key: 'a-collect-leads', label: '采集 · X9 线索', to: '/a/collect-leads', icon: Radar },
+      { key: 'a-collect-import', label: '采集 · 表格导入', to: '/a/collect-import', icon: FileSpreadsheet },
+    ],
+  },
   { key: 'a-users', label: '用户与权限', to: '/a/users', icon: KeyRound },
   { key: 'a-llm', label: 'LLM 配置', to: '/a/llm', icon: Brain },
   { key: 'a-webhooks', label: 'Webhook 集成', to: '/a/webhooks', icon: Webhook },

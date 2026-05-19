@@ -77,6 +77,12 @@ def _as_aware_utc(value) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
+def _iso(value) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
 class HeartbeatIn(BaseModel):
     event_type: str = "extension_heartbeat"
     extension_id: str
@@ -176,9 +182,9 @@ def _serialize_command(c: ExtensionCommand) -> dict:
         "status": c.status,
         "result_json": c.result_json,
         "error_message": c.error_message,
-        "created_at": c.created_at.isoformat() if c.created_at else None,
-        "claimed_at": c.claimed_at.isoformat() if c.claimed_at else None,
-        "completed_at": c.completed_at.isoformat() if c.completed_at else None,
+        "created_at": _iso(c.created_at),
+        "claimed_at": _iso(c.claimed_at),
+        "completed_at": _iso(c.completed_at),
     }
 
 
@@ -309,8 +315,8 @@ def _serialize_progress(p: ExtensionRunProgress) -> dict:
         "step": p.step,
         "running": bool(p.running),
         "stop_requested": bool(p.stop_requested),
-        "started_at": p.started_at.isoformat() if p.started_at else None,
-        "finished_at": p.finished_at.isoformat() if p.finished_at else None,
+        "started_at": _iso(p.started_at),
+        "finished_at": _iso(p.finished_at),
         "elapsed_seconds": p.elapsed_seconds,
         "profiles_visited": p.profiles_visited,
         "profiles_remaining": p.profiles_remaining,
@@ -325,7 +331,7 @@ def _serialize_progress(p: ExtensionRunProgress) -> dict:
         "settings_json": p.settings_json,
         "queue_json": p.queue_json,
         "recent_leads_json": p.recent_leads_json,
-        "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+        "updated_at": _iso(p.updated_at),
     }
 
 

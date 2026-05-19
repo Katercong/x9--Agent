@@ -392,19 +392,16 @@ def trends(request: Request, days: int = 14, _admin: dict = Depends(require_admi
         raw = str(row.get("collected_at") or row.get("created_at") or "")[:10]
         if raw in buckets:
             buckets[raw][effective_row_department(row)] = buckets[raw].get(effective_row_department(row), 0) + 1
-    obs_q = (
-        select(RawObservation.department_code, func.date(RawObservation.created_at), func.count(RawObservation.id))
-        .where(RawObservation.created_at >= datetime.combine(start, datetime.min.time()))
-    )
+    obs_q = select(RawObservation.department_code, RawObservation.created_at)
     obs_department = department_where(RawObservation, department_code)
     if obs_department is not None:
         obs_q = obs_q.where(obs_department)
-    obs_rows = db.execute(obs_q.group_by(RawObservation.department_code, func.date(RawObservation.created_at))).all()
     observations = {day: {code: 0 for code in visible_departments} for day in buckets}
-    for dept, day, count in obs_rows:
-        day_key = str(day)
+    for dept, created_at in db.execute(obs_q).all():
+        day_key = str(created_at or "")[:10]
         if day_key in observations:
-            observations[day_key][dept or "cross_border"] = int(count)
+            dept_key = dept or "cross_border"
+            observations[day_key][dept_key] = observations[day_key].get(dept_key, 0) + 1
     return {"ok": True, "creator_collections": buckets, "raw_observations": observations}
 
 

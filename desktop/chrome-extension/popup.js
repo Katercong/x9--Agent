@@ -39,8 +39,6 @@ const FAST_PAGE_SETTLE_MS = 350;
 const FAST_SEARCH_SETTLE_MS = 800;
 const FAST_TAB_SETTLE_MS = 700;
 const X9_BACKEND_BASE_URL = 'http://127.0.0.1:8000';
-const X9_OBSERVATION_URL = `${X9_BACKEND_BASE_URL}/api/local/collector/observations`;
-const X9_HEARTBEAT_URL = `${X9_BACKEND_BASE_URL}/api/local/extension/heartbeat`;
 const X9_EXTENSION_ID = 'tiktok_creator_lead_browser_1_0_19';
 const X9_WORKER_ID = 'tiktok_creator_lead_browser_1_0_19';
 const X9_ACCOUNT_ID = 'local_tiktok_account';
@@ -444,6 +442,136 @@ elements.clearBtn.addEventListener('click', async () => {
   await setState(state);
   render(state, t('message.cleared'));
 });
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (!message || message.type !== 'X9_DASHBOARD_COMMAND') {
+    return false;
+  }
+
+  handleX9DashboardCommand(message.command || {})
+    .then((result) => sendResponse(result))
+    .catch((error) => sendResponse({ ok: false, error: String(error && error.message || error) }));
+  return true;
+});
+
+async function handleX9DashboardCommand(command) {
+  const commandType = String(command.command_type || '');
+  const payload = command.payload && typeof command.payload === 'object' ? command.payload : {};
+
+  if (commandType === 'cancel_collection') {
+    autoStopRequested = true;
+    const state = await getState();
+    state.settings.autoStopRequested = true;
+    addTaskLog(state, state.settings.currentKeyword || '', 'dashboard_cancel', `command=${command.id || ''}`);
+    await setState(state);
+    render(state, t('message.stopRequested'));
+    return { ok: true, action: 'cancel_requested' };
+  }
+
+  if (commandType === 'set_search_keyword') {
+    const keyword = normalizeDashboardKeywords(payload.keywords || payload.keyword || payload.search_keyword)[0] || '';
+    if (!keyword) {
+      throw new Error('dashboard command missing keyword');
+    }
+    const state = await getState();
+    state.settings.currentKeyword = keyword;
+    elements.keywordInput.value = keyword;
+    await setState(state);
+    render(state, t('message.keywordFromPage', { keyword }));
+    return { ok: true, action: 'keyword_set', keyword };
+  }
+
+  if (commandType !== 'start_collection' && commandType !== 'collect_now') {
+    return { ok: true, action: 'ignored', command_type: commandType };
+  }
+
+  const keywords = normalizeDashboardKeywords(payload.keywords || payload.keyword || payload.search_keyword);
+  const keyword = keywords[0] || elements.keywordInput.value.trim();
+  if (!keyword) {
+    throw new Error('dashboard command missing keyword');
+  }
+  if (autoRunActive) {
+    throw new Error('collector is already running');
+  }
+
+  const state = await getState();
+  state.settings.currentKeyword = keyword;
+  state.settings.autoStopRequested = false;
+  state.settings.autoSettings = buildDashboardAutoSettings(payload);
+  state.settings.language = normalizeLanguage(payload.language || state.settings.language || DEFAULT_LANGUAGE);
+  elements.keywordInput.value = keyword;
+  if (elements.languageSelect) {
+    elements.languageSelect.value = state.settings.language;
+    applyLanguage(state.settings.language);
+  }
+  applyAutoSettingsToInputs(state.settings.autoSettings);
+  addTaskLog(state, keyword, 'dashboard_start', `command=${command.id || ''} max=${state.settings.autoSettings.maxProfiles}`);
+  await setState(state);
+  render(state, t('message.keywordFromPage', { keyword }));
+
+  await prepareDashboardSearchTab(keyword);
+  window.setTimeout(() => {
+    runAutoWorkflow().catch(async (error) => {
+      const current = await getState().catch(() => null);
+      if (current) {
+        addTaskLog(current, keyword, 'dashboard_start_error', String(error && error.message || error));
+        await setState(current);
+        render(current, String(error && error.message || error));
+      }
+      setAutoControlsRunning(false);
+    });
+  }, 0);
+
+  return {
+    ok: true,
+    action: commandType === 'collect_now' ? 'collect_started' : 'collection_started',
+    keyword,
+    max_profiles: state.settings.autoSettings.maxProfiles,
+  };
+}
+
+function normalizeDashboardKeywords(value) {
+  const raw = Array.isArray(value) ? value : String(value || '').split(/[,，\n]/);
+  return raw
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+}
+
+function buildDashboardAutoSettings(payload) {
+  const current = getAutoSettingsFromInputs();
+  const maxProfiles = payload.max_profiles ?? payload.maxProfiles ?? payload.task_count ?? payload.taskCount ?? payload.limit;
+  const next = {
+    ...current,
+    maxProfiles: maxProfiles === undefined ? current.maxProfiles : maxProfiles,
+  };
+  return normalizeAutoSettings(next);
+}
+
+async function prepareDashboardSearchTab(keyword) {
+  const searchUrl = buildTikTokSearchVideoUrl(keyword);
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const workflowTab = await findBestWorkflowTab(activeTab?.id);
+  const targetTab = workflowTab || activeTab;
+
+  if (targetTab?.id && targetTab.url && targetTab.url.includes('tiktok.com')) {
+    const currentKeyword = inferSearchKeywordFromUrl(targetTab.url);
+    await activateTabIfExists(targetTab.id);
+    if (!isSearchOrSearchOriginVideoUrl(targetTab.url) || currentKeyword !== keyword) {
+      await chrome.tabs.update(targetTab.id, { url: searchUrl, active: true });
+      await waitForTabComplete(targetTab.id, 90_000);
+    }
+    return;
+  }
+
+  const created = await chrome.tabs.create({ url: searchUrl, active: true });
+  if (created?.id) {
+    await waitForTabComplete(created.id, 90_000);
+  }
+}
+
+function buildTikTokSearchVideoUrl(keyword) {
+  return `https://www.tiktok.com/search/video?q=${encodeURIComponent(keyword)}`;
+}
 
 function getLanguage() {
   return normalizeLanguage(elements.languageSelect?.value || DEFAULT_LANGUAGE);
@@ -1973,7 +2101,8 @@ async function postX9Observation(payload) {
     return { ok: false, reason: 'missing_handle' };
   }
   try {
-    const response = await fetch(X9_OBSERVATION_URL, {
+    const base = await x9ResolveBackendBaseForRuntime();
+    const response = await fetch(x9JoinPath(base, '/api/local/collector/observations'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -2039,7 +2168,8 @@ async function postX9BackendHeartbeat(reason) {
   };
 
   try {
-    const response = await fetch(X9_HEARTBEAT_URL, {
+    const base = await x9ResolveBackendBaseForRuntime();
+    const response = await fetch(x9JoinPath(base, '/api/local/extension/heartbeat'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -2064,6 +2194,33 @@ async function postX9BackendHeartbeat(reason) {
     }).catch(() => undefined);
     return { ok: false, error };
   }
+}
+
+async function x9ResolveBackendBaseForRuntime() {
+  const stored = await chrome.storage.local.get([X9_API_BASE_KEY, X9_API_BASE_ACTIVE_KEY]).catch(() => ({}));
+  const bases = [
+    stored[X9_API_BASE_KEY],
+    stored[X9_API_BASE_ACTIVE_KEY],
+    ...X9_BACKEND_CANDIDATES,
+  ].filter(Boolean);
+
+  const seen = new Set();
+  for (const rawBase of bases) {
+    const base = String(rawBase).replace(/\/+$/, '');
+    if (!base || seen.has(base)) continue;
+    seen.add(base);
+    try {
+      const response = await fetch(x9JoinPath(base, '/health'), { method: 'GET' });
+      if (response.ok) {
+        await chrome.storage.local.set({ [X9_API_BASE_ACTIVE_KEY]: base }).catch(() => undefined);
+        return base;
+      }
+    } catch {
+      // try next
+    }
+  }
+
+  return X9_BACKEND_BASE_URL;
 }
 
 function classifyX9TikTokPage(url) {
@@ -2881,6 +3038,7 @@ const X9_API_BASE_ACTIVE_KEY = "x9_api_base_active";
 const X9_BACKEND_CANDIDATES = [
   "http://localhost:8000",
   "http://127.0.0.1:8000",
+  "https://usx9.us",
   "http://usx9.us",
   "http://192.168.1.171:8000",
   "http://192.168.1.171",

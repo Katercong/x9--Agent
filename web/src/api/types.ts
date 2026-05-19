@@ -258,6 +258,64 @@ export interface BusinessMetricDaily {
   gmv_30d_usd: number;
 }
 
+export interface DepartmentDashboardSummaryMetrics {
+  total_creators: number;
+  today_collected: number;
+  contacted: number;
+  review_pending: number;
+  progressed: number;
+}
+
+export interface DepartmentDashboardStageRow {
+  key: string;
+  name: string;
+  count: number;
+}
+
+export interface DepartmentDashboardTrendRow {
+  date: string;
+  count: number;
+}
+
+export interface DepartmentDashboardCategoryRow {
+  name: string;
+  value: number;
+}
+
+export interface DepartmentDashboardOwnerRow {
+  name: string;
+  count: number;
+}
+
+export interface DepartmentDashboardBdRow {
+  owner: string;
+  creator_count: number;
+  contacted: number;
+  confirmed: number;
+  samples: number;
+  videos: number;
+  authorized: number;
+}
+
+export interface DepartmentDashboardSummary {
+  ok: boolean;
+  generated_at: string;
+  scope: {
+    type: 'company' | 'department';
+    department_code: string | null;
+    name: string | null;
+  };
+  summary: DepartmentDashboardSummaryMetrics;
+  stage_counts: Record<string, number>;
+  stage_rows: DepartmentDashboardStageRow[];
+  overview: DepartmentDashboardStageRow[];
+  trend_7d: DepartmentDashboardTrendRow[];
+  category_counts: DepartmentDashboardCategoryRow[];
+  owner_counts: DepartmentDashboardOwnerRow[];
+  bd_rows: DepartmentDashboardBdRow[];
+  source_counts: DepartmentDashboardOwnerRow[];
+}
+
 export interface KeywordSnapshot {
   id: number;
   keyword_id: number;

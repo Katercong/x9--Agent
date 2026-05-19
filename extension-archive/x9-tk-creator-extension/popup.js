@@ -45,7 +45,7 @@ const X9_EXTENSION_ID = 'tiktok_creator_lead_browser_1_0_19';
 const X9_WORKER_ID = 'tiktok_creator_lead_browser_1_0_19';
 const X9_ACCOUNT_ID = 'local_tiktok_account';
 const X9_HEARTBEAT_INTERVAL_MS = 5_000;
-const X9_UPLOAD_SYNC_INTERVAL_MS = 30_000;
+const X9_UPLOAD_SYNC_INTERVAL_MS = 5_000;
 const X9_UPLOADED_OBSERVATION_KEYS = 'x9UploadedObservationKeys';
 const DEFAULT_LANGUAGE = 'zh';
 const I18N = {
@@ -445,6 +445,136 @@ elements.clearBtn.addEventListener('click', async () => {
   render(state, t('message.cleared'));
 });
 
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (!message || message.type !== 'X9_DASHBOARD_COMMAND') {
+    return false;
+  }
+
+  handleX9DashboardCommand(message.command || {})
+    .then((result) => sendResponse(result))
+    .catch((error) => sendResponse({ ok: false, error: String(error && error.message || error) }));
+  return true;
+});
+
+async function handleX9DashboardCommand(command) {
+  const commandType = String(command.command_type || '');
+  const payload = command.payload && typeof command.payload === 'object' ? command.payload : {};
+
+  if (commandType === 'cancel_collection') {
+    autoStopRequested = true;
+    const state = await getState();
+    state.settings.autoStopRequested = true;
+    addTaskLog(state, state.settings.currentKeyword || '', 'dashboard_cancel', `command=${command.id || ''}`);
+    await setState(state);
+    render(state, t('message.stopRequested'));
+    return { ok: true, action: 'cancel_requested' };
+  }
+
+  if (commandType === 'set_search_keyword') {
+    const keyword = normalizeDashboardKeywords(payload.keywords || payload.keyword || payload.search_keyword)[0] || '';
+    if (!keyword) {
+      throw new Error('dashboard command missing keyword');
+    }
+    const state = await getState();
+    state.settings.currentKeyword = keyword;
+    elements.keywordInput.value = keyword;
+    await setState(state);
+    render(state, t('message.keywordFromPage', { keyword }));
+    return { ok: true, action: 'keyword_set', keyword };
+  }
+
+  if (commandType !== 'start_collection' && commandType !== 'collect_now') {
+    return { ok: true, action: 'ignored', command_type: commandType };
+  }
+
+  const keywords = normalizeDashboardKeywords(payload.keywords || payload.keyword || payload.search_keyword);
+  const keyword = keywords[0] || elements.keywordInput.value.trim();
+  if (!keyword) {
+    throw new Error('dashboard command missing keyword');
+  }
+  if (autoRunActive) {
+    throw new Error('collector is already running');
+  }
+
+  const state = await getState();
+  state.settings.currentKeyword = keyword;
+  state.settings.autoStopRequested = false;
+  state.settings.autoSettings = buildDashboardAutoSettings(payload);
+  state.settings.language = normalizeLanguage(payload.language || state.settings.language || DEFAULT_LANGUAGE);
+  elements.keywordInput.value = keyword;
+  if (elements.languageSelect) {
+    elements.languageSelect.value = state.settings.language;
+    applyLanguage(state.settings.language);
+  }
+  applyAutoSettingsToInputs(state.settings.autoSettings);
+  addTaskLog(state, keyword, 'dashboard_start', `command=${command.id || ''} max=${state.settings.autoSettings.maxProfiles}`);
+  await setState(state);
+  render(state, t('message.keywordFromPage', { keyword }));
+
+  await prepareDashboardSearchTab(keyword);
+  window.setTimeout(() => {
+    runAutoWorkflow().catch(async (error) => {
+      const current = await getState().catch(() => null);
+      if (current) {
+        addTaskLog(current, keyword, 'dashboard_start_error', String(error && error.message || error));
+        await setState(current);
+        render(current, String(error && error.message || error));
+      }
+      setAutoControlsRunning(false);
+    });
+  }, 0);
+
+  return {
+    ok: true,
+    action: commandType === 'collect_now' ? 'collect_started' : 'collection_started',
+    keyword,
+    max_profiles: state.settings.autoSettings.maxProfiles,
+  };
+}
+
+function normalizeDashboardKeywords(value) {
+  const raw = Array.isArray(value) ? value : String(value || '').split(/[,，\n]/);
+  return raw
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+}
+
+function buildDashboardAutoSettings(payload) {
+  const current = getAutoSettingsFromInputs();
+  const maxProfiles = payload.max_profiles ?? payload.maxProfiles ?? payload.task_count ?? payload.taskCount ?? payload.limit;
+  const next = {
+    ...current,
+    maxProfiles: maxProfiles === undefined ? current.maxProfiles : maxProfiles,
+  };
+  return normalizeAutoSettings(next);
+}
+
+async function prepareDashboardSearchTab(keyword) {
+  const searchUrl = buildTikTokSearchVideoUrl(keyword);
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const workflowTab = await findBestWorkflowTab(activeTab?.id);
+  const targetTab = workflowTab || activeTab;
+
+  if (targetTab?.id && targetTab.url && targetTab.url.includes('tiktok.com')) {
+    const currentKeyword = inferSearchKeywordFromUrl(targetTab.url);
+    await activateTabIfExists(targetTab.id);
+    if (!isSearchOrSearchOriginVideoUrl(targetTab.url) || currentKeyword !== keyword) {
+      await chrome.tabs.update(targetTab.id, { url: searchUrl, active: true });
+      await waitForTabComplete(targetTab.id, 90_000);
+    }
+    return;
+  }
+
+  const created = await chrome.tabs.create({ url: searchUrl, active: true });
+  if (created?.id) {
+    await waitForTabComplete(created.id, 90_000);
+  }
+}
+
+function buildTikTokSearchVideoUrl(keyword) {
+  return `https://www.tiktok.com/search/video?q=${encodeURIComponent(keyword)}`;
+}
+
 function getLanguage() {
   return normalizeLanguage(elements.languageSelect?.value || DEFAULT_LANGUAGE);
 }
@@ -837,7 +967,7 @@ async function runSearchResultsPageWorkflow(keyword, autoSettings, initialPageDa
     if (!nextVideo) {
       emptyRefreshes += 1;
       if (pageData?.noMoreResults) {
-        await stopWorkflowAndExportExcel(
+        await stopWorkflowDone(
           keyword,
           processedProfiles,
           'tiktok_no_more_results_text',
@@ -849,7 +979,7 @@ async function runSearchResultsPageWorkflow(keyword, autoSettings, initialPageDa
       }
 
       if (emptyRefreshes > refreshLimit) {
-        await stopWorkflowAndExportExcel(
+        await stopWorkflowDone(
           keyword,
           processedProfiles,
           'no_more_search_results',
@@ -874,7 +1004,7 @@ async function runSearchResultsPageWorkflow(keyword, autoSettings, initialPageDa
       await setState(state);
 
       if (loadResult?.noMoreResults && !loadResult.loaded && (loadResult.newCount || 0) === 0) {
-        await stopWorkflowAndExportExcel(
+        await stopWorkflowDone(
           keyword,
           processedProfiles,
           'tiktok_no_more_results_text',
@@ -911,55 +1041,21 @@ async function runSearchResultsPageWorkflow(keyword, autoSettings, initialPageDa
   const state = await getState();
   addTaskLog(state, keyword, 'auto_done', `processed=${processedProfiles} reason=max_profiles_search_results`);
   await setState(state);
-  await exportCompletedTaskLeads(keyword, 'max_profiles_search_results');
+  await syncX9StoredState('auto_done').catch(() => undefined);
   render(state, getLanguage() === 'zh'
     ? `自动运行完成，已处理 ${processedProfiles} 个视频。`
     : `Auto run complete. Processed ${processedProfiles} videos.`);
 }
 
-async function exportCompletedTaskLeads(keyword, reason) {
-  let state = await getState();
-  try {
-    const exportResult = await exportLeadsToExcel(state, {
-      saveAs: false,
-      filenameSuffix: reason
-    });
-    state = await getState();
-    addTaskLog(state, keyword, 'export_done', `excel=${exportResult.filename} rows=${exportResult.count} reason=${reason}`);
-    await setState(state);
-    return exportResult;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    state = await getState();
-    addTaskLog(state, keyword, 'error', `auto_excel_export_failed: ${message}`);
-    await setState(state);
-    return null;
-  }
-}
-
-async function stopWorkflowAndExportExcel(keyword, processedProfiles, reason, statusMessage) {
+async function stopWorkflowDone(keyword, processedProfiles, reason, statusMessage) {
   let state = await getState();
   addTaskLog(state, keyword, 'auto_done', `processed=${processedProfiles} reason=${reason}`);
   await setState(state);
-
-  try {
-    const exportResult = await exportCompletedTaskLeads(keyword, reason);
-    if (!exportResult) {
-      throw new Error('Excel export failed.');
-    }
-    state = await getState();
-    render(state, getLanguage() === 'zh'
-      ? `${statusMessage} 已自动导出 Excel：${exportResult.filename}（${exportResult.count} 条线索）。`
-      : `${statusMessage} Excel exported automatically: ${exportResult.filename} (${exportResult.count} leads).`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    state = await getState();
-    addTaskLog(state, keyword, 'error', `auto_excel_export_failed: ${message}`);
-    await setState(state);
-    render(state, getLanguage() === 'zh'
-      ? `${statusMessage} 但自动导出 Excel 失败：${message}`
-      : `${statusMessage} Excel auto export failed: ${message}`);
-  }
+  await syncX9StoredState(reason).catch(() => undefined);
+  state = await getState();
+  render(state, getLanguage() === 'zh'
+    ? `${statusMessage} 系统已直接处理已上传的数据。`
+    : `${statusMessage} Uploaded data has been processed by the system.`);
 }
 
 async function processSearchResultCreatorProfile(video, keyword, autoSettings) {
@@ -998,7 +1094,7 @@ async function processSearchResultCreatorProfile(video, keyword, autoSettings) {
       message = saveProfileFromPage(state, profilePageData.profile, keyword, profilePageData.url, profilePageData.title);
     } else {
       if (!state.skippedProfiles.some((item) => item.profile_url === video.creator_profile_url && item.search_keyword === keyword)) {
-        state.skippedProfiles.push({
+        const skipped = {
           id: uniqueId(),
           search_keyword: keyword,
           username: video.creator_username,
@@ -1007,7 +1103,9 @@ async function processSearchResultCreatorProfile(video, keyword, autoSettings) {
           source_video_title: video.video_title || '',
           reason: 'profile_not_detected',
           checked_at: now()
-        });
+        };
+        state.skippedProfiles.push(skipped);
+        sendX9SkippedProfileObservation(skipped, keyword).catch(() => undefined);
       }
       markProfileHandled(state, video.creator_profile_url);
       addTaskLog(state, keyword, 'skipped_profile_not_detected', `${video.creator_username} | ${video.creator_profile_url}`);
@@ -1028,7 +1126,7 @@ async function processSearchResultCreatorProfile(video, keyword, autoSettings) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     state = await getState();
     if (!state.skippedProfiles.some((item) => item.profile_url === video.creator_profile_url && item.search_keyword === keyword)) {
-      state.skippedProfiles.push({
+      const skipped = {
         id: uniqueId(),
         search_keyword: keyword,
         username: video.creator_username,
@@ -1037,7 +1135,9 @@ async function processSearchResultCreatorProfile(video, keyword, autoSettings) {
         source_video_title: video.video_title || '',
         reason: `profile_collect_error: ${errorMessage}`,
         checked_at: now()
-      });
+      };
+      state.skippedProfiles.push(skipped);
+      sendX9SkippedProfileObservation(skipped, keyword).catch(() => undefined);
     }
     markSourceVideoHandled(state, video.video_url, keyword);
     markPendingSourceVideoHandled(state, video.video_url, keyword);
@@ -1974,6 +2074,25 @@ async function sendX9ProfileObservation(profile, keyword, source, currentUrl, ti
   return postX9Observation(payload);
 }
 
+async function sendX9SkippedProfileObservation(skipped, keyword) {
+  const payload = buildX9ProfileObservation(
+    profileFromLead(skipped),
+    keyword || skipped?.search_keyword || '',
+    sourceFromStoredProfile(skipped),
+    skipped?.profile_url || '',
+    skipped?.source_video_title || '',
+    {
+      qualified: false,
+      reason: skipped?.reason || 'skipped',
+      message: skipped?.reason || 'skipped'
+    }
+  );
+  if (payload) {
+    payload.collected_at = skipped?.checked_at || skipped?.collected_at || payload.collected_at;
+  }
+  return postX9Observation(payload);
+}
+
 async function sendX9VideoObservation(video, keyword) {
   const payload = buildX9VideoObservation(video, keyword);
   return postX9Observation(payload);
@@ -2266,7 +2385,7 @@ function saveLead(state, nextLead) {
   existing.source_video_description = nextLead.source_video_description || existing.source_video_description;
 
   if (sameEmailDifferentUsername) {
-    existing.lead_status = 'needs_review';
+    existing.lead_status = 'duplicate_email_merged';
     existing.notes = appendNote(existing.notes, 'same email found for different username');
   }
 

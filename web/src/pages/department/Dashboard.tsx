@@ -1,12 +1,26 @@
-import { Users, Inbox, ThumbsUp, Clock, Handshake, ListChecks, MessageSquare, ArrowUpRight, MailCheck, PackageCheck, Video, UserCheck, UserMinus, UserPlus } from 'lucide-react';
+import {
+  Users,
+  Inbox,
+  ThumbsUp,
+  Clock,
+  Handshake,
+  ListChecks,
+  MessageSquare,
+  ArrowUpRight,
+  MailCheck,
+  PackageCheck,
+  Video,
+  UserCheck,
+  UserPlus,
+} from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
 import { PriorityBar } from '@/components/progress/PriorityBar';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { AsyncState } from '@/components/states/States';
-import { useCreators, useOutreach, useStaff } from '@/hooks/useApi';
-import { todayCount, recentNDays, trendByDay, groupByOutreachStatus, groupByCategoryTags, groupByOwner, staffStats } from '@/lib/derive';
+import { useDepartmentDashboardSummary } from '@/hooks/useApi';
+import type { DepartmentDashboardBdRow } from '@/api/types';
 
 const topKpiIcons = [Users, Inbox, ThumbsUp, Clock, Handshake];
 const topKpiBg = ['#e0e7ff', '#d1fae5', '#cffafe', '#fed7aa', '#ede9fe'];
@@ -14,103 +28,99 @@ const topKpiFg = ['#4f46e5', '#16a34a', '#0891b2', '#ea580c', '#7c3aed'];
 
 const overviewIcons = [
   ArrowUpRight, MessageSquare, ListChecks, Clock, UserPlus,
-  UserMinus, MailCheck, PackageCheck, Video, UserCheck,
+  PackageCheck, MailCheck, Video, UserCheck, Handshake,
 ];
 const overviewBg = [
   '#fce7f3', '#dcfce7', '#dbeafe', '#fef3c7', '#cffafe',
-  '#fee2e2', '#dbeafe', '#dcfce7', '#fef3c7', '#ede9fe',
+  '#dcfce7', '#dbeafe', '#fef3c7', '#ede9fe', '#f3e8ff',
 ];
 const overviewFg = [
   '#db2777', '#16a34a', '#2563eb', '#a16207', '#0891b2',
-  '#dc2626', '#2563eb', '#16a34a', '#ca8a04', '#7c3aed',
+  '#16a34a', '#2563eb', '#ca8a04', '#7c3aed', '#9333ea',
 ];
 
-type BdRow = ReturnType<typeof staffStats>[number];
+const stageColors: Record<string, string> = {
+  prospect: '#94a3b8',
+  contacted: '#60a5fa',
+  pending_reply: '#fbbf24',
+  confirmed: '#3370ff',
+  sample_shipped: '#8b5cf6',
+  sample_delivered: '#a855f7',
+  video_published: '#f59e0b',
+  ad_authorized: '#10b981',
+  ad_running: '#16a34a',
+  dropped: '#ef4444',
+};
+
+type BdRow = DepartmentDashboardBdRow;
 
 const bdColumns: Column<BdRow>[] = [
-  { key: 'owner', header: '负责人', cell: (r) => <span className="text-xs">{r.name}</span> },
-  { key: 'recommend', header: '已联系', align: 'right', cell: (r) => <span className="text-xs num">{r.contacted}</span> },
+  { key: 'owner', header: '负责人', cell: (r) => <span className="text-xs">{r.owner}</span> },
+  { key: 'creator_count', header: '达人数', align: 'right', cell: (r) => <span className="text-xs num">{r.creator_count}</span> },
+  { key: 'contacted', header: '已建联', align: 'right', cell: (r) => <span className="text-xs num">{r.contacted}</span> },
   { key: 'confirmed', header: '已确认', align: 'right', cell: (r) => <span className="text-xs num">{r.confirmed}</span> },
   { key: 'samples', header: '已寄样', align: 'right', cell: (r) => <span className="text-xs num">{r.samples}</span> },
   { key: 'videos', header: '已发视频', align: 'right', cell: (r) => <span className="text-xs num">{r.videos}</span> },
+  { key: 'authorized', header: '已授权', align: 'right', cell: (r) => <span className="text-xs num">{r.authorized}</span> },
 ];
 
+function formatDay(value: string) {
+  const parts = value.split('-');
+  if (parts.length !== 3) return value;
+  return `${Number(parts[1])}/${Number(parts[2])}`;
+}
+
 export default function Dashboard() {
-  const creatorsQ = useCreators({ limit: 1000 });
-  const outreachQ = useOutreach({ limit: 1000 });
-  const staffQ = useStaff({ limit: 50 });
+  const dashboardQ = useDepartmentDashboardSummary();
+  const data = dashboardQ.data;
+  const summary = data?.summary ?? {
+    total_creators: 0,
+    today_collected: 0,
+    contacted: 0,
+    review_pending: 0,
+    progressed: 0,
+  };
+  const stageCounts = data?.stage_counts ?? {};
+  const trend7 = data?.trend_7d ?? [];
+  const recent7 = trend7.reduce((sum, row) => sum + row.count, 0);
+  const categoryCounts = data?.category_counts?.length ? data.category_counts : [{ name: '未填写', value: 0 }];
+  const ownerRows = (data?.owner_counts ?? []).map((row) => ({ label: row.name, value: row.count }));
+  const bdRows = data?.bd_rows ?? [];
 
-  const loading = creatorsQ.isLoading || outreachQ.isLoading || staffQ.isLoading;
-  const error = creatorsQ.error || outreachQ.error || staffQ.error;
-
-  const creators = creatorsQ.data?.items ?? [];
-  const outreach = outreachQ.data?.items ?? [];
-  const staff = staffQ.data?.items ?? [];
-
-  const total = creatorsQ.data?.total ?? 0;
-  const today = todayCount(creators);
-  const recent7 = recentNDays(creators, 7);
-  const trend7 = trendByDay(creators, 7);
-  const statusMap = groupByOutreachStatus(outreach);
-
-  // 5 top KPIs derived from real data
   const topRow = [
-    { label: '总达人', value: total, subLabel: '达人总数', delta: null as number | null },
-    { label: '今日采集', value: today, delta: null },
-    { label: '已建联', value: statusMap['contacted'] || 0, delta: null },
-    { label: '待审核', value: statusMap['prospect'] || 0, delta: null },
-    { label: '已推进', value: (statusMap['confirmed'] || 0) + (statusMap['sample_shipped'] || 0) + (statusMap['sample_delivered'] || 0), delta: null },
+    { label: '总达人', value: summary.total_creators, subLabel: '全部达人去重数', delta: null as number | null },
+    { label: '今日采集', value: summary.today_collected, delta: null },
+    { label: '已建联', value: summary.contacted, delta: null },
+    { label: '待审核', value: summary.review_pending, delta: null },
+    { label: '已推进', value: summary.progressed, delta: null },
   ];
 
   const overview = [
-    { label: '潜在线索', value: statusMap['prospect'] || 0 },
-    { label: '已联系', value: statusMap['contacted'] || 0 },
-    { label: '已确认', value: statusMap['confirmed'] || 0 },
-    { label: '待回复', value: 0 },
+    { label: '潜在线索', value: stageCounts.prospect || 0 },
+    { label: '已联系', value: stageCounts.contacted || 0 },
+    { label: '已确认', value: stageCounts.confirmed || 0 },
+    { label: '待回复', value: stageCounts.pending_reply || 0 },
     { label: '近 7 天新增', value: recent7 },
-    { label: '已寄样', value: statusMap['sample_shipped'] || 0 },
-    { label: '样品签收', value: statusMap['sample_delivered'] || 0 },
-    { label: '视频已发', value: statusMap['video_published'] || 0 },
-    { label: '已授权', value: statusMap['ad_authorized'] || 0 },
-    { label: '广告投放中', value: statusMap['ad_running'] || 0 },
+    { label: '已寄样', value: stageCounts.sample_shipped || 0 },
+    { label: '样品签收', value: stageCounts.sample_delivered || 0 },
+    { label: '视频已发', value: stageCounts.video_published || 0 },
+    { label: '已授权', value: stageCounts.ad_authorized || 0 },
+    { label: '广告投放中', value: stageCounts.ad_running || 0 },
   ];
 
-  // Business status donut (status distribution of all outreach)
-  const statusEntries = Object.entries(statusMap).sort((a, b) => b[1] - a[1]);
-  const statusColors: Record<string, string> = {
-    contacted: '#60a5fa', confirmed: '#3370ff', sample_shipped: '#8b5cf6',
-    sample_delivered: '#a855f7', video_published: '#f59e0b',
-    ad_authorized: '#10b981', ad_running: '#16a34a', dropped: '#ef4444',
-    prospect: '#94a3b8',
-  };
-  const statusLabel: Record<string, string> = {
-    contacted: '已联系', confirmed: '已确认', sample_shipped: '样品已寄',
-    sample_delivered: '样品签收', video_published: '视频已发',
-    ad_authorized: '已授权', ad_running: '广告投放中', dropped: '已放弃',
-    prospect: '潜在',
-  };
-  const donutData = statusEntries.map(([k, v]) => ({
-    name: statusLabel[k] || k,
-    value: v,
-    color: statusColors[k] || '#94a3b8',
-  }));
-  const donutTotal = outreach.length;
+  const donutData = (data?.stage_rows ?? [])
+    .filter((row) => row.count > 0)
+    .map((row) => ({
+      name: row.name,
+      value: row.count,
+      color: stageColors[row.key] || '#94a3b8',
+    }));
+  const donutTotal = summary.total_creators;
 
-  // Product direction = creators.category_tags top
-  const productDirection = groupByCategoryTags(creators, 6);
-
-  // BD follow-up = staff stats
-  const bdRows = staffStats(staff).sort((a, b) => b.contacted - a.contacted).slice(0, 8);
-
-  // Owner-based priority distribution (simulated from owner concentration)
-  const ownerCounts = groupByOwner(creators, 4);
-  const priorityRows = ownerCounts.map((o, i) => ({ label: ['P1', 'P2', 'P3', 'P4'][i] || `P${i + 1}`, value: o.count }));
-
-  // ECharts options
   const trendOption = {
     grid: { top: 30, right: 16, bottom: 30, left: 36, containLabel: true },
     xAxis: {
-      type: 'category', data: trend7.map((d) => d.date),
+      type: 'category', data: trend7.map((d) => formatDay(d.date)),
       axisLine: { lineStyle: { color: '#e5e6eb' } }, axisTick: { show: false },
       axisLabel: { color: '#86909c', fontSize: 11 },
     },
@@ -164,13 +174,13 @@ export default function Dashboard() {
       axisLabel: { color: '#86909c', fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false },
     },
     yAxis: {
-      type: 'category', data: productDirection.map((d) => d.name).reverse(),
+      type: 'category', data: categoryCounts.map((d) => d.name).reverse(),
       axisLine: { show: false }, axisTick: { show: false },
       axisLabel: { color: '#4e5969', fontSize: 12 },
     },
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
     series: [{
-      type: 'bar', data: productDirection.map((d) => d.value).reverse(),
+      type: 'bar', data: categoryCounts.map((d) => d.value).reverse(),
       barWidth: 14,
       itemStyle: { color: '#3370ff', borderRadius: [0, 3, 3, 0] },
       label: { show: true, position: 'right', color: '#4e5969', fontSize: 11, fontWeight: 500 },
@@ -178,7 +188,7 @@ export default function Dashboard() {
   };
 
   return (
-    <AsyncState loading={loading} error={error} height={400}>
+    <AsyncState loading={dashboardQ.isLoading} error={dashboardQ.error} height={400}>
       <div className="space-y-4">
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           {topRow.map((k, i) => (
@@ -215,7 +225,7 @@ export default function Dashboard() {
           <ChartCard title="近 7 天达人新增">
             <EChart option={trendOption} height={240} />
           </ChartCard>
-          <ChartCard title="建联状态分布">
+          <ChartCard title="达人阶段分布">
             <EChart option={donutOption} height={240} />
           </ChartCard>
           <ChartCard title="达人品类分布">
@@ -226,19 +236,25 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
           <div className="card lg:col-span-1">
             <div className="px-4 pt-3 pb-2">
-              <h3 className="text-sm font-semibold text-gray-800">对接人达人占比 Top 4</h3>
+              <h3 className="text-sm font-semibold text-gray-800">对接人达人占比 Top 8</h3>
             </div>
             <div className="px-2 pb-3">
-              <PriorityBar rows={priorityRows} labelHeader="排名" valueHeader="达人数" />
+              <PriorityBar rows={ownerRows} labelHeader="对接人" valueHeader="达人数" />
             </div>
           </div>
           <div className="card lg:col-span-2">
             <div className="px-4 pt-3 pb-2">
               <h3 className="text-sm font-semibold text-gray-800">BD 跟进明细</h3>
-              <div className="text-xxs text-muted mt-0.5">基于 staff.note 月度统计</div>
+              <div className="text-xxs text-muted mt-0.5">基于全部达人去重后的负责人阶段统计</div>
             </div>
             <div className="px-2 pb-3">
-              <DataTable columns={bdColumns} data={bdRows} rowKey={(r) => r.name} emptyText="暂无 BD 统计数据" />
+              <DataTable
+                columns={bdColumns}
+                data={bdRows}
+                rowKey={(r) => r.owner}
+                emptyText="暂无 BD 统计数据"
+                compact
+              />
             </div>
           </div>
         </div>

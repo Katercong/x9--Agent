@@ -9,7 +9,13 @@ const PRESETS = [
   { name: '通用 KOC', keywords: 'wellness routine, self care, daily diary' },
 ];
 
-export function StartCollectionForm({ onStarted }: { onStarted?: () => void }) {
+type StartCollectionFormProps = {
+  onStarted?: () => void;
+  workerId?: string | null;
+  online?: boolean;
+};
+
+export function StartCollectionForm({ onStarted, workerId, online = false }: StartCollectionFormProps) {
   const [keywords, setKeywords] = useState('');
   const [maxProfiles, setMaxProfiles] = useState(50);
   const [language, setLanguage] = useState('en');
@@ -19,10 +25,13 @@ export function StartCollectionForm({ onStarted }: { onStarted?: () => void }) {
     if (!keywords.trim() || post.isPending) return;
     post.mutate({
       command_type: 'start_collection',
+      worker_id: workerId || undefined,
       payload: {
         keywords: keywords.split(/[,，\n]/).map((s) => s.trim()).filter(Boolean),
         max_profiles: maxProfiles,
         language,
+        source: 'x9_leads',
+        command_source: 'portal_collection',
       },
     }, {
       onSuccess: () => {
@@ -85,14 +94,18 @@ export function StartCollectionForm({ onStarted }: { onStarted?: () => void }) {
             <option value="any">不限</option>
           </select>
         </div>
-        <button onClick={onStart} disabled={post.isPending || !keywords.trim()} className="btn btn-primary">
+        <button onClick={onStart} disabled={post.isPending || !keywords.trim() || !online} className="btn btn-primary">
           {post.isPending ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
           下发采集任务
         </button>
       </div>
 
+      {!online && (
+        <div className="text-xxs text-warn">插件离线时命令无法执行。打开 Chrome 插件侧边栏后，本页会自动显示在线。</div>
+      )}
+
       {post.isSuccess && (
-        <div className="text-xxs text-good">✓ 命令已下发,等待 Chrome 插件接管</div>
+        <div className="text-xxs text-good">✓ 命令已下发，等待 Chrome 插件轮询接管</div>
       )}
       {post.isError && (
         <div className="text-xxs text-bad">✗ {(post.error as any)?.message || '下发失败'}</div>

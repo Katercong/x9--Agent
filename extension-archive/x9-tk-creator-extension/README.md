@@ -1,90 +1,83 @@
-# Chrome Extension
+# TikTok Creator Lead Browser v2.2
 
-This folder contains a Manifest V3 Chrome extension for using TikTok Creator Lead Browser inside the Chrome session where you are already logged in.
+X9 仪表盘上行采集 + TIKTOK全自动采集监控。
 
-The extension does not automate engagement. It only reads public information visible on the TikTok page you opened manually.
+## 一键流程（用户操作）
 
-## Install Locally
+1. Chrome → `chrome://extensions` → 开启右上角"开发者模式"
+2. "加载已解压的扩展程序" → 选 `F:\AI Agent\Auto boker grab\tiktok-creator-lead-browser-extension-2.2`
+3. **后端先起来**（要不然上传报错）：
+   ```cmd
+   cd F:\AI Agent\Auto boker grab\x9_creator_desktop_system
+   start_desktop.bat
+   ```
+   后端在 `http://127.0.0.1:8000`。
+4. 浏览器开 `https://affiliate-us.tiktok.com/connection/creator`
+5. 点扩展图标（或打开侧边栏） → 顶部红框 **TIKTOK全自动采集监控**
+6. 后端地址默认 `http://127.0.0.1:8000/api/local/collector/observations`，需要换就改一下
+7. 点 **▶ 开始**
 
-1. Open Chrome.
-2. Go to `chrome://extensions`.
-3. Enable `Developer mode`.
-4. Click `Load unpacked`.
-5. Select this folder:
+插件接管：
+- **列表阶段**：自动下滑加载达人，逐行解析（handle / 名字 / Followers / GMV / 类别 / 邀约状态），即时上传到后端
+- **详情阶段**：自动逐个点开达人详情页，等加载完，只采集原始可见文本 / DOM / 链接证据并立即上传，结构化解析交给后端
+- **完成**：弹 Chrome 系统通知，统计区显示总数；不会自动下载 CSV/Excel
 
-```text
-F:\AI Agent\Auto boker grab\tiktok-creator-lead-browser\chrome-extension
+随时点 **⏸ 停止** 中断，下次按 **▶ 开始** 重新开一轮（不接续）。
+
+## 状态面板
+
+| 指标 | 含义 |
+|---|---|
+| 状态 pill | 闲置 / 运行中 / 已停止 / 已完成 / 错误 |
+| 阶段 | 列表滚动采集中 / 详情逐个采集中 / 已完成 |
+| 当前 | 现在正在处理的 @handle |
+| 列表 | 列表阶段看到的去重 handle 总数 |
+| 详情成功 | 详情页采集成功的数量，抓到后立即更新 |
+| 详情失败 | 点不开 / 加载超时 |
+| 错误 | 各阶段累计错误次数 |
+| ⚠ 红字 | 最近一次错误简述 |
+
+## 后端
+
+需要后端能接收 `POST /api/local/collector/observations`，payload `platform = "tiktok_shop"` 走 TikTok Shop ingest service。这部分是 Stage 1 后端（已落地、41 + 16 + 7 + 5 个测试全过）。
+
+采集完到 `http://localhost:8000/ui/` 点 **TIKTOK全自动采集监控** tab 看入库的达人列表 / 详情；需要 CSV 时在后端页面手动导出。
+
+## 常见排错
+
+| 现象 | 原因 / 处理 |
+|---|---|
+| "active_tab_is_not_tiktok_shop" | 当前 tab URL 不是 affiliate-us/seller-us，切到列表页再点开始 |
+| 启动后没动静 | DevTools (F12) → Console 看 content script 报错；可能页面还没完全渲染好 |
+| 详情失败多 | TikTok Shop 用 SPA + 虚拟滚动，行被回收时再点击会失效；脚本会重试 3 次再放弃 |
+| 上传失败 | 后端没起 / endpoint 写错；改 popup 里"后端地址"再试 |
+| handle 不对 | 极少数情况：handle 字段把名字也吸进来了。后端有 handle 校验，会拒；详情失败计数会涨 |
+
+## 文件清单
+
+```
+manifest.json          v2.2，匹配 www / affiliate-us / seller-us，permissions 加 alarms+notifications
+background.js          (v2.0 原版) sidePanel 打开、storage 初始化
+contentScript.js       (v2.0 原版) www.tiktok.com 走原 X9 流程
+shop_collector.js      新：Shop 列表/详情解析 + 全自动编排（点击行→等待→采集→back→下一个）
+shop_runner.js         新：service worker 状态机，监听消息 + 上传到后端
+shop_panel.js          新：popup/sidepanel 上的 Shop UI（开始/停止/重置 + 实时计数）
+popup.js               (v2.0 原版) 旧的 X9 / TikTok 控制逻辑
+popup.html             (修改) 顶部插入 TIKTOK全自动采集监控面板
+sidepanel.html         (修改) 顶部插入 TIKTOK全自动采集监控面板
+popup.css              (v2.0 原版)
+x9_sw.js               (修改 3 行) importScripts: background + x9_relay + shop_runner
+x9_relay.js            (v2.0 原版) X9 dashboard 上行
 ```
 
-6. Pin `TikTok Creator Lead Browser` from the extensions menu. Clicking the extension icon opens the side panel.
+## 与 v2.0 / 2.1 关系
 
-If the extension was already installed, click the reload button on the extension card after file changes.
+- **v2.0** (`x9-tk-creator-extension.zip`)：只有 X9 dashboard relay + www.tiktok.com 采集
+- **v2.1** (`tiktok-creator-lead-browser-extension-2.1/`, 之前合并尝试)：未完成的 v2.0 + 1.0.19 Shop 合并草稿
+- **v2.2** (本目录)：以 v2.0 为底，添加 TikTok Shop **全自动**采集 + 上传到后端
 
-## How To Use
-
-1. Open your already logged-in TikTok page.
-2. Click the extension icon to open the side panel.
-3. Enter a search keyword.
-4. Set `Lead Filters`. The default is visible email required and minimum 1000 followers.
-5. Open your already logged-in TikTok page first, then click `Search In Page`. The extension types the keyword into TikTok's visible search box in the current tab, clicks the `Videos` tab, scans visible results, and clicks the first visible video.
-6. Scroll TikTok manually if you want more visible results.
-7. Click `Scan Page` to collect visible video links into the local queue.
-8. Click `Open Next Profile` to open one queued creator profile in a new tab.
-9. Wait for the profile page to load.
-10. Click `Scan Page` again.
-11. If the creator has a visible valid email and meets the follower threshold, the lead is saved.
-12. If the creator does not match the filters, the profile is recorded as skipped.
-13. Export email leads with `Export CSV` or `Export JSON`.
-14. Export the full local state with `Export Backup`.
-
-## Auto Run
-
-Auto run is still supervised visible browsing. It does not interact with TikTok users.
-
-1. Open the side panel when possible.
-2. Enter a search keyword.
-3. Set `Lead Filters`. The default is visible email required and minimum 1000 followers.
-4. Set `Scrolls`, `Profiles`, `Delay min`, `Delay max`, and rest-break settings. The default is a fast human pace: 2-4 second random delays, a short page-settle wait, and a rest break every 15 checked profiles.
-5. Click `Start Auto Run`.
-6. The extension uses the current logged-in TikTok browser session. It does not launch a separate Chrome profile and does not navigate to a search URL fallback if the search box is missing.
-7. If the current tab is a TikTok video search results page, it works through the visible result cards one by one.
-8. On search results pages, it clicks a result card, checks the opened video, opens the creator profile in a temporary tab when needed, closes the profile tab, then clicks TikTok's video close button to return to the search results page.
-9. When the currently visible search results are exhausted, it scrolls the search results page to load more and continues.
-10. If the current tab is already a TikTok video page, it starts from that video directly.
-11. Otherwise, it types into the visible search box, submits the search, clicks the `Videos` tab, and then uses the search-results workflow.
-12. Before opening a creator profile, it checks whether the username or source video was already handled and skips duplicates.
-13. If the current video is visibly unavailable or cannot be played, it closes the video view and continues with the next search result.
-14. It keeps looping until the configured task target is reached or `Stop Auto` is clicked.
-10. It saves only profiles with visible valid email addresses and followers greater than or equal to the configured minimum.
-11. Every configured number of processed videos, it takes a random rest break between `Rest min` and `Rest max`.
-12. Click `Stop Auto` to stop after the current step.
-
-If login, CAPTCHA, verification, age, region, or unusual access text is detected, auto run pauses. Handle it manually in the visible browser, then start auto run again.
-
-Keep the side panel open while auto run is active. Chrome stops popup scripts when a popup loses focus, so long runs are intentionally handled from the side panel.
-
-The side panel shows:
-
-- `Leads`: saved creators with visible valid email addresses.
-- `Queue`: visible creator profiles found from search results but not handled yet.
-- `Skipped`: profiles checked but rejected by filters.
-- `Next Queue`: the next few queued profiles.
-- `Recent Leads`: the latest saved email leads.
-
-## Compliance
-
-- No auto-like.
-- No auto-comment.
-- No auto-follow.
-- No auto-message.
-- No posting.
-- No CAPTCHA bypass.
-- No login bypass.
-- No proxy.
-- No fingerprint evasion.
-- No hidden scraping.
-- Only currently visible TikTok page text and visible links are read.
-
-## Data Storage
-
-Data is stored locally in Chrome extension storage. CSV, JSON, and backup exports are downloaded with Chrome's normal download flow.
+## 不动的事
+- 不点赞、不评论、不关注、不私信、不发帖
+- 不绕过验证码、不使用代理
+- 只采页面已经加载、可见的内容
+- 触发频率有随机化（0.95–1.35 秒每次滚动），不开新 tab 并发，单线程跑

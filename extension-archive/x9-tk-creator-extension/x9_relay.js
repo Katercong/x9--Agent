@@ -3,12 +3,15 @@ const X9_RELAYED_KEYS = "x9_relayed_keys";
 const X9_API_BASE_KEY = "x9_api_base";          // user override stored here
 const X9_API_BASE_ACTIVE_KEY = "x9_api_base_active";  // last-known-good
 const X9_HEARTBEAT_ALARM = "x9-relay-heartbeat";
+const X9_COMMAND_ALARM = "x9-dashboard-commands";
+const X9_DASHBOARD_COMMAND_MESSAGE = "X9_DASHBOARD_COMMAND";
 
 // Candidates tried in order when no user override is set. Whichever responds
 // first to a heartbeat becomes the cached "active" base.
 const X9_API_BASE_CANDIDATES = [
   "http://localhost:8000",
   "http://127.0.0.1:8000",
+  "https://usx9.us",
   "http://usx9.us",
   "http://192.168.1.171:8000",
   "http://192.168.1.171",
@@ -43,16 +46,21 @@ async function getCandidateOrder() {
 chrome.runtime.onInstalled.addListener(() => {
   ensureX9RelayAlarm();
   relayCurrentState("installed").catch(() => undefined);
+  pollDashboardCommands().catch(() => undefined);
 });
 
 chrome.runtime.onStartup.addListener(() => {
   ensureX9RelayAlarm();
   relayCurrentState("startup").catch(() => undefined);
+  pollDashboardCommands().catch(() => undefined);
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === X9_HEARTBEAT_ALARM) {
     relayCurrentState("alarm").catch(() => undefined);
+  }
+  if (alarm.name === X9_COMMAND_ALARM) {
+    pollDashboardCommands().catch(() => undefined);
   }
 });
 
@@ -68,6 +76,7 @@ function ensureX9RelayAlarm() {
   // 0.5 min = 30 s, the tightest cadence allowed. Server's offline threshold
   // is 90 s, so even a missed alarm won't flap the dashboard.
   chrome.alarms.create(X9_HEARTBEAT_ALARM, { periodInMinutes: 0.5 });
+  chrome.alarms.create(X9_COMMAND_ALARM, { periodInMinutes: 0.5 });
 }
 
 async function relayCurrentState(reason) {
@@ -266,6 +275,141 @@ async function postHeartbeat(state, reason) {
   }
 }
 
+async function pollDashboardCommands() {
+  const base = await resolveApiBase();
+  if (!base) return;
+
+  const workerId = chrome.runtime.id || "tiktok_creator_lead_browser";
+  let data = null;
+  try {
+    const url = joinPath(
+      base,
+      `/api/local/extension/commands/pending?worker_id=${encodeURIComponent(workerId)}&claim=true&limit=10`
+    );
+    data = await getJson(url);
+  } catch (e) {
+    await chrome.storage.local.remove(X9_API_BASE_ACTIVE_KEY);
+    return;
+  }
+
+  const items = Array.isArray(data?.items) ? data.items : [];
+  for (const command of items) {
+    await executeDashboardCommand(base, command).catch(() => undefined);
+  }
+}
+
+async function executeDashboardCommand(base, command) {
+  try {
+    const payload = parseCommandPayload(command);
+    const result = await dispatchDashboardCommand({
+      id: command.id,
+      command_type: command.command_type,
+      worker_id: command.worker_id,
+      payload,
+    });
+    await postJson(joinPath(base, `/api/local/extension/commands/${encodeURIComponent(command.id)}/ack`), {
+      status: "done",
+      result: result || { ok: true },
+    });
+  } catch (e) {
+    await postJson(joinPath(base, `/api/local/extension/commands/${encodeURIComponent(command.id)}/ack`), {
+      status: "error",
+      error_message: String(e && e.message || e),
+    }).catch(() => undefined);
+  }
+}
+
+function parseCommandPayload(command) {
+  if (command?.payload && typeof command.payload === "object") {
+    return command.payload;
+  }
+  const raw = command?.payload_json;
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) || {};
+  } catch {
+    return {};
+  }
+}
+
+async function dispatchDashboardCommand(command) {
+  const type = String(command.command_type || "");
+  const payload = command.payload || {};
+
+  if (type === "start_shop_collection" || payload.source === "tiktok_shop") {
+    return dispatchShopDashboardCommand(command);
+  }
+
+  await openSidePanelIfPossible();
+  const response = await sendExtensionMessage({
+    type: X9_DASHBOARD_COMMAND_MESSAGE,
+    command,
+  });
+  if (response && response.ok === false) {
+    throw new Error(response.error || "dashboard command failed");
+  }
+  return response || { ok: true };
+}
+
+async function dispatchShopDashboardCommand(command) {
+  const payload = command.payload || {};
+  const maxProfiles = Number(payload.max_profiles ?? payload.maxProfiles ?? payload.task_count ?? payload.taskCount ?? 20);
+  const settings = {
+    endpoint: payload.endpoint || await resolveCollectorEndpoint(),
+    taskCount: Number.isFinite(maxProfiles) && maxProfiles > 0 ? Math.round(maxProfiles) : 20,
+  };
+
+  if (command.command_type === "cancel_collection" || command.command_type === "cancel_shop_collection") {
+    if (globalThis.X9_SHOP_COMMANDS?.stop) {
+      return globalThis.X9_SHOP_COMMANDS.stop();
+    }
+    return sendExtensionMessage({ type: "TSCLB_SHOP_STOP" });
+  }
+
+  if (globalThis.X9_SHOP_COMMANDS?.start) {
+    return globalThis.X9_SHOP_COMMANDS.start(settings);
+  }
+  return sendExtensionMessage({ type: "TSCLB_SHOP_START", settings });
+}
+
+async function resolveCollectorEndpoint() {
+  const base = await resolveApiBase();
+  return joinPath(base || "http://127.0.0.1:8000", "/api/local/collector/observations");
+}
+
+async function openSidePanelIfPossible() {
+  if (!chrome.sidePanel?.open) return;
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+  const windowId = tabs[0]?.windowId;
+  if (!windowId) return;
+  await chrome.sidePanel.open({ windowId }).catch(() => undefined);
+  await sleep(500);
+}
+
+function sendExtensionMessage(message) {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage(message, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error("请先打开浏览器插件侧边栏，再从采集页下发任务。"));
+          return;
+        }
+        resolve(response || { ok: true });
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+async function getJson(url) {
+  const response = await fetch(url, { method: "GET" });
+  if (!response.ok) {
+    throw new Error(`GET ${url} failed with ${response.status}`);
+  }
+  return response.json().catch(() => ({}));
+}
+
 async function getActiveTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
   return tabs[0] || null;
@@ -312,6 +456,10 @@ async function postJson(url, body) {
     throw new Error(`POST ${url} failed with ${response.status}`);
   }
   return response.json().catch(() => ({}));
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function normalizeX9State(state) {

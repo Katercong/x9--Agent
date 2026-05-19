@@ -1,47 +1,54 @@
-﻿{
-    "manifest_version":  3,
-    "name":  "TikTok Creator Lead Browser",
-    "version":  "2.0",
-    "description":  "Collect visible TikTok creator business contact leads from pages you open manually. With X9 dashboard relay.",
-    "permissions":  [
-                        "activeTab",
-                        "downloads",
-                        "scripting",
-                        "sidePanel",
-                        "storage",
-                        "tabs",
-                        "unlimitedStorage",
-                        "alarms"
-                    ],
-    "host_permissions":  [
-                             "https://www.tiktok.com/*",
-                             "http://127.0.0.1:8000/*",
-                             "http://localhost:8000/*",
-                             "http://usx9.us/*",
-                             "https://usx9.us/*",
-                             "http://*.usx9.us/*",
-                             "https://*.usx9.us/*",
-                             "http://192.168.1.171/*",
-                             "http://192.168.1.171:8000/*"
-                         ],
-    "action":  {
-                   "default_title":  "TikTok Creator Lead Browser"
-               },
-    "side_panel":  {
-                       "default_path":  "sidepanel.html"
-                   },
-    "content_scripts":  [
-                            {
-                                "matches":  [
-                                                "https://www.tiktok.com/*"
-                                            ],
-                                "js":  [
-                                           "contentScript.js"
-                                       ],
-                                "run_at":  "document_idle"
-                            }
-                        ],
-    "background":  {
-                       "service_worker":  "x9_sw.js"
-                   }
+{
+    "manifest_version": 3,
+    "name": "TikTok Creator Lead Browser",
+    "version": "2.2",
+    "description": "Collect TikTok creator + TikTok Shop creator leads. Auto-run scrapes affiliate-us list pages and detail pages, uploads to local X9 backend, and relays to the X9 dashboard.",
+    "permissions": [
+        "activeTab",
+        "downloads",
+        "scripting",
+        "sidePanel",
+        "storage",
+        "tabs",
+        "unlimitedStorage",
+        "alarms",
+        "notifications"
+    ],
+    "host_permissions": [
+        "https://www.tiktok.com/*",
+        "https://affiliate-us.tiktok.com/*",
+        "https://seller-us.tiktok.com/*",
+        "https://*.tiktok.com/*",
+        "http://127.0.0.1:8000/*",
+        "http://localhost:8000/*",
+        "http://127.0.0.1:8010/*",
+        "http://localhost:8010/*",
+        "http://usx9.us/*",
+        "https://usx9.us/*",
+        "http://*.usx9.us/*",
+        "https://*.usx9.us/*",
+        "http://192.168.1.171/*",
+        "http://192.168.1.171:8000/*"
+    ],
+    "action": {
+        "default_title": "TikTok Creator Lead Browser"
+    },
+    "side_panel": {
+        "default_path": "sidepanel.html"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://www.tiktok.com/*",
+                "https://affiliate-us.tiktok.com/*",
+                "https://seller-us.tiktok.com/*",
+                "https://*.tiktok.com/*"
+            ],
+            "js": ["contentScript.js", "shop_collector.js"],
+            "run_at": "document_idle"
+        }
+    ],
+    "background": {
+        "service_worker": "x9_sw.js"
+    }
 }

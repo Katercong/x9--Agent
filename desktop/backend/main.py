@@ -18,6 +18,7 @@ from .routers import (
     auth,
     collector,
     creators,
+    dashboard,
     data as data_router,
     db as db_router,
     export as export_router,
@@ -53,6 +54,7 @@ app.include_router(auth.router)
 app.include_router(db_router.router)
 app.include_router(extension.router)
 app.include_router(collector.router)
+app.include_router(dashboard.router)
 app.include_router(process.router)
 app.include_router(creators.router)
 app.include_router(data_router.router)

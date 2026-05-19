@@ -66,6 +66,9 @@ export function useLlmTokenUsages(params?: Params) {
 export function useBusinessMetricsDaily(params?: Params) {
   return useQuery({ queryKey: ['data', 'business_metrics_daily', params], queryFn: () => endpoints.businessMetricsDaily(params) });
 }
+export function useDepartmentDashboardSummary() {
+  return useQuery({ queryKey: ['dashboard', 'department-summary'], queryFn: () => endpoints.departmentDashboardSummary() });
+}
 
 export function useUsers() {
   return useQuery({ queryKey: ['auth', 'users'], queryFn: () => endpoints.users() });
