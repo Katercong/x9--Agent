@@ -25,6 +25,8 @@ core/database.db
 core/database.db.*
 desktop/data/creators.sqlite
 desktop/data/*.sqlite-journal
+desktop/data/exports/
+scrapers/output/
 *.bak
 *.frozen_*
 
@@ -37,8 +39,11 @@ desktop/data/*.sqlite-journal
 # 本地工具二进制（ngrok/cloudflared 等，体积大，各自下载）
 .tools/
 
-# 数据库备份 zip（含真实数据，不进 git）
+# 数据库备份（含真实数据，不进 git）
 *.zip
+**/*.zip
+*.db
+core/database_backup*
 
 # 备份目录
 /backup/
