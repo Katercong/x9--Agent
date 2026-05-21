@@ -295,6 +295,34 @@ export interface PreviewResult {
   context?: Record<string, any>;
 }
 
+export interface TkPrompt {
+  id: string;
+  name: string;
+  prompt: string;
+  strategy: string;
+  created_at: string;
+}
+
+export interface TkScriptResult {
+  ok: boolean;
+  script: string;
+  handle: string;
+  product_key: string;
+  commission: number;
+  strategy: string;
+  ai_status: string;
+  context_used: {
+    bio_excerpt: string;
+    video_title: string;
+    matched_keywords: string;
+    recommendation_reason: string;
+    product_label: string;
+    followers_count: string;
+  };
+}
+
+export type TkStrategy = 'template' | 'ai' | 'hybrid';
+
 export interface OutreachDraft {
   id: string;
   creator_id: string;

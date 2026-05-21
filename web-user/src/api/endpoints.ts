@@ -5,7 +5,7 @@ import type {
   AssistantInfo, AssistantReply, User, ListResp,
   ExtensionCommand, ExtensionSession, CollectorObservation,
   OutreachTemplate, PreviewResult, OutreachDraft, GmailAccount, OutreachHistoryItem,
-  ReviewTaskUpdate,
+  ReviewTaskUpdate, TkPrompt, TkScriptResult,
 } from './types';
 
 export const endpoints = {
@@ -85,6 +85,24 @@ export const endpoints = {
 
   outreachHistory: (creator_id: string | number) =>
     api.get<ListResp<OutreachHistoryItem>>(`/outreach/history/${encodeURIComponent(String(creator_id))}`),
+
+  generateTkScript: (creator_id: string | number, body: {
+    commission: number;
+    strategy?: string;
+    custom_prompt?: string;
+    prompt_id?: string;
+  }) =>
+    api.post<TkScriptResult>(
+      `/outreach/tk-script/${encodeURIComponent(String(creator_id))}`,
+      body,
+    ),
+
+  listTkPrompts: () =>
+    api.get<{ items: TkPrompt[]; total: number }>('/outreach/tk-prompts'),
+  createTkPrompt: (body: { name: string; prompt: string; strategy: string }) =>
+    api.post<{ ok: boolean; prompt: TkPrompt }>('/outreach/tk-prompts', body),
+  deleteTkPrompt: (id: string) =>
+    api.del<{ ok: boolean }>(`/outreach/tk-prompts/${id}`),
 
   // Gmail OAuth
   gmailAuthUrl: (label = 'workspace', returnTo = '/') =>

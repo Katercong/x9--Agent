@@ -153,6 +153,23 @@ export function useOutreachHistory(creator_id?: string | number) {
   });
 }
 
+export function useGenerateTkScript() {
+  return useMutation({
+    mutationFn: ({ creator_id, ...body }: { creator_id: string | number; commission: number; strategy?: string; custom_prompt?: string; prompt_id?: string }) =>
+      endpoints.generateTkScript(creator_id, body),
+  });
+}
+
+export function useTkPrompts() {
+  return useQuery({ queryKey: ['tk-prompts'], queryFn: () => endpoints.listTkPrompts() });
+}
+export function useCreateTkPrompt() {
+  return useMutation({ mutationFn: (body: { name: string; prompt: string; strategy: string }) => endpoints.createTkPrompt(body) });
+}
+export function useDeleteTkPrompt() {
+  return useMutation({ mutationFn: (id: string) => endpoints.deleteTkPrompt(id) });
+}
+
 // Gmail
 export function useGmailAccounts() {
   return useQuery({ queryKey: ['gmail', 'accounts'], queryFn: () => endpoints.gmailAccounts() });

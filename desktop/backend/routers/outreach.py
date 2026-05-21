@@ -52,6 +52,15 @@ from ..services.outreach_service import (
     pick_template,
     render_template,
 )
+from ..services.tk_script_service import (
+    build_tk_context,
+    delete_prompt as _delete_tk_prompt,
+    generate_strategy_ai,
+    generate_strategy_hybrid,
+    generate_strategy_template,
+    list_prompts as _list_tk_prompts,
+    save_prompt as _save_tk_prompt,
+)
 from ..utils.id_utils import new_id
 
 
@@ -144,6 +153,19 @@ class RollbackIn(BaseModel):
     """Restore the subject/body of one historical email into the current draft."""
 
     target_email_id: str
+
+
+class TkScriptIn(BaseModel):
+    commission: int = Field(default=20, ge=5, le=20)
+    strategy: str = Field(default="template", pattern="^(template|ai|hybrid)$")
+    custom_prompt: str | None = Field(default=None, max_length=4000)
+    prompt_id: str | None = None
+
+
+class TkPromptIn(BaseModel):
+    name: str = Field(max_length=100)
+    prompt: str = Field(max_length=4000)
+    strategy: str = Field(default="ai", pattern="^(ai|hybrid)$")
 
 
 # ---------------------------------------------------------------------------
@@ -428,6 +450,91 @@ def preview_email(creator_id: str, body: PreviewIn, request: Request, db: Sessio
         "tone": rendered.tone,
         "language": rendered.language,
         "variants": rendered.variants or [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# TK script prompt template management
+# ---------------------------------------------------------------------------
+
+
+@router.get("/tk-prompts")
+def list_tk_prompts() -> dict:
+    """List saved TK script prompt templates."""
+    items = _list_tk_prompts()
+    return {"items": items, "total": len(items)}
+
+
+@router.post("/tk-prompts")
+def create_tk_prompt(body: TkPromptIn) -> dict:
+    """Save a custom TK script prompt template."""
+    entry = _save_tk_prompt(name=body.name, prompt=body.prompt, strategy=body.strategy)
+    return {"ok": True, "prompt": entry}
+
+
+@router.delete("/tk-prompts/{prompt_id}")
+def remove_tk_prompt(prompt_id: str) -> dict:
+    """Delete a saved TK script prompt template."""
+    ok = _delete_tk_prompt(prompt_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="prompt not found")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# TK DM script generation
+# ---------------------------------------------------------------------------
+
+
+@router.post("/tk-script/{creator_id}")
+def generate_tk_dm_script(
+    creator_id: str,
+    body: TkScriptIn,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Generate a personalized TikTok DM outreach script.
+
+    Three strategies:
+    - template: ${var} substitution with creator context (bio, video, keywords)
+    - ai:       LLM generates the entire script given creator context + system prompt
+    - hybrid:   Fixed X9 brand frame + LLM writes personalized opener only
+    """
+    creator = _resolve_creator(db, creator_id, current_department_code(request))
+    ctx = build_tk_context(creator, commission=body.commission)
+
+    # Resolve saved prompt if prompt_id is given but no inline custom_prompt
+    custom_prompt = (body.custom_prompt or "").strip() or None
+    if body.prompt_id and not custom_prompt:
+        for p in _list_tk_prompts():
+            if p.get("id") == body.prompt_id:
+                custom_prompt = p.get("prompt")
+                break
+
+    if body.strategy == "ai":
+        script, ai_status = generate_strategy_ai(ctx, custom_prompt=custom_prompt)
+    elif body.strategy == "hybrid":
+        script, ai_status = generate_strategy_hybrid(ctx, custom_prompt=custom_prompt)
+    else:
+        script = generate_strategy_template(ctx)
+        ai_status = "template"
+
+    return {
+        "ok": True,
+        "script": script,
+        "handle": ctx.get("handle", ""),
+        "product_key": ctx.get("product_key", "all"),
+        "commission": body.commission,
+        "strategy": body.strategy,
+        "ai_status": ai_status,
+        "context_used": {
+            "bio_excerpt": ctx.get("bio_excerpt", ""),
+            "video_title": ctx.get("video_title", ""),
+            "matched_keywords": ctx.get("matched_keywords", ""),
+            "recommendation_reason": ctx.get("recommendation_reason", ""),
+            "product_label": ctx.get("product_label", ""),
+            "followers_count": ctx.get("followers_count", ""),
+        },
     }
 
 

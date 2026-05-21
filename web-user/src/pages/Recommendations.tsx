@@ -1,11 +1,12 @@
 ﻿import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  ArrowRight, CalendarDays, Download, ExternalLink, Filter, Mail, RotateCcw, Search, ShieldAlert,
-  Sparkles, Star, Users,
+  ArrowRight, CalendarDays, Download, ExternalLink, Filter, Mail, MessageSquare,
+  RotateCcw, Search, ShieldAlert, Sparkles, Star, Users,
 } from 'lucide-react';
 import { AsyncState } from '@/components/states/States';
 import { OutreachDrawer } from '@/components/outreach/OutreachDrawer';
+import { TkScriptModal } from '@/components/outreach/TkScriptModal';
 import { useBusinessDashboard, useClaimCreator, useCreators, useRecommended } from '@/hooks/useApi';
 import { formatCompact, maskEmail } from '@/lib/format';
 import { pickItems, type Creator } from '@/api/types';
@@ -237,11 +238,13 @@ function RecommendationCard({
   creator,
   onOpen,
   onMail,
+  onScript,
   mailPending,
 }: {
   creator: Creator;
   onOpen: (creator: Creator) => void;
   onMail: (creator: Creator) => void;
+  onScript: (creator: Creator) => void;
   mailPending?: boolean;
 }) {
   const tone = scoreTone(creator.recommendation_score);
@@ -338,6 +341,17 @@ function RecommendationCard({
             type="button"
             onClick={(event) => {
               event.stopPropagation();
+              onScript(creator);
+            }}
+            className="btn !h-8 !px-2.5 text-xs"
+            title="生成 TK DM 邀约话术"
+          >
+            <MessageSquare size={13} /> 话术
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
               onMail(creator);
             }}
             disabled={mailPending}
@@ -372,6 +386,7 @@ export default function Recommendations() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [sort, setSort] = useState<SortFilter>('recommended');
   const [drawerCreator, setDrawerCreator] = useState<Creator | null>(null);
+  const [scriptCreator, setScriptCreator] = useState<Creator | null>(null);
   const [lockingCreatorId, setLockingCreatorId] = useState<string | null>(null);
   const claimCreator = useClaimCreator();
 
@@ -708,6 +723,7 @@ export default function Recommendations() {
               creator={creator}
               onOpen={(c) => navigate(`/recommendations/${encodeURIComponent(String(c.id))}`)}
               onMail={openOutreach}
+              onScript={(c) => setScriptCreator(c)}
               mailPending={lockingCreatorId === String(creator.id)}
             />
           ))}
@@ -715,6 +731,7 @@ export default function Recommendations() {
       </AsyncState>
 
       <OutreachDrawer creator={drawerCreator} open={!!drawerCreator} onClose={() => setDrawerCreator(null)} />
+      {scriptCreator && <TkScriptModal creator={scriptCreator} onClose={() => setScriptCreator(null)} />}
     </div>
   );
 }
