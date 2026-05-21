@@ -21,10 +21,11 @@ import { DataTable, type Column } from '@/components/table/DataTable';
 import { AsyncState } from '@/components/states/States';
 import { useDepartmentDashboardSummary, useStaff } from '@/hooks/useApi';
 import { staffStats } from '@/lib/derive';
+import type { AnalyticsMemberRow } from '@/api/types';
 
-const topKpiIcons = [Users, Inbox, ThumbsUp, Clock, Handshake];
-const topKpiBg = ['#e0e7ff', '#d1fae5', '#cffafe', '#fed7aa', '#ede9fe'];
-const topKpiFg = ['#4f46e5', '#16a34a', '#0891b2', '#ea580c', '#7c3aed'];
+const topKpiIcons = [Users, UserCheck, Inbox, ThumbsUp, Clock, Handshake];
+const topKpiBg = ['#e0e7ff', '#dcfce7', '#d1fae5', '#cffafe', '#fed7aa', '#ede9fe'];
+const topKpiFg = ['#4f46e5', '#16a34a', '#16a34a', '#0891b2', '#ea580c', '#7c3aed'];
 
 const overviewIcons = [
   ArrowUpRight, MessageSquare, ListChecks, Clock, UserPlus,
@@ -62,6 +63,24 @@ const bdColumns: Column<BdRow>[] = [
   { key: 'videos', header: '已发视频', align: 'right', cell: (r) => <span className="text-xs num">{r.videos}</span> },
 ];
 
+const memberColumns: Column<AnalyticsMemberRow>[] = [
+  { key: 'member', header: '成员', cell: (r) => <span className="text-xs">{r.member || '未分配'}</span> },
+  { key: 'shop', header: 'Shop入库', align: 'right', cell: (r) => <span className="text-xs num">{r.tiktok_shop_processed ?? 0}</span> },
+  { key: 'video', header: '视频入库', align: 'right', cell: (r) => <span className="text-xs num">{r.tiktok_video_processed ?? 0}</span> },
+  { key: 'bd', header: 'BD入库', align: 'right', cell: (r) => <span className="text-xs num">{r.bd_processed ?? 0}</span> },
+  { key: 'recommended', header: '推荐', align: 'right', cell: (r) => <span className="text-xs num">{r.recommended ?? 0}</span> },
+  { key: 'sent', header: '已发送', align: 'right', cell: (r) => <span className="text-xs num">{r.sent ?? 0}</span> },
+  { key: 'replied', header: '已回复', align: 'right', cell: (r) => <span className="text-xs num">{r.replied ?? 0}</span> },
+  { key: 'sample_shipped', header: '已寄样', align: 'right', cell: (r) => <span className="text-xs num">{r.sample_shipped ?? 0}</span> },
+  { key: 'partnered', header: '已合作', align: 'right', cell: (r) => <span className="text-xs num">{r.partnered ?? 0}</span> },
+];
+
+const sourceLabels: Record<string, string> = {
+  tiktok_shop: 'TikTok Shop',
+  tiktok_video: 'TikTok视频',
+  bd: 'BD达人',
+};
+
 function formatDay(value: string) {
   const parts = value.split('-');
   if (parts.length !== 3) return value;
@@ -80,6 +99,9 @@ export default function Dashboard() {
     progressed: 0,
   };
   const overviewCounts = Object.fromEntries((data?.overview ?? []).map((row) => [row.key, row.count]));
+  const analytics = data?.analytics;
+  const sourceCounts = Object.fromEntries((analytics?.source_counts ?? []).map((row) => [row.name, row.count]));
+  const memberRows = analytics?.members?.slice(0, 8) ?? [];
   const trend7 = data?.trend_7d ?? [];
   const recent7 = trend7.reduce((sum, row) => sum + row.count, 0);
   const categoryCounts = data?.category_counts?.length ? data.category_counts : [{ name: '未填写', value: 0 }];
@@ -89,11 +111,18 @@ export default function Dashboard() {
     .slice(0, 8);
 
   const topRow = [
-    { label: '总达人', value: summary.total_creators, subLabel: '全平台累计数', delta: null as number | null },
+    { label: '总发现量', value: summary.total_creators, subLabel: '列表/详情/入库累计', delta: null as number | null },
+    { label: '去重达人主档', value: summary.processed_creators ?? summary.unique_creators ?? 0, subLabel: '推荐池使用此口径', delta: null },
     { label: '今日采集', value: summary.today_collected, delta: null },
     { label: '已建联', value: summary.contacted, delta: null },
     { label: '待审核', value: summary.review_pending, delta: null },
     { label: '已推进', value: summary.progressed, delta: null },
+  ];
+
+  const sourceRow = [
+    { key: 'tiktok_shop', value: sourceCounts.tiktok_shop || 0, icon: Inbox, bg: '#fce7f3', fg: '#db2777' },
+    { key: 'tiktok_video', value: sourceCounts.tiktok_video || 0, icon: Video, bg: '#dbeafe', fg: '#2563eb' },
+    { key: 'bd', value: sourceCounts.bd || 0, icon: UserCheck, bg: '#dcfce7', fg: '#16a34a' },
   ];
 
   const overview = [
@@ -191,7 +220,7 @@ export default function Dashboard() {
   return (
     <AsyncState loading={dashboardQ.isLoading} error={dashboardQ.error} height={400}>
       <div className="space-y-4">
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
           {topRow.map((k, i) => (
             <KpiCard
               key={k.label}
@@ -222,6 +251,24 @@ export default function Dashboard() {
           </div>
         </div>
 
+        <div className="pt-1">
+          <h3 className="sec-title">处理后来源拆分</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {sourceRow.map((item) => (
+              <KpiCard
+                key={item.key}
+                label={sourceLabels[item.key]}
+                value={item.value}
+                subLabel="按去重主档来源记录统计"
+                icon={item.icon}
+                iconBg={item.bg}
+                iconColor={item.fg}
+                compact
+              />
+            ))}
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
           <ChartCard title="近 7 天达人新增">
             <EChart option={trendOption} height={240} />
@@ -232,6 +279,22 @@ export default function Dashboard() {
           <ChartCard title="达人品类分布">
             <EChart option={directionOption} height={240} />
           </ChartCard>
+        </div>
+
+        <div className="card">
+          <div className="px-4 pt-3 pb-2">
+            <h3 className="text-sm font-semibold text-gray-800">成员入库与建联进度</h3>
+            <div className="text-xxs text-muted mt-0.5">只统计采集后处理入库、推荐和建联事件，不使用 raw 回传量作为达人数量</div>
+          </div>
+          <div className="px-2 pb-3">
+            <DataTable
+              columns={memberColumns}
+              data={memberRows}
+              rowKey={(r) => r.member}
+              emptyText="暂无成员维度处理数据"
+              compact
+            />
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">

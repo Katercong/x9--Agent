@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from ..database import get_db

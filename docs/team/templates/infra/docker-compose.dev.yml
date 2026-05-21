@@ -1,0 +1,31 @@
+# Dev 专用的 PostgreSQL — 与生产容器完全隔离
+#
+# 用法(在 dev 克隆里):
+#   cd F:\X9_dev\X9_AI_system\infra\docker
+#   docker compose -f docker-compose.dev.yml up -d
+#
+# 容器名 / 端口 / 数据卷都加了 -dev 后缀,与生产的 docker-compose.yml 不冲突。
+
+services:
+  postgres-dev:
+    image: postgres:16
+    container_name: x9-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${X9_PG_USER:-x9}
+      POSTGRES_PASSWORD: ${X9_PG_PASSWORD:?must set X9_PG_PASSWORD in .env.shared}
+      POSTGRES_DB: ${X9_PG_DB:-x9db}
+    ports:
+      # 注意:25432 而不是 15432,避免和生产容器抢端口
+      - "25432:5432"
+    volumes:
+      - x9_pg_data_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${X9_PG_USER:-x9} -d ${X9_PG_DB:-x9db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  x9_pg_data_dev:
+    name: x9_pg_data_dev

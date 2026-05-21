@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models.creator import Creator
 from ..models.creator_recommendation import CreatorRecommendation
+from ..models.creator_outreach_event import CreatorOutreachEvent
 from ..models.raw_observation import RawObservation
 from ..utils.id_utils import new_id
 from ..utils.json_utils import dumps_json, loads_json_list
@@ -39,6 +40,7 @@ from ..utils.keyword_rules_v3 import (
 from .recommendation_engine import decide
 from .review_task_service import open_task_if_needed
 from .departments import department_where
+from .post_processing import create_outreach_event, creator_source_type
 from .scoring_engine import compute_score
 from .tag_engine import apply_tags
 
@@ -107,10 +109,18 @@ def run_for_creator(db: Session, creator: Creator, repeat_discovery: dict[str, A
     creator.recommended_at = datetime.now(timezone.utc)
 
     # Append a history row (so we can audit recommendation drift)
+    source_type = creator_source_type(creator)
+    for existing in db.scalars(
+        select(CreatorRecommendation)
+        .where(CreatorRecommendation.creator_id == creator.id)
+        .where(CreatorRecommendation.is_current == 1)
+    ).all():
+        existing.is_current = 0
     db.add(CreatorRecommendation(
         id=new_id("rec"),
         department_code=creator.department_code,
         creator_id=creator.id,
+        source_type=source_type,
         recommendation_status=decision.recommendation_status,
         recommended_product_type=decision.recommended_product_type,
         recommended_collab_type=decision.recommended_collab_type,
@@ -119,8 +129,24 @@ def run_for_creator(db: Session, creator: Creator, repeat_discovery: dict[str, A
         recommendation_reason=decision.recommendation_reason,
         risk_summary=decision.risk_summary,
         next_action=decision.next_action,
+        rule_version=settings.rec_version,
+        is_current=1,
         rec_version=settings.rec_version,
     ))
+    if decision.recommendation_status in {"recommended", "recommended_after_review", "low_cost_test", "affiliate_test"}:
+        existing_recommended = db.scalars(
+            select(CreatorOutreachEvent.id)
+            .where(CreatorOutreachEvent.creator_id == creator.id)
+            .where(CreatorOutreachEvent.event_type == "recommended")
+            .limit(1)
+        ).first()
+        if existing_recommended is None:
+            create_outreach_event(
+                db,
+                creator,
+                event_type="recommended",
+                metadata={"source": "pipeline", "source_type": source_type, "score": score.recommendation_score},
+            )
 
     # No new manual-review tasks are created in the multi-user BD flow.
     # The helper is still called so old pending tasks close automatically
@@ -289,17 +315,48 @@ def _repeat_discovery_for_creators(db: Session, creators: list[Creator]) -> dict
 
     states = {c.id: _new_repeat_state() for c in creators}
     platforms = sorted({p for p, _ in creator_keys})
-    rows = list(db.scalars(select(RawObservation).where(RawObservation.platform.in_(platforms))).all())
 
-    for obs in rows:
-        payload = _load_payload(obs.raw_json)
+    # CRITICAL: raw_observations.raw_json averages ~142 KB per row (TikTok DOM
+    # captures). Loading the table with `db.scalars(...).all()` previously
+    # blew the desktop process up to 17+ GB. We stream now, but we MUST NOT
+    # use the ORM mapped object for the raw_json column — any attribute
+    # mutation on a mapped object marks the row dirty, and the caller's
+    # db.commit() (in run_full_pipeline) then UPDATE-s raw_json to NULL,
+    # destroying the source data. (This is exactly the bug that wiped today's
+    # tiktok_shop captures.)
+    #
+    # Instead: read only the columns we need via a Core-level statement
+    # (returns a Row, not a mapped object) and parse the JSON locally. The
+    # row is GC'd as soon as the loop iteration ends.
+    stream = db.execute(
+        select(
+            RawObservation.platform,
+            RawObservation.raw_json,
+            RawObservation.search_keyword,
+            RawObservation.content_hash,
+        )
+        .where(RawObservation.platform.in_(platforms))
+        .execution_options(yield_per=200)
+    )
+    for platform_value, raw_json, search_keyword, content_hash_value in stream:
+        payload = _load_payload(raw_json)
         if not payload:
             continue
         creator_data = payload.get("creator") or {}
-        cid = creator_keys.get(((payload.get("platform") or obs.platform or "tiktok").lower(), _norm_handle(creator_data.get("handle"))))
-        if not cid:
-            continue
-        _add_repeat_observation(states[cid], payload, obs)
+        cid = creator_keys.get((
+            (payload.get("platform") or platform_value or "tiktok").lower(),
+            _norm_handle(creator_data.get("handle")),
+        ))
+        if cid:
+            # Build a minimal observation-like object so the existing
+            # _add_repeat_observation signature stays the same.
+            obs_shim = type("ObsShim", (), {
+                "platform": platform_value,
+                "search_keyword": search_keyword,
+                "content_hash": content_hash_value,
+            })()
+            _add_repeat_observation(states[cid], payload, obs_shim)
+        payload = None
 
     return {cid: _finalize_repeat_state(state) for cid, state in states.items()}
 

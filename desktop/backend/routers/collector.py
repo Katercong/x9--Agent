@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -305,13 +305,79 @@ def source_stats(request: Request, db: Session = Depends(get_db)) -> dict:
         "shop_profile_collected": int(shop_profile_collected or 0),
     }
 
+    # Contact-coverage stats per source, sourced from the `creators` table.
+    # The UI was previously counting `with_email` / `with_links` by parsing
+    # `raw_observations.raw_json` on the page, but a chunk of historical
+    # raw_json got wiped by an earlier ORM dirty-bit bug — so the page
+    # under-reported. The enriched email/external_links columns on
+    # `creators` are the source of truth and remain intact.
+    contacts: dict[str, dict[str, int]] = {}
+    try:
+        contact_rows = db.execute(text(
+            """
+            SELECT
+              CASE
+                WHEN source IS NULL OR source = '' THEN 'other'
+                WHEN source LIKE '%shop%' THEN 'tiktok_shop'
+                WHEN source = 'x9_leads' OR source LIKE '%creator_lead%' THEN 'x9_leads'
+                WHEN source = 'table_import' THEN 'table_import'
+                ELSE 'other'
+              END AS bucket,
+              COUNT(*) AS total,
+              COUNT(*) FILTER (WHERE email IS NOT NULL AND email != '') AS with_email,
+              COUNT(*) FILTER (WHERE external_links_json IS NOT NULL
+                               AND external_links_json != ''
+                               AND external_links_json != '[]') AS with_links,
+              COUNT(*) FILTER (
+                WHERE collected_at IS NOT NULL
+                  AND DATE(collected_at) = CURRENT_DATE
+              ) AS today_total,
+              COUNT(*) FILTER (
+                WHERE collected_at IS NOT NULL
+                  AND DATE(collected_at) = CURRENT_DATE
+                  AND email IS NOT NULL AND email != ''
+              ) AS today_with_email,
+              COUNT(*) FILTER (
+                WHERE collected_at IS NOT NULL
+                  AND DATE(collected_at) = CURRENT_DATE
+                  AND external_links_json IS NOT NULL
+                  AND external_links_json != ''
+                  AND external_links_json != '[]'
+              ) AS today_with_links
+            FROM creators
+            GROUP BY 1
+            """
+        )).all()
+        for row in contact_rows:
+            contacts[row[0]] = {
+                "total": int(row[1] or 0),
+                "with_email": int(row[2] or 0),
+                "with_links": int(row[3] or 0),
+                "today_total": int(row[4] or 0),
+                "today_with_email": int(row[5] or 0),
+                "today_with_links": int(row[6] or 0),
+            }
+    except Exception as exc:
+        # Never block the dashboard on a stat enrichment failure — but log
+        # the cause so it doesn't silently mask a SQL bug in development.
+        import logging
+        logging.getLogger(__name__).warning("source-stats contacts query failed: %s", exc, exc_info=True)
+        contacts = {}
+
     def shaped(bucket: str) -> dict:
         a = agg[bucket]
-        return {
+        out = {
             "total": a["total"],
             "today": a["today"],
             "daily": [{"date": k, "count": a["daily"][k]} for k in day_keys],
         }
+        # Attach contact-coverage block from the `creators` table — accurate
+        # even when raw_json is missing. KPI tiles like "有邮箱" should bind
+        # to these fields, not items.filter().
+        c = contacts.get(bucket)
+        if c:
+            out["contacts"] = c
+        return out
 
     shop = shaped(SRC_SHOP)
     shop["funnel"] = funnel

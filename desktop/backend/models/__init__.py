@@ -1,7 +1,10 @@
 from .app_session import AppSession
 from .app_user import AppUser
+from .bd_monthly_stat import BdMonthlyStat
 from .creator import Creator
 from .creator_recommendation import CreatorRecommendation
+from .creator_outreach_event import CreatorOutreachEvent
+from .creator_source import CreatorSource
 from .creator_tag import CreatorTag
 from .extension_command import ExtensionCommand
 from .extension_run_progress import ExtensionRunProgress
@@ -19,7 +22,10 @@ __all__ = [
     "Creator",
     "AppSession",
     "AppUser",
+    "BdMonthlyStat",
     "CreatorRecommendation",
+    "CreatorOutreachEvent",
+    "CreatorSource",
     "CreatorTag",
     "ExtensionCommand",
     "ExtensionRunProgress",

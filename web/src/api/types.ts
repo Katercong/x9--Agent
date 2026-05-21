@@ -260,10 +260,13 @@ export interface BusinessMetricDaily {
 
 export interface DepartmentDashboardSummaryMetrics {
   total_creators: number;
+  processed_creators?: number;
   today_collected: number;
   today_new_creators?: number;
   recent_30d_creators?: number;
   unique_creators?: number;
+  collection_channel_rows_total?: number;
+  business_with_bd_history_total?: number;
   all_channel_rows_total?: number;
   all_channel_rows_today?: number;
   all_channel_rows_recent_30d?: number;
@@ -348,6 +351,80 @@ export interface DepartmentDashboardSummary {
       videos: number;
     };
   };
+  analytics?: AnalyticsSummary;
+}
+
+export interface AnalyticsSourceCount {
+  name: string;
+  count: number;
+}
+
+export interface AnalyticsEventCount {
+  name: string;
+  count: number;
+}
+
+export interface AnalyticsTrendRow {
+  date: string;
+  processed: number;
+  recommended: number;
+  sent: number;
+  partnered: number;
+}
+
+export interface AnalyticsMemberRow {
+  member: string;
+  tiktok_shop_processed?: number;
+  tiktok_video_processed?: number;
+  bd_processed?: number;
+  other_processed?: number;
+  recommended?: number;
+  assigned?: number;
+  sent?: number;
+  pending_reply?: number;
+  replied?: number;
+  sample_shipped?: number;
+  sample_delivered?: number;
+  partnered?: number;
+  video_published?: number;
+  dropped?: number;
+}
+
+export interface AnalyticsDepartmentRow extends AnalyticsMemberRow {
+  department_code: string;
+  creators?: number;
+}
+
+export interface AnalyticsSummary {
+  ok: boolean;
+  scope: {
+    type: string;
+    department_code: string | null;
+    actor_user_id?: string | null;
+  };
+  summary: {
+    total_creators?: number;
+    processed_creators: number;
+    recommended: number;
+    assigned: number;
+    outreach_sent: number;
+    pending_reply: number;
+    replied: number;
+    sample_shipped: number;
+    partnered: number;
+    raw_observations_are_excluded: boolean;
+    bd_history: {
+      contacted: number;
+      confirmed: number;
+      samples: number;
+      videos: number;
+    };
+  };
+  source_counts: AnalyticsSourceCount[];
+  event_counts: AnalyticsEventCount[];
+  members: AnalyticsMemberRow[];
+  departments: AnalyticsDepartmentRow[];
+  trend: AnalyticsTrendRow[];
 }
 
 export interface SystemMetrics {

@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from x9_creator_desktop_system.backend.database import SessionLocal
 from x9_creator_desktop_system.backend.models.creator import Creator
+from x9_creator_desktop_system.backend.models.creator_source import CreatorSource
 from x9_creator_desktop_system.backend.models.raw_observation import RawObservation
 
 
@@ -16,7 +17,7 @@ def _summary(client) -> dict:
     return response.json()["summary"]
 
 
-def test_business_summary_counts_all_channel_rows_without_dedup(client):
+def test_business_summary_counts_cumulative_creator_rows(client):
     before = _summary(client)
     marker = datetime.now().strftime("%Y%m%d%H%M%S%f")
 
@@ -42,33 +43,39 @@ def test_business_summary_counts_all_channel_rows_without_dedup(client):
     after_raw = _summary(client)
     assert after_raw["total_creators"] == before["total_creators"] + 1
     assert after_raw["today_new_creators"] == before["today_new_creators"] + 1
-    assert after_raw["progressed"] == before["progressed"]
-    assert after_raw["today_collected"] == after_raw["today_new_creators"]
-    assert after_raw["raw_observations_today"] == before["raw_observations_today"] + 1
+    assert after_raw["raw_observations_total"] == before.get("raw_observations_total", 0) + 1
 
     with SessionLocal() as session:
-        session.add(
-            Creator(
-                id=f"creator_dashboard_{marker}",
-                platform="tiktok",
-                handle=f"dashboard_creator_{marker}",
-                display_name="Dashboard Creator",
-                department_code="cross_border",
-                source="x9_leads",
-                current_status="video_published",
-                collected_at=datetime.now(),
-            )
+        creator = Creator(
+            id=f"creator_dashboard_{marker}",
+            platform="tiktok",
+            handle=f"dashboard_creator_{marker}",
+            display_name="Dashboard Creator",
+            department_code="cross_border",
+            source="x9_leads",
+            current_status="prospect",
+            collected_at=datetime.now(),
         )
+        session.add(creator)
+        session.add(CreatorSource(
+            id=f"src_dashboard_{marker}",
+            creator_id=creator.id,
+            platform=creator.platform,
+            handle=creator.handle,
+            department_code="cross_border",
+            source_type="tiktok_video",
+            first_seen_at=datetime.now(),
+            last_seen_at=datetime.now(),
+        ))
         session.commit()
 
     after_creator = _summary(client)
-    assert after_creator["total_creators"] == before["total_creators"] + 2
-    assert after_creator["today_new_creators"] == before["today_new_creators"] + 2
-    assert after_creator["progressed"] == before["progressed"] + 1
-    assert after_creator["today_collected"] == after_creator["today_new_creators"]
+    assert after_creator["total_creators"] == after_raw["total_creators"] + 1
+    assert after_creator["today_new_creators"] == after_raw["today_new_creators"] + 1
+    assert after_creator["processed_creators"] == after_raw.get("processed_creators", 0) + 1
 
 
-def test_business_summary_includes_bd_history_as_creator_data(client):
+def test_business_summary_migrates_bd_history_without_faking_creators(client):
     before = _summary(client)
     marker = datetime.now().strftime("%Y%m%d%H%M%S%f")
 
@@ -96,7 +103,7 @@ def test_business_summary_includes_bd_history_as_creator_data(client):
         session.commit()
 
     after = _summary(client)
-    assert after["total_creators"] == before["total_creators"] + 7
-    assert after["contacted"] == before["contacted"] + 7
-    assert after["progressed"] == before["progressed"] + 3
-    assert after["bd_history_creators"] == before.get("bd_history_creators", 0) + 7
+    assert after["total_creators"] == before["total_creators"]
+    assert after["business_with_bd_history_total"] == before.get("business_with_bd_history_total", before["total_creators"]) + 7
+    assert after["bd_history_contacted"] == before.get("bd_history_contacted", 0) + 7
+    assert after["bd_history_confirmed"] == before.get("bd_history_confirmed", 0) + 3

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timedelta
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
@@ -16,8 +17,10 @@ from fastapi.staticfiles import StaticFiles
 from .config import UI_DIR, settings
 from .database import SessionLocal, init_db
 from .models.request_log import RequestLog
+from .utils import log_scheduler, session_cache
 from .routers import (
     admin,
+    analytics,
     app as app_router,
     auth,
     collector,
@@ -29,9 +32,12 @@ from .routers import (
     extension,
     imports,
     outreach,
+    post_process,
     process,
+    recommendations,
     review_tasks,
     shared,
+    v2 as v2_router,
 )
 from .services import auth_service
 from .services.departments import SLUG_TO_CODE
@@ -59,19 +65,28 @@ app.include_router(db_router.router)
 app.include_router(extension.router)
 app.include_router(collector.router)
 app.include_router(dashboard.router)
+app.include_router(post_process.process_router)
 app.include_router(process.router)
+app.include_router(post_process.creators_router)
 app.include_router(creators.router)
 app.include_router(data_router.router)
 app.include_router(review_tasks.router)
 app.include_router(export_router.router)
 app.include_router(imports.router)
+app.include_router(post_process.outreach_router)
 app.include_router(outreach.router)
+app.include_router(analytics.router)
+app.include_router(recommendations.router)
 app.include_router(shared.router)
+app.include_router(v2_router.router)
 
 
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+    # Daily background prune of request_logs (was inline on every request,
+    # which serialized writes behind a DELETE under load).
+    log_scheduler.start_log_cleanup()
 
 
 PUBLIC_API_PATHS = {
@@ -109,6 +124,9 @@ def _admin_spa_role(path: str) -> str | None:
         return "company_admin"
     if path.startswith("/d/"):
         return "department"
+    if path.startswith("/preview"):
+        # New v2 preview UI — accessible to any logged-in user.
+        return "any"
     return None
 
 
@@ -118,7 +136,9 @@ def _home_for_user(user: dict) -> str:
         return "/a/monitor"
     if role == "company_admin":
         return "/c/overview"
-    return "/d/dashboard"
+    if role == "department_admin":
+        return "/d/dashboard"
+    return "/portal/"
 
 
 def _should_log_request(path: str) -> bool:
@@ -130,6 +150,12 @@ def _should_log_request(path: str) -> bool:
 
 
 def _write_request_log(method: str, path: str, status_code: int, duration_ms: int) -> None:
+    """Append a single RequestLog row. Called from a BackgroundTask after the
+    response is sent, so it never blocks the request thread.
+
+    The 7-day prune used to run inline here; it's now a daily background job
+    (utils/log_scheduler.py) so writes don't fight with DELETEs under load.
+    """
     if not _should_log_request(path):
         return
     try:
@@ -142,12 +168,27 @@ def _write_request_log(method: str, path: str, status_code: int, duration_ms: in
                     duration_ms=max(0, int(duration_ms)),
                 )
             )
-            cutoff = datetime.utcnow() - timedelta(days=7)
-            db.query(RequestLog).filter(RequestLog.ts < cutoff).delete(synchronize_session=False)
             db.commit()
     except Exception:
         # Monitoring must never break the product path.
         pass
+
+
+def _resolve_user_cached(token: str | None):
+    """Token → user dict, hitting an in-process 60s LRU when possible.
+
+    Avoids the per-request `SessionLocal() + DB query` overhead under multi-user
+    load. Misses fall back to the real `current_user_from_token`.
+    """
+    if not token:
+        return None
+    cached = session_cache.get(token)
+    if cached is not None:
+        return cached
+    with SessionLocal() as db:
+        user = auth_service.current_user_from_token(db, token)
+    session_cache.put(token, user)
+    return user
 
 
 @app.middleware("http")
@@ -155,19 +196,18 @@ async def require_dashboard_login(request, call_next):
     path = request.url.path
     started_at = time.perf_counter()
     user = None
-    if path.startswith(("/api/local", "/api/v1", "/a/", "/c/", "/d/", "/admin/", "/portal")) or path == "/":
-        with SessionLocal() as db:
-            user = auth_service.current_user_from_token(
-                db,
-                request.cookies.get(auth_service.SESSION_COOKIE),
-            )
+    if path.startswith(("/api/local", "/api/v1", "/api/v2", "/a/", "/c/", "/d/", "/admin/", "/portal", "/preview")) or path == "/":
+        token = request.cookies.get(auth_service.SESSION_COOKIE)
+        # LRU cached resolve — skips DB on hot path for repeat polling
+        # (`/api/local/auth/me`, dashboard refreshes, etc).
+        user = _resolve_user_cached(token)
         request.state.current_user = user
 
     if path.startswith("/api/local"):
         if not _is_public_api_path(path) and user is None:
             return JSONResponse({"ok": False, "detail": "login required"}, status_code=401)
 
-    if path.startswith("/api/v1") and user is None:
+    if path.startswith(("/api/v1", "/api/v2")) and user is None:
         return JSONResponse({"ok": False, "detail": "login required"}, status_code=401)
 
     spa_role = _admin_spa_role(path)
@@ -175,11 +215,11 @@ async def require_dashboard_login(request, call_next):
         if user is None:
             login_url = "/login?next=" + str(request.url.path)
             return RedirectResponse(url=login_url, status_code=303)
-        if spa_role != "root":
+        if spa_role == "root":
+            return RedirectResponse(url=_home_for_user(user), status_code=303)
+        if spa_role not in ("root", "any"):
             role = user.get("role")
-            allowed = (
-                spa_role == "department" and role in {"department_admin", "department_user"}
-            ) or role == spa_role
+            allowed = role == "department_admin" if spa_role == "department" else role == spa_role
             if not allowed:
                 return RedirectResponse(url=_home_for_user(user), status_code=303)
     if (
@@ -190,12 +230,21 @@ async def require_dashboard_login(request, call_next):
     ):
         return RedirectResponse(url=_home_for_user(user), status_code=303)
     response = await call_next(request)
-    _write_request_log(
-        request.method,
-        path,
-        getattr(response, "status_code", 0) or 0,
-        int((time.perf_counter() - started_at) * 1000),
-    )
+    # Write the log asynchronously — fire-and-forget so the response goes out
+    # immediately. Previously this ran inline + did a 7-day DELETE on every
+    # request, which serialized hot traffic behind table-level locks.
+    duration_ms = int((time.perf_counter() - started_at) * 1000)
+    status_code = getattr(response, "status_code", 0) or 0
+    try:
+        # `get_running_loop()` is the modern, deprecation-safe variant (vs
+        # the old `get_event_loop()`). It always returns the loop currently
+        # running this middleware — exactly what we want.
+        asyncio.get_running_loop().run_in_executor(
+            None, _write_request_log, request.method, path, status_code, duration_ms
+        )
+    except Exception:
+        # Never break the request path on logging issues.
+        pass
     return response
 
 
@@ -254,6 +303,14 @@ def admin_department_spa(full_path: str) -> FileResponse:
 @app.get("/a/{full_path:path}")
 def admin_super_spa(full_path: str) -> FileResponse:
     """SPA fallback for 超级管理员 routes (/a/monitor, /a/users, ...)."""
+    return _admin_index()
+
+
+@app.get("/preview")
+@app.get("/preview/{full_path:path}")
+def admin_preview_spa(full_path: str = "") -> FileResponse:
+    """SPA fallback for the v2 preview UI (/preview/pulse, /preview/me,
+    /preview/creators, /preview/creators/:platform/:handle)."""
     return _admin_index()
 
 

@@ -19,12 +19,24 @@ export default function CollectLeads() {
   const bucket = stats.data?.sources?.x9_leads;
   const items = feed.data?.items ?? [];
 
+  // Prefer the contacts block from /source-stats (counts from `creators`
+  // table — accurate even if raw_json is missing for some observations).
+  // Fall back to client-side counting only when the backend hasn't been
+  // updated yet.
   const d = useMemo(() => {
+    if (bucket?.contacts) {
+      const c = bucket.contacts;
+      return {
+        withEmail: c.today_with_email,
+        withLinks: c.today_with_links,
+        neither: Math.max(0, c.today_total - c.today_with_email - c.today_with_links),
+      };
+    }
     const withEmail = items.filter((i) => i.lead?.email).length;
     const withLinks = items.filter((i) => (i.lead?.external_links?.length ?? 0) > 0).length;
     const neither = items.filter((i) => !i.lead?.email && !(i.lead?.external_links?.length ?? 0)).length;
     return { withEmail, withLinks, neither };
-  }, [items]);
+  }, [items, bucket]);
 
   const coverageOption = {
     tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },

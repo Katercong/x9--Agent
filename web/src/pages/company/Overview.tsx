@@ -1,12 +1,12 @@
-import { Wallet, ShoppingCart, Users, TrendingUp, Building2, Video, ArrowUpRight, AlertOctagon } from 'lucide-react';
+import { Wallet, ShoppingCart, Users, TrendingUp, Building2, Video, ArrowUpRight, AlertOctagon, UserCheck } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
-import { useCreators, useOutreach, useProducts, useStaff, useDepartmentDashboardSummary } from '@/hooks/useApi';
-import { trendByDay, recentNDays, groupByOutreachStatus, groupByOwner, staffStats } from '@/lib/derive';
+import { useCreators, useOutreach, useProducts, useStaff, useDepartmentDashboardSummary, useAnalyticsCompany } from '@/hooks/useApi';
+import { trendByDay, groupByOwner, staffStats } from '@/lib/derive';
 import { chartPalette } from '@/lib/colors';
 import { formatDate } from '@/lib/format';
 
@@ -32,27 +32,39 @@ export default function Overview() {
   const products = useProducts({ limit: 200 });
   const staff = useStaff({ limit: 100 });
   const dashboard = useDepartmentDashboardSummary();
+  const companyAnalytics = useAnalyticsCompany(30);
 
-  const loading = creators.isLoading || outreach.isLoading || products.isLoading || dashboard.isLoading;
-  const error = creators.error || outreach.error || products.error || dashboard.error;
+  const loading = creators.isLoading || outreach.isLoading || products.isLoading || dashboard.isLoading || companyAnalytics.isLoading;
+  const error = creators.error || outreach.error || products.error || dashboard.error || companyAnalytics.error;
 
   const creatorList = creators.data?.items ?? [];
   const outreachList = outreach.data?.items ?? [];
   const productList = products.data?.items ?? [];
   const staffList = staff.data?.items ?? [];
-  const summary = dashboard.data?.summary;
+  const legacySummary = dashboard.data?.summary;
+  const company = companyAnalytics.data;
+  const summary = company?.summary;
+  const sourceTotal = (company?.source_counts ?? []).reduce((sum, row) => sum + row.count, 0);
 
-  const statusMap = groupByOutreachStatus(outreachList);
-  const activeDepts = new Set(creatorList.map((c) => c.store_assigned).filter(Boolean)).size;
   const totalContacted = staffStats(staffList).reduce((s, r) => s + r.contacted, 0);
 
-  // 30 天趋势(按 outreach 事件)
-  const trend30 = trendByDay(creatorList as any, 30);
+  const trend30 = company?.trend?.length
+    ? company.trend.map((d) => ({
+        date: d.date.slice(5),
+        processed: d.processed,
+        recommended: d.recommended,
+        sent: d.sent,
+        partnered: d.partnered,
+      }))
+    : trendByDay(creatorList as any, 30).map((d) => ({ date: d.date, processed: d.count, recommended: 0, sent: 0, partnered: 0 }));
 
-  // 部门贡献(按 store_assigned 分组的达人数)
-  const deptContrib = groupByOwner(creatorList as any, 8).map((o, i) => ({
-    name: o.name, value: o.count, itemStyle: { color: chartPalette.categorical[i % chartPalette.categorical.length] },
-  }));
+  const deptContrib = (company?.departments?.length ? company.departments : groupByOwner(creatorList as any, 8))
+    .slice(0, 8)
+    .map((o: any, i) => ({
+      name: o.department_code || o.name,
+      value: o.creators ?? o.count ?? 0,
+      itemStyle: { color: chartPalette.categorical[i % chartPalette.categorical.length] },
+    }));
 
   // 近期事件(从 outreach 取最近的)
   const recentEvents: RecentEvent[] = outreachList.slice(0, 8).map((o) => {
@@ -73,14 +85,15 @@ export default function Overview() {
   });
 
   const overviewKpis = [
-    { label: '总达人', value: summary?.total_creators ?? creators.data?.total ?? 0, icon: Users, bg: '#e0e7ff', fg: '#4f46e5' },
-    { label: '建联事件', value: outreach.data?.total ?? 0, icon: ShoppingCart, bg: '#d1fae5', fg: '#16a34a' },
+    { label: '总发现量', value: legacySummary?.total_creators ?? summary?.total_creators ?? 0, icon: Users, bg: '#e0e7ff', fg: '#4f46e5' },
+    { label: '去重达人主档', value: summary?.processed_creators ?? legacySummary?.processed_creators ?? legacySummary?.unique_creators ?? creators.data?.total ?? 0, icon: UserCheck, bg: '#dcfce7', fg: '#16a34a' },
+    { label: '推荐达人', value: summary?.recommended ?? 0, icon: ShoppingCart, bg: '#d1fae5', fg: '#16a34a' },
     { label: 'SKU 总数', value: products.data?.total ?? 0, icon: Wallet, bg: '#cffafe', fg: '#0891b2' },
-    { label: '已联系(BD 累计)', value: totalContacted, icon: TrendingUp, bg: '#fed7aa', fg: '#ea580c' },
-    { label: '活跃店铺', value: activeDepts, icon: Building2, bg: '#ede9fe', fg: '#7c3aed' },
-    { label: '在投视频', value: outreachList.filter((o) => o.video_url).length, icon: Video, bg: '#fce7f3', fg: '#db2777' },
-    { label: '近 30 天新达人', value: summary?.recent_30d_creators ?? recentNDays(creatorList as any, 30), icon: ArrowUpRight, bg: '#fef3c7', fg: '#ca8a04' },
-    { label: '已放弃', value: statusMap['dropped'] || 0, icon: AlertOctagon, bg: '#fee2e2', fg: '#dc2626' },
+    { label: '已发送', value: summary?.outreach_sent ?? outreach.data?.total ?? 0, icon: TrendingUp, bg: '#fed7aa', fg: '#ea580c' },
+    { label: '已认领', value: summary?.assigned ?? 0, icon: Building2, bg: '#ede9fe', fg: '#7c3aed' },
+    { label: '已合作', value: summary?.partnered ?? 0, icon: Video, bg: '#fce7f3', fg: '#db2777' },
+    { label: '近 30 天入库', value: trend30.reduce((sum, row) => sum + row.processed, 0), icon: ArrowUpRight, bg: '#fef3c7', fg: '#ca8a04' },
+    { label: '来源记录', value: sourceTotal || totalContacted, icon: AlertOctagon, bg: '#fee2e2', fg: '#dc2626' },
   ];
 
   // 趋势图
@@ -97,12 +110,18 @@ export default function Overview() {
       axisLabel: { color: '#86909c', fontSize: 11 },
     },
     tooltip: { trigger: 'axis' },
-    series: [{
-      type: 'line', data: trend30.map((d) => d.count), smooth: true, symbol: 'none',
-      lineStyle: { color: '#3370ff', width: 2 },
-      areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-        colorStops: [{ offset: 0, color: 'rgba(51,112,255,0.18)' }, { offset: 1, color: 'rgba(51,112,255,0)' }] } },
-    }],
+    legend: { top: 4, textStyle: { fontSize: 11 } },
+    series: [
+      {
+        name: '处理入库', type: 'line', data: trend30.map((d) => d.processed), smooth: true, symbol: 'none',
+        lineStyle: { color: '#3370ff', width: 2 },
+        areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [{ offset: 0, color: 'rgba(51,112,255,0.18)' }, { offset: 1, color: 'rgba(51,112,255,0)' }] } },
+      },
+      { name: '推荐', type: 'line', data: trend30.map((d) => d.recommended), smooth: true, symbol: 'none', lineStyle: { color: '#8b5cf6', width: 2 } },
+      { name: '已发送', type: 'line', data: trend30.map((d) => d.sent), smooth: true, symbol: 'none', lineStyle: { color: '#16a34a', width: 2 } },
+      { name: '合作', type: 'line', data: trend30.map((d) => d.partnered), smooth: true, symbol: 'none', lineStyle: { color: '#f59e0b', width: 2 } },
+    ],
   };
 
   const deptOption = {
@@ -117,7 +136,7 @@ export default function Overview() {
   return (
     <AsyncState loading={loading} error={error} height={400}>
       <div className="space-y-4">
-        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-3">
           {overviewKpis.map((k) => (
             <KpiCard key={k.label} label={k.label} value={k.value} icon={k.icon} iconBg={k.bg} iconColor={k.fg} />
           ))}

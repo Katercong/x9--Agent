@@ -2,25 +2,63 @@
 // This is separate from client.ts, which talks to /api/v1/* through desktop.
 import type { AuthMeResponse, CurrentUser } from './types';
 
+// Same retry policy as client.ts apiFetch: 502/503/504 + network errors get
+// retried twice with backoff for idempotent methods. /me is the most-called
+// endpoint on the dashboard, so a transient gateway hiccup shouldn't bounce
+// the user out to /login.
+const TRANSIENT_STATUSES = new Set([502, 503, 504]);
+const RETRY_DELAYS_MS = [200, 800];
+
+function isIdempotent(method: string | undefined): boolean {
+  const m = (method || 'GET').toUpperCase();
+  return m === 'GET' || m === 'HEAD';
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 async function authFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch('/api/local/auth' + path, {
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...((init?.headers as Record<string, string>) || {}) },
-    ...init,
-  });
+  const url = '/api/local/auth' + path;
+  const idempotent = isIdempotent(init?.method);
+  let attempt = 0;
 
-  if (!res.ok) {
-    let body: unknown = null;
-    try { body = await res.json(); } catch { /* ignore */ }
-    const detail = (body && typeof body === 'object' && 'detail' in body && (body as any).detail) || res.statusText;
-    throw new Error(String(detail));
-  }
+  while (true) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...((init?.headers as Record<string, string>) || {}) },
+        ...init,
+      });
+    } catch (networkErr) {
+      if (idempotent && attempt < RETRY_DELAYS_MS.length) {
+        console.warn(`[authFetch] network error on ${url}, retry ${attempt + 1}`);
+        await sleep(RETRY_DELAYS_MS[attempt]);
+        attempt += 1;
+        continue;
+      }
+      throw networkErr;
+    }
 
-  const ct = res.headers.get('content-type') || '';
-  if (!ct.includes('application/json')) {
-    throw new Error('non-JSON response from auth API');
+    if (!res.ok && idempotent && TRANSIENT_STATUSES.has(res.status) && attempt < RETRY_DELAYS_MS.length) {
+      console.warn(`[authFetch] ${res.status} on ${url}, retry ${attempt + 1}`);
+      await sleep(RETRY_DELAYS_MS[attempt]);
+      attempt += 1;
+      continue;
+    }
+
+    if (!res.ok) {
+      let body: unknown = null;
+      try { body = await res.json(); } catch { /* ignore */ }
+      const detail = (body && typeof body === 'object' && 'detail' in body && (body as any).detail) || res.statusText;
+      throw new Error(String(detail));
+    }
+
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) {
+      throw new Error('non-JSON response from auth API');
+    }
+    return (await res.json()) as T;
   }
-  return (await res.json()) as T;
 }
 
 export interface AuthUserStats {

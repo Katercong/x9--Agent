@@ -62,7 +62,7 @@ const BACKEND_ALLOWED: Record<BackendRole, Role[]> = {
   super_admin: ['super'],
   company_admin: ['company'],
   department_admin: ['department'],
-  department_user: ['department'],
+  department_user: [],
 };
 
 /** 后端角色对应的默认前端入口角色。 */
@@ -74,7 +74,16 @@ export function defaultRoleFor(user: CurrentUser | null): Role {
 /** 后端角色允许访问的所有前端视图域。 */
 export function allowedRolesFor(user: CurrentUser | null): Role[] {
   if (!user) return [];
-  return BACKEND_ALLOWED[user.role] ?? ['department'];
+  return BACKEND_ALLOWED[user.role] ?? [];
+}
+
+/** Backend user home. Workspace users live in /portal/, outside this admin SPA. */
+export function homeForUser(user: CurrentUser | null): string {
+  if (!user) return '/login';
+  if (user.role === 'department_user' || user.entry_scope !== 'admin') {
+    return '/portal/';
+  }
+  return roleHome[defaultRoleFor(user)];
 }
 
 /** 中文角色名(展示用)。 */

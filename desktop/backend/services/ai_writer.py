@@ -24,11 +24,26 @@ import logging
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from ..config import settings
 
 
 log = logging.getLogger(__name__)
+
+# Module-level Session: reuses TCP/TLS connections across calls so we don't
+# pay a fresh SSL handshake on every outreach generation. Each FastAPI worker
+# thread shares this session safely (requests.Session is thread-safe for
+# concurrent reads of pooled connections).
+_HTTP_SESSION = requests.Session()
+_HTTP_SESSION.mount(
+    "https://",
+    HTTPAdapter(pool_connections=4, pool_maxsize=16, max_retries=0),
+)
+_HTTP_SESSION.mount(
+    "http://",
+    HTTPAdapter(pool_connections=2, pool_maxsize=8, max_retries=0),
+)
 
 
 VALID_TONES = {"formal", "casual", "friendly"}
@@ -77,7 +92,7 @@ def polish_email(
     payload = _build_payload(subject, body, context, tone_key, lang_key, body_limit, n_variants)
 
     try:
-        response = requests.post(
+        response = _HTTP_SESSION.post(
             _chat_completions_url(),
             headers={
                 "Authorization": f"Bearer {settings.openai_api_key}",

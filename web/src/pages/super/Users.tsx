@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Plus, ShieldCheck, UserCheck, UserX, Clock, Pencil, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Plus, ShieldCheck, UserCheck, UserX, Clock, Pencil, X, BarChart3 } from 'lucide-react';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
@@ -282,6 +283,13 @@ function AllUsers() {
       key: 'action', header: '', align: 'right',
       cell: (r) => (
         <div className="flex items-center justify-end gap-1.5">
+          <Link
+            to={`/a/users/${encodeURIComponent(r.id)}`}
+            className="chip text-xxs"
+            title="查看该用户的采集 / 外联 / 漏斗详情"
+          >
+            <BarChart3 size={12} />详情
+          </Link>
           <button className="chip text-xxs" onClick={() => setEditing(r)}><Pencil size={12} />编辑</button>
         </div>
       ),

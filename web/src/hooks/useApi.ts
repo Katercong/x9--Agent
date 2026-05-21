@@ -70,6 +70,25 @@ export function useDepartmentDashboardSummary() {
   return useQuery({ queryKey: ['dashboard', 'department-summary'], queryFn: () => endpoints.departmentDashboardSummary() });
 }
 
+export function useAnalyticsMe(days = 30) {
+  return useQuery({ queryKey: ['analytics', 'me', days], queryFn: () => endpoints.analyticsMe(days) });
+}
+
+export function useAnalyticsDepartment(params?: { department_code?: string; days?: number }) {
+  return useQuery({
+    queryKey: ['analytics', 'department', params],
+    queryFn: () => endpoints.analyticsDepartment(params),
+  });
+}
+
+export function useAnalyticsCompany(days = 30) {
+  return useQuery({ queryKey: ['analytics', 'company', days], queryFn: () => endpoints.analyticsCompany(days) });
+}
+
+export function useAnalyticsCompanyGrowth(days = 90) {
+  return useQuery({ queryKey: ['analytics', 'company-growth', days], queryFn: () => endpoints.analyticsCompanyGrowth(days) });
+}
+
 export function useSystemMetrics() {
   return useQuery({
     queryKey: ['admin', 'system-metrics'],

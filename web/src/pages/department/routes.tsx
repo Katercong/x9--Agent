@@ -1,4 +1,4 @@
-import { Route } from 'react-router-dom';
+import { Outlet, Route } from 'react-router-dom';
 import Dashboard from './Dashboard';
 import Creators from './Creators';
 import Leads from './Leads';
@@ -10,9 +10,11 @@ import Settings from './Settings';
 import CollectShop from './CollectShop';
 import CollectLeads from './CollectLeads';
 import CollectImport from './CollectImport';
+import { RoleGuard } from '@/routes/RoleGuard';
 
+// All /d/* paths are gated to the "department" view role. See routes/RoleGuard.tsx.
 export const departmentRoutes = (
-  <>
+  <Route element={<RoleGuard required="department"><Outlet /></RoleGuard>}>
     <Route path="/d/dashboard" element={<Dashboard />} />
     <Route path="/d/collect-shop" element={<CollectShop />} />
     <Route path="/d/collect-leads" element={<CollectLeads />} />
@@ -24,5 +26,5 @@ export const departmentRoutes = (
     <Route path="/d/videos" element={<Videos />} />
     <Route path="/d/products" element={<Products />} />
     <Route path="/d/settings" element={<Settings />} />
-  </>
+  </Route>
 );

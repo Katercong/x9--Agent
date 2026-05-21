@@ -12,11 +12,23 @@ export interface DailyPoint {
   count: number;
 }
 
+export interface SourceContactStats {
+  total: number;
+  with_email: number;
+  with_links: number;
+  today_total: number;
+  today_with_email: number;
+  today_with_links: number;
+}
+
 export interface SourceBucket {
   total: number;
   today: number;
   daily: DailyPoint[];
   funnel?: { shop_list_seen: number; shop_profile_collected: number };
+  // Per-source contact-coverage counts from the `creators` table —
+  // accurate even when raw_json is missing. Use these for KPI cards.
+  contacts?: SourceContactStats;
 }
 
 export interface SourceStats {

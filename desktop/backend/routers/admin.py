@@ -20,7 +20,7 @@ from ..models.raw_observation import RawObservation
 from ..models.request_log import RequestLog
 from ..models.review_task import ReviewTask
 from ..models.system_log import SystemLog
-from ..services import gmail_service, remote_creators
+from ..services import gmail_service, remote_creators, user_stats_service
 from ..services.departments import (
     DEPARTMENTS,
     current_user,
@@ -519,6 +519,48 @@ def trends(request: Request, days: int = 14, _admin: dict = Depends(require_admi
             dept_key = dept or "cross_border"
             observations[day_key][dept_key] = observations[day_key].get(dept_key, 0) + 1
     return {"ok": True, "creator_collections": buckets, "raw_observations": observations}
+
+
+# ---------------------------------------------------------------------------
+# Per-user detail (for /a/users/:id page).
+#
+# Three small endpoints, each scoped to an admin actor:
+#   - GET /api/local/admin/users/{user_id}/detail
+#   - GET /api/local/admin/users/{user_id}/trend?days=30
+#   - GET /api/local/admin/users/{user_id}/funnel
+#
+# The aggregation logic lives in services/user_stats_service.py — these
+# routes are thin pass-throughs that just enforce auth.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/users/{user_id}/detail")
+def user_detail(user_id: str, _admin: dict = Depends(require_admin), db: Session = Depends(get_db)) -> dict:
+    result = user_stats_service.get_user_detail(db, user_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("detail", "user not found"))
+    return result
+
+
+@router.get("/users/{user_id}/trend")
+def user_trend(
+    user_id: str,
+    days: int = 30,
+    _admin: dict = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    result = user_stats_service.get_user_trend(db, user_id, days=days)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("detail", "user not found"))
+    return result
+
+
+@router.get("/users/{user_id}/funnel")
+def user_funnel(user_id: str, _admin: dict = Depends(require_admin), db: Session = Depends(get_db)) -> dict:
+    result = user_stats_service.get_user_funnel(db, user_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("detail", "user not found"))
+    return result
 
 
 @router.get("/extensions")

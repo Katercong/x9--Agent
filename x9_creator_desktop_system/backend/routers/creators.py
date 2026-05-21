@@ -28,6 +28,7 @@ from ..models.creator import Creator
 from ..models.outreach_email import OutreachEmail
 from ..services import remote_creators
 from ..services.departments import current_department_code, department_where, filter_rows_for_department, row_in_department
+from ..services.post_processing import create_outreach_event
 from ..services.remote_creators import RemoteRepoError
 from ..services.tag_engine import find_creators_by_tags
 from ..utils.contact_methods import CONTACT_CHANNEL_TERMS, contact_types_for, extract_contact_methods
@@ -895,6 +896,10 @@ def _request_user(request: Request) -> dict:
     return user
 
 
+def _actor_id(user: dict) -> str:
+    return str(user.get("id") or user.get("identity") or user.get("username") or "")
+
+
 @router.post("/{creator_id}/claim")
 def claim_creator(creator_id: str, body: AssignmentIn, request: Request, db: Session = Depends(get_db)) -> dict:
     user = _request_user(request)
@@ -931,6 +936,14 @@ def claim_creator(creator_id: str, body: AssignmentIn, request: Request, db: Ses
         fields["store_assigned"] = _clean_text(body.store_assigned)
     if body.current_status is not None:
         fields["current_status"] = _clean_text(body.current_status)
+    create_outreach_event(
+        db,
+        local,
+        event_type="assigned",
+        actor_user_id=_actor_id(user),
+        owner_bd=owner,
+        metadata={"source": "creator_claim"},
+    )
     return {"ok": True, "item": _patch_local_assignment(db, local, fields)}
 
 
@@ -987,6 +1000,15 @@ def update_assignment(creator_id: str, body: AssignmentIn, request: Request, db:
         raise HTTPException(status_code=404, detail="creator not found")
     if not row_in_department(local, department_code):
         raise HTTPException(status_code=404, detail="creator not found")
+    if fields.get("owner_bd"):
+        create_outreach_event(
+            db,
+            local,
+            event_type="assigned",
+            actor_user_id=_actor_id(user),
+            owner_bd=fields["owner_bd"],
+            metadata={"source": "admin_assignment"},
+        )
     return {"ok": True, "item": _patch_local_assignment(db, local, fields)}
 
 

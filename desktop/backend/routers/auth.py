@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..services import auth_service
+from ..utils import session_cache
 
 
 router = APIRouter(prefix="/api/local/auth", tags=["auth"])
@@ -125,7 +126,12 @@ def login(body: LoginIn, db: Session = Depends(get_db)) -> JSONResponse:
 
 @router.post("/logout")
 def logout(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
-    auth_service.revoke_session(db, request.cookies.get(auth_service.SESSION_COOKIE))
+    token = request.cookies.get(auth_service.SESSION_COOKIE)
+    auth_service.revoke_session(db, token)
+    # Drop the LRU cache entry so the next request to this token forces a
+    # fresh DB resolve (which will now return None) instead of serving the
+    # cached user for up to 60s after logout.
+    session_cache.invalidate(token)
     response = JSONResponse({"ok": True})
     response.delete_cookie(auth_service.SESSION_COOKIE, path="/")
     return response

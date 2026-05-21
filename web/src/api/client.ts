@@ -26,6 +26,22 @@ function qs(params?: Record<string, unknown>): string {
   return s ? '?' + s : '';
 }
 
+// Statuses worth retrying once. Network errors (TypeError on fetch) and
+// gateway-level failures from Cloudflare Tunnel / upstream restarts often
+// resolve themselves on a quick retry. 502/503/504 are idempotent-safe for
+// GET; we deliberately don't retry POST/PUT/DELETE to avoid duplicating writes.
+const TRANSIENT_STATUSES = new Set([502, 503, 504]);
+const RETRY_DELAYS_MS = [200, 800]; // 2 retries → 3 attempts total
+
+function isIdempotent(method: string | undefined): boolean {
+  const m = (method || 'GET').toUpperCase();
+  return m === 'GET' || m === 'HEAD';
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function apiFetch<T>(
   path: string,
   init?: RequestInit & { params?: Record<string, unknown> },
@@ -38,36 +54,65 @@ export async function apiFetch<T>(
   };
   if (API_KEY) headers['X-API-Key'] = API_KEY;
 
-  const res = await fetch(url, {
-    ...fetchInit,
-    credentials: fetchInit.credentials ?? 'same-origin',
-    headers,
-  });
+  const idempotent = isIdempotent(fetchInit.method);
+  let attempt = 0;
+  let lastError: unknown = null;
 
-  if (!res.ok) {
-    let body: unknown = null;
+  while (true) {
+    let res: Response;
     try {
-      body = await res.json();
-    } catch {
-      try {
-        body = await res.text();
-      } catch {
-        /* ignore */
+      res = await fetch(url, {
+        ...fetchInit,
+        credentials: fetchInit.credentials ?? 'same-origin',
+        headers,
+      });
+    } catch (networkErr) {
+      // Network-level failure (DNS, TLS, connection reset, offline).
+      lastError = networkErr;
+      if (idempotent && attempt < RETRY_DELAYS_MS.length) {
+        console.warn(`[apiFetch] network error on ${url}, retry ${attempt + 1}`, networkErr);
+        await sleep(RETRY_DELAYS_MS[attempt]);
+        attempt += 1;
+        continue;
       }
+      throw networkErr;
     }
-    const msg =
-      (body && typeof body === 'object' && 'detail' in body && (body as any).detail) ||
-      res.statusText ||
-      `HTTP ${res.status}`;
-    throw new ApiError(res.status, String(msg), body);
-  }
-  if (res.status === 204) return undefined as T;
 
-  const ct = res.headers.get('content-type') || '';
-  if (!ct.includes('application/json')) {
-    throw new ApiError(res.status, 'Expected JSON response, got ' + ct);
+    // Retry transient 5xx for safe methods only.
+    if (!res.ok && idempotent && TRANSIENT_STATUSES.has(res.status) && attempt < RETRY_DELAYS_MS.length) {
+      console.warn(`[apiFetch] ${res.status} on ${url}, retry ${attempt + 1}`);
+      await sleep(RETRY_DELAYS_MS[attempt]);
+      attempt += 1;
+      continue;
+    }
+
+    if (!res.ok) {
+      let body: unknown = null;
+      try {
+        body = await res.json();
+      } catch {
+        try {
+          body = await res.text();
+        } catch {
+          /* ignore */
+        }
+      }
+      const msg =
+        (body && typeof body === 'object' && 'detail' in body && (body as any).detail) ||
+        res.statusText ||
+        `HTTP ${res.status}`;
+      throw new ApiError(res.status, String(msg), body);
+    }
+    if (res.status === 204) return undefined as T;
+
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) {
+      throw new ApiError(res.status, 'Expected JSON response, got ' + ct);
+    }
+    return (await res.json()) as T;
   }
-  return (await res.json()) as T;
+  // Unreachable, but keeps TS happy.
+  void lastError;
 }
 
 export const api = {

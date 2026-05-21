@@ -1,0 +1,163 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# 同一个 PR 重复 push 时,取消上一次还在跑的
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "20"
+
+jobs:
+  # -------------------------------------------------------------
+  # Python lint(ruff)
+  # -------------------------------------------------------------
+  lint-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install ruff
+        run: pip install ruff==0.6.9
+
+      - name: Ruff check
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+  # -------------------------------------------------------------
+  # Frontend lint(web + web-user)
+  # -------------------------------------------------------------
+  lint-node:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        project: [web, web-user]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ matrix.project }}/package-lock.json
+
+      - name: Install
+        working-directory: ${{ matrix.project }}
+        run: npm ci
+
+      - name: Lint
+        working-directory: ${{ matrix.project }}
+        run: npm run lint --if-present
+
+      - name: Type check
+        working-directory: ${{ matrix.project }}
+        run: npx tsc --noEmit
+        continue-on-error: true   # 先放着,等 ts 错误清理完再变 required
+
+  # -------------------------------------------------------------
+  # Python tests with PostgreSQL service
+  # -------------------------------------------------------------
+  test-python:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: x9
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: x9db
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd "pg_isready -U x9"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      X9_PG_DSN: postgresql://x9:ci_only_password@127.0.0.1:15432/x9db
+      X9_PG_HOST: 127.0.0.1
+      X9_PG_PORT: 15432
+      X9_PG_DB: x9db
+      X9_PG_USER: x9
+      X9_PG_PASSWORD: ci_only_password
+      LOCAL_DB_URL: postgresql+psycopg://x9:ci_only_password@127.0.0.1:15432/x9db
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install deps
+        run: |
+          pip install -r core/requirements.txt
+          pip install -r desktop/requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run pytest
+        run: |
+          # 找到所有 tests/ 目录跑测试,先允许失败,等团队补足后再 required
+          pytest -q core/tests desktop/tests || echo "no tests yet"
+        continue-on-error: true
+
+  # -------------------------------------------------------------
+  # Frontend build sanity check
+  # -------------------------------------------------------------
+  build-frontend:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        project: [web, web-user]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ matrix.project }}/package-lock.json
+
+      - name: Install
+        working-directory: ${{ matrix.project }}
+        run: npm ci
+
+      - name: Build
+        working-directory: ${{ matrix.project }}
+        run: npm run build
+
+  # -------------------------------------------------------------
+  # 防止意外 commit 密钥(粗粒度,真正的检查靠 GitHub Secret Scanning)
+  # -------------------------------------------------------------
+  secret-sniff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for obvious secrets in changes
+        run: |
+          set +e
+          PATTERN='GOCSPX-|sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{40,}|BEGIN.*PRIVATE KEY'
+          if git diff origin/main...HEAD | grep -E "$PATTERN"; then
+            echo "::error::Possible secret detected in diff. Block PR until cleared."
+            exit 1
+          fi
+          echo "No obvious secrets in diff"

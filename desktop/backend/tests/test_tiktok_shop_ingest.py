@@ -16,6 +16,8 @@ from datetime import datetime, timedelta
 
 from x9_creator_desktop_system.backend.database import SessionLocal
 from x9_creator_desktop_system.backend.models.creator import Creator
+from x9_creator_desktop_system.backend.models.creator_outreach_event import CreatorOutreachEvent
+from x9_creator_desktop_system.backend.models.creator_source import CreatorSource
 from x9_creator_desktop_system.backend.models.raw_observation import RawObservation
 from x9_creator_desktop_system.backend.routers.collector import _observation_day
 
@@ -128,6 +130,72 @@ def test_shop_existing_contact_creator_accepts_no_contact_list_metrics(client):
         assert metrics["category_text"] == "Beauty"
         assert metrics["invite_status"] == "Invite"
         assert metrics["detail_captured"] is True
+    finally:
+        db.close()
+
+
+def test_shop_duplicate_merges_with_bd_creator_and_preserves_outreach(client):
+    marker = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    handle = f"bd_shop_merge_{marker}"
+    creator_id = f"bd_{marker}"
+    db = SessionLocal()
+    try:
+        creator = Creator(
+            id=creator_id,
+            platform="tiktok",
+            handle=handle,
+            display_name="BD Original",
+            department_code="cross_border",
+            source="bd",
+            owner_bd="BD Owner",
+            current_status="contacted",
+            email="old.bd@example.com",
+        )
+        db.add(creator)
+        db.add(CreatorSource(
+            id=f"src_bd_{marker}",
+            creator_id=creator_id,
+            department_code="cross_border",
+            source_type="bd",
+            platform="tiktok",
+            handle=handle,
+            first_seen_at=datetime.now(),
+            last_seen_at=datetime.now(),
+        ))
+        db.add(CreatorOutreachEvent(
+            id=f"oev_{marker}",
+            creator_id=creator_id,
+            department_code="cross_border",
+            event_type="sent",
+            actor_user_id="bd_user",
+            owner_bd="BD Owner",
+            event_at=datetime.now(),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    payload = _add_contact(_shop_detail_payload(handle), "new.shop@example.com")
+    payload["creator"]["display_name"] = "Shop Updated"
+    payload["creator"]["followers_raw"] = "98.7K"
+    r = client.post("/api/local/collector/observations", json=payload)
+    assert r.status_code == 200
+    assert r.json()["action"] == "updated"
+
+    db = SessionLocal()
+    try:
+        rows = db.query(Creator).filter_by(handle=handle).all()
+        assert len(rows) == 1
+        c = rows[0]
+        assert c.id == creator_id
+        assert c.display_name == "Shop Updated"
+        assert c.email == "new.shop@example.com"
+        assert c.followers_count == 98700
+        assert c.owner_bd == "BD Owner"
+        assert c.current_status == "contacted"
+        source_types = {s.source_type for s in db.query(CreatorSource).filter_by(creator_id=creator_id).all()}
+        assert {"bd", "tiktok_shop"} <= source_types
+        assert db.query(CreatorOutreachEvent).filter_by(creator_id=creator_id, event_type="sent").count() == 1
     finally:
         db.close()
 

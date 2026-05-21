@@ -44,6 +44,7 @@ from ..services import gmail_service
 from ..services import remote_creators
 from ..services.departments import current_department_code, department_where, row_in_department
 from ..services.remote_creators import RemoteRepoError
+from ..services.post_processing import create_outreach_event
 from ..services.outreach_service import (
     context_to_json,
     generate_with_ai,
@@ -609,8 +610,15 @@ def send_draft(draft_id: str, body: SendIn, request: Request, db: Session = Depe
 
     if body.update_creator_status:
         creator = db.get(Creator, draft.creator_id)
-        if creator is not None and creator.current_status in (None, "", "待建联"):
-            creator.current_status = "已建联"
+        if creator is not None:
+            create_outreach_event(
+                db,
+                creator,
+                event_type="sent",
+                actor_user_id=current_user.get("id") or current_user.get("identity"),
+                owner_bd=creator.owner_bd,
+                metadata={"outreach_email_id": draft.id, "gmail_message_id": draft.gmail_message_id},
+            )
         elif str(draft.creator_id).isdigit():
             try:
                 remote_creators.patch(draft.creator_id, current_status="已建联")

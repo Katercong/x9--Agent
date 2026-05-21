@@ -7,9 +7,13 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import text
+from sqlalchemy import select, text
 
+from ..database import SessionLocal
+from ..models.creator import Creator
+from ..models.creator_outreach_event import CreatorOutreachEvent
 from ..database.connection import engine
+from ..services.post_processing import OUTREACH_EVENT_ORDER, analytics_summary, migrate_staff_note_bd_stats
 from ..services.departments import (
     DEFAULT_DEPARTMENT,
     DEPARTMENTS,
@@ -366,7 +370,20 @@ def _merge_raw_observations(conn, facts: dict[tuple[str, str], dict[str, Any]], 
         return
     sql = "SELECT platform, source, raw_json, collected_at, created_at FROM raw_observations"
     sql += _scope_where(cols, department_code, None)
-    for row in conn.execute(text(sql), {"department_code": department_code, "department_id": None}).mappings().all():
+    # CRITICAL: raw_observations.raw_json is ~142 KB per row × thousands of rows
+    # = ~1 GB of pure DOM-capture text per dashboard hit. The previous
+    # `.mappings().all()` materialized every row + raw_json string into a
+    # Python list before iterating; under front-end polling this is what
+    # ballooned the desktop process to 17 GB and caused the gateway timeouts.
+    #
+    # Now we stream the cursor 200 rows at a time, parse each raw_json once,
+    # extract the fields we actually need (creator handle / status / owner /
+    # shop category), and let the row + payload go out of scope before
+    # fetching the next batch. Peak memory stays in single-digit MB.
+    result = conn.execution_options(yield_per=200).execute(
+        text(sql), {"department_code": department_code, "department_id": None}
+    )
+    for row in result.mappings():
         payload = _json_value(row.get("raw_json"), {}) or {}
         creator = payload.get("creator") if isinstance(payload, dict) else {}
         if not isinstance(creator, dict):
@@ -389,6 +406,12 @@ def _merge_raw_observations(conn, facts: dict[tuple[str, str], dict[str, Any]], 
             or (import_meta or {}).get("primary_product_category")
         )
         _merge_fact(facts, raw_row, source=f"raw:{row.get('source') or 'observation'}", category=category)
+        # Drop references so GC can reclaim before the next chunk arrives.
+        payload = None
+        creator = None
+        shop = None
+        list_item = None
+        import_meta = None
 
 
 def _merge_outreach(conn, facts: dict[tuple[str, str], dict[str, Any]], department_code: str | None, department_id: int | None) -> None:
@@ -706,7 +729,8 @@ def _build_summary(department_code: str | None) -> dict[str, Any]:
     raw_observations_total = source_row_counts.get("raw_observations", 0)
     raw_observations_today = source_today_counts.get("raw_observations", 0)
     raw_observations_recent = source_recent_counts.get("raw_observations", 0)
-    all_channel_total = processed_row_total + raw_observations_total + bd_history_creators
+    collection_channel_total = processed_row_total + raw_observations_total
+    business_with_bd_history_total = collection_channel_total + bd_history_creators
     all_channel_today = processed_today_total + raw_observations_today
     all_channel_recent = processed_recent_total + raw_observations_recent
     unique_creator_total = len(facts)
@@ -730,7 +754,7 @@ def _build_summary(department_code: str | None) -> dict[str, Any]:
     samples_total = live_samples + bd_history_samples
     videos_total = live_videos + bd_history_videos
     authorized_total = live_authorized
-    business_total = all_channel_total
+    business_total = collection_channel_total
     stage_total = unique_creator_total + bd_history_creators
 
     overview_counts = {
@@ -773,13 +797,16 @@ def _build_summary(department_code: str | None) -> dict[str, Any]:
         },
         "summary": {
             "total_creators": business_total,
+            "processed_creators": unique_creator_total,
             "today_collected": all_channel_today,
             "today_new_creators": all_channel_today,
             "recent_30d_creators": all_channel_recent,
             "unique_creators": unique_creator_total,
             "unique_today_creators": unique_today_creators,
             "business_unique_creators": unique_creator_total + bd_history_creators,
-            "all_channel_rows_total": all_channel_total,
+            "collection_channel_rows_total": collection_channel_total,
+            "business_with_bd_history_total": business_with_bd_history_total,
+            "all_channel_rows_total": collection_channel_total,
             "all_channel_rows_today": all_channel_today,
             "all_channel_rows_recent_30d": all_channel_recent,
             "processed_rows_total": processed_row_total,
@@ -837,6 +864,110 @@ def _build_summary(department_code: str | None) -> dict[str, Any]:
     }
 
 
+def _build_legacy_summary_from_analytics(db, department_code: str | None) -> dict[str, Any]:
+    migrate_staff_note_bd_stats(db)
+    analytics = analytics_summary(
+        db,
+        scope="company" if department_code is None else "department",
+        department_code=department_code,
+        days=30,
+    )
+    summary = analytics["summary"]
+    source_counts = analytics["source_counts"]
+    event_counts = {row["name"]: row["count"] for row in analytics["event_counts"]}
+    trend = analytics.get("trend") or []
+    creator_q = select(Creator)
+    event_q = select(CreatorOutreachEvent)
+    if department_code is not None:
+        creator_q = creator_q.where(Creator.department_code == department_code)
+        event_q = event_q.where(CreatorOutreachEvent.department_code == department_code)
+    creators = list(db.scalars(creator_q).all())
+    category_counts = Counter(str(c.primary_product_category or "未填写").strip() or "未填写" for c in creators)
+    owner_counts = Counter(str(c.owner_bd or "未分配").strip() or "未分配" for c in creators)
+
+    contacted = sum(event_counts.get(key, 0) for key in ("sent", "pending_reply", "replied", "sample_shipped", "sample_delivered", "partnered", "video_published"))
+    confirmed = event_counts.get("replied", 0) + event_counts.get("sample_shipped", 0) + event_counts.get("sample_delivered", 0) + event_counts.get("partnered", 0) + event_counts.get("video_published", 0)
+    samples = event_counts.get("sample_shipped", 0) + event_counts.get("sample_delivered", 0)
+    videos = event_counts.get("video_published", 0)
+    stage_counts = {
+        "prospect": max(summary["processed_creators"] - contacted - event_counts.get("dropped", 0), 0),
+        "contacted": contacted,
+        "pending_reply": event_counts.get("pending_reply", 0),
+        "confirmed": confirmed,
+        "sample_shipped": samples,
+        "sample_delivered": event_counts.get("sample_delivered", 0),
+        "video_published": videos,
+        "ad_authorized": event_counts.get("partnered", 0),
+        "ad_running": 0,
+        "dropped": event_counts.get("dropped", 0),
+    }
+    today_processed = trend[-1]["processed"] if trend else 0
+    recent_processed = sum(row.get("processed", 0) for row in trend)
+
+    return {
+        "ok": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "scope": {
+            "type": "company" if department_code is None else "department",
+            "department_code": department_code,
+            "name": "公司全局" if department_code is None else DEPARTMENTS.get(department_code, {}).get("name", department_code),
+        },
+        "summary": {
+            "total_creators": summary["processed_creators"],
+            "today_collected": today_processed,
+            "today_new_creators": today_processed,
+            "recent_30d_creators": recent_processed,
+            "unique_creators": summary["processed_creators"],
+            "processed_rows_total": summary["processed_creators"],
+            "processed_rows_today": today_processed,
+            "processed_rows_recent_30d": recent_processed,
+            "raw_observations_total": 0,
+            "raw_observations_today": 0,
+            "raw_observations_recent_30d": 0,
+            "contacted": contacted,
+            "review_pending": 0,
+            "progressed": confirmed,
+            "bd_history_contacted": summary["bd_history"]["contacted"],
+            "bd_history_confirmed": summary["bd_history"]["confirmed"],
+            "bd_history_samples": summary["bd_history"]["samples"],
+            "bd_history_videos": summary["bd_history"]["videos"],
+        },
+        "stage_counts": stage_counts,
+        "stage_rows": [
+            {"key": key, "name": STAGE_META[key]["label"], "count": stage_counts.get(key, 0)}
+            for key in STAGE_ORDER
+            if stage_counts.get(key, 0) > 0 or key in {"prospect", "contacted", "confirmed"}
+        ],
+        "overview": [
+            {"key": key, "name": STAGE_META[key]["label"], "count": stage_counts.get(key, 0)}
+            for key in STAGE_ORDER
+        ],
+        "trend_7d": [
+            {"date": row["date"], "count": row.get("processed", 0)}
+            for row in trend[-7:]
+        ],
+        "category_counts": [{"name": name, "value": value} for name, value in category_counts.most_common(8)],
+        "owner_counts": [{"name": name, "count": value} for name, value in owner_counts.most_common(8)],
+        "bd_rows": [],
+        "source_counts": source_counts,
+        "source_row_counts": source_counts,
+        "source_today_counts": [],
+        "source_recent_counts": [],
+        "staff_history": {
+            "rows": [],
+            "totals": summary["bd_history"],
+        },
+        "analytics": analytics,
+    }
+
+
 @router.get("/department-summary")
 def department_summary(request: Request, _user: dict = Depends(current_user)) -> dict[str, Any]:
-    return _build_summary(current_department_code(request))
+    department_code = current_department_code(request)
+    with SessionLocal() as db:
+        processed = _build_legacy_summary_from_analytics(db, department_code)
+        business = _build_summary(department_code)
+        business["source_counts"] = processed.get("source_counts", business.get("source_counts", []))
+        business["processed_source_counts"] = processed.get("source_counts", [])
+        business["analytics"] = processed.get("analytics")
+        return business

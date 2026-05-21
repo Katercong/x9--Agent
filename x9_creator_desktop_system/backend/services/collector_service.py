@@ -26,6 +26,7 @@ from ..utils.json_utils import dumps_json, loads_json_list, parse_followers_coun
 from ..utils.source_classify import classify_source
 from .departments import DEFAULT_DEPARTMENT, normalize_department_code
 from .observation_enrichment import build_profile_snapshot, enrich_observation_payload, extract_shop_detail_fields
+from .post_processing import canonical_source_type, find_existing_for_payload, record_creator_source
 
 SHOP_SECTION_NAMES = (
     "Sales",
@@ -90,7 +91,7 @@ def ingest_observation(
     collected_at = _parse_dt(payload.get("collected_at")) or datetime.now()
     raw_blob = dumps_json(payload)
     cid = creator_id_for(platform, handle) if handle else None
-    creator = _find_existing_creator(db, platform, handle, cid) if cid else None
+    creator = _find_existing_creator(db, platform, handle, cid, payload) if cid else find_existing_for_payload(db, platform, handle, payload)
     payload_has_contact = _has_ingestable_contact(creator_data)
     existing_has_contact = _creator_has_contact(creator) if creator is not None else False
     if handle and not payload_has_contact and _drops_no_contact_raw(platform):
@@ -159,6 +160,16 @@ def ingest_observation(
 
     _merge_fields(creator, creator_data, payload)
     creator.last_seen_at = datetime.now(timezone.utc)
+    record_creator_source(
+        db,
+        creator,
+        source_type=canonical_source_type(payload.get("platform"), payload.get("source") or "chrome_extension"),
+        raw_observation_id=observation_id,
+        worker_id=payload.get("worker_id"),
+        account_id=payload.get("account_id"),
+        observed_at=collected_at,
+        metadata={"lead_status": payload.get("lead_status"), "search_keyword": payload.get("search_keyword")},
+    )
 
     try:
         db.commit()
@@ -214,11 +225,33 @@ def reprocess_raw_observations(
         func.coalesce(RawObservation.collected_at, RawObservation.created_at).asc(),
         RawObservation.id.asc(),
     ).limit(limit)
-    rows = list(db.scalars(q).all())
+    # CRITICAL: see pipeline.py:_repeat_discovery_for_creators for full
+    # rationale. tldr: raw_json is ~142 KB/row, so a 20 000-row reprocess
+    # would peak at ~2.8 GB of DOM text in Python. We stream + parse +
+    # discard per row.
+    #
+    # Do NOT load ORM-mapped RawObservation objects here. The previous code
+    # assigned `obs.raw_json = None` to free memory, which silently marked
+    # every reprocessed row dirty; downstream db.commit() inside the
+    # reprocess loop then wrote NULL back to the database, destroying the
+    # raw JSON we just read. (Wiped 4000+ tiktok_shop captures on 2026-05-19/20.)
+    #
+    # Fetch only the columns we need as Core-level Rows and parse locally.
+    light_q = select(RawObservation.id, RawObservation.raw_json)
+    if platform and platform != "all":
+        light_q = light_q.where(RawObservation.platform == platform)
+    if department_code:
+        light_q = light_q.where(RawObservation.department_code == department_code)
+    light_q = light_q.order_by(
+        func.coalesce(RawObservation.collected_at, RawObservation.created_at).asc(),
+        RawObservation.id.asc(),
+    ).limit(limit)
+    stream = db.execute(light_q.execution_options(yield_per=200))
 
-    prepared: list[tuple[RawObservation, dict[str, Any], bool]] = []
+    prepared: list[tuple[str, dict[str, Any], bool]] = []
+    scanned = 0
     counts = {
-        "scanned": len(rows),
+        "scanned": 0,
         "processed": 0,
         "inserted": 0,
         "updated": 0,
@@ -230,8 +263,11 @@ def reprocess_raw_observations(
     }
     errors: list[dict[str, str]] = []
 
-    for obs in rows:
-        payload = _load_raw_payload(obs.raw_json)
+    for obs_id, raw_json in stream:
+        scanned += 1
+        payload = _load_raw_payload(raw_json)
+        # `raw_json` local var falls out of scope at loop end → GC reclaims
+        # the ~142 KB blob. No ORM dirty bit set.
         if not payload:
             counts["skipped"] += 1
             counts["skipped_missing_payload"] += 1
@@ -243,15 +279,16 @@ def reprocess_raw_observations(
             continue
         enriched = enrich_observation_payload(payload)
         has_contact = _has_ingestable_contact(enriched.get("creator") or {})
-        prepared.append((obs, payload, has_contact))
+        prepared.append((obs_id, payload, has_contact))
+    counts["scanned"] = scanned
 
     replay_order = [item for item in prepared if item[2]] + [item for item in prepared if not item[2]]
-    for obs, payload, _has_contact in replay_order:
+    for obs_id, payload, _has_contact in replay_order:
         try:
-            result = ingest_observation(db, payload, auto_process=auto_process, persist_raw=False, observation_id=obs.id)
+            result = ingest_observation(db, payload, auto_process=auto_process, persist_raw=False, observation_id=obs_id)
         except Exception as exc:
             counts["errors"] += 1
-            errors.append({"observation_id": obs.id, "error": str(exc)})
+            errors.append({"observation_id": obs_id, "error": str(exc)})
             continue
         action = result.get("action")
         if action in {"inserted", "updated"}:
@@ -292,7 +329,7 @@ def _normalize_handle_lookup(value: str | None) -> str:
     return str(value or "").strip().lstrip("@").lower()
 
 
-def _find_existing_creator(db: Session, platform: str, handle: str, creator_id: str) -> Creator | None:
+def _find_existing_creator(db: Session, platform: str, handle: str, creator_id: str, payload: dict[str, Any] | None = None) -> Creator | None:
     creator = db.get(Creator, creator_id)
     if creator is not None:
         return creator
@@ -301,12 +338,15 @@ def _find_existing_creator(db: Session, platform: str, handle: str, creator_id: 
     handle_key = _normalize_handle_lookup(handle)
     if not handle_key:
         return None
-    return db.scalar(
+    creator = db.scalar(
         select(Creator)
         .where(func.lower(func.trim(Creator.platform)) == platform_key)
         .where(func.lower(func.trim(Creator.handle)).in_([handle_key, f"@{handle_key}"]))
         .limit(1)
     )
+    if creator is not None:
+        return creator
+    return find_existing_for_payload(db, platform, handle, payload or {})
 
 
 def _merge_fields(creator: Creator, c: dict, payload: dict) -> None:
@@ -327,8 +367,9 @@ def _merge_fields(creator: Creator, c: dict, payload: dict) -> None:
     if isinstance(c.get("followers_count"), int):
         creator.followers_count = c["followers_count"]
 
+    source_type = canonical_source_type(payload.get("platform"), payload.get("source") or "chrome_extension")
     current_status = normalize_current_status(c.get("current_status") or payload.get("current_status"))
-    if current_status:
+    if current_status and (not creator.current_status or source_type == "bd"):
         creator.current_status = current_status
 
     store_assigned = (c.get("store_assigned") or payload.get("store_assigned") or "").strip()
@@ -336,7 +377,7 @@ def _merge_fields(creator: Creator, c: dict, payload: dict) -> None:
         creator.store_assigned = store_assigned
 
     owner_bd = (c.get("owner_bd") or c.get("bd_owner") or payload.get("owner_bd") or payload.get("bd_owner") or "").strip()
-    if owner_bd:
+    if owner_bd and (not creator.owner_bd or source_type == "bd"):
         creator.owner_bd = owner_bd
 
     email = (c.get("email") or "").strip().lower() or None

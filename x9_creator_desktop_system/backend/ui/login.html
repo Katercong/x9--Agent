@@ -421,8 +421,8 @@
         if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/admin/")) return null;
         if (user.role === "super_admin" && next.startsWith("/a/")) return next;
         if (user.role === "company_admin" && next.startsWith("/c/")) return next;
-        if (["department_admin", "department_user"].includes(user.role) && next.startsWith("/d/")) return next;
-        if (user.entry_scope !== "admin" && next.startsWith("/workspace/")) return next;
+        if (user.role === "department_admin" && next.startsWith("/d/")) return next;
+        if (user.entry_scope !== "admin" && (next.startsWith("/workspace/") || next.startsWith("/portal/"))) return next;
         return null;
       }
 

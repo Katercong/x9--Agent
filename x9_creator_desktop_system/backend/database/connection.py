@@ -14,7 +14,28 @@ class Base(DeclarativeBase):
 
 
 connect_args = {"check_same_thread": False} if settings.db_url.startswith("sqlite") else {}
-engine = create_engine(settings.db_url, connect_args=connect_args, future=True)
+
+# Connection-pool tuning for multi-user load.
+# SQLite uses the default static pool (single file, no benefit to sizing).
+# PostgreSQL: pool_size=20 baseline, max_overflow=40 burst → 60 hard cap.
+# pool_pre_ping avoids "MySQL/Postgres has gone away" after idle.
+# pool_recycle=1800 keeps connections under Cloudflare's idle timeout.
+_pool_kwargs: dict = {}
+if not settings.db_url.startswith("sqlite"):
+    _pool_kwargs = {
+        "pool_size": 20,
+        "max_overflow": 40,
+        "pool_pre_ping": True,
+        "pool_recycle": 1800,
+        "pool_timeout": 30,
+    }
+
+engine = create_engine(
+    settings.db_url,
+    connect_args=connect_args,
+    future=True,
+    **_pool_kwargs,
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 
@@ -179,6 +200,14 @@ def _ensure_schema_columns() -> None:
         _ensure_column(conn, "outreach_emails", "ai_tone", "VARCHAR(20)")
         _ensure_column(conn, "outreach_emails", "ai_language", "VARCHAR(10)")
         _ensure_index(conn, "ix_outreach_emails_parent_email_id", "outreach_emails", "parent_email_id")
+
+        _ensure_column(conn, "creator_recommendations", "source_type", "VARCHAR(40)")
+        _ensure_column(conn, "creator_recommendations", "rule_version", "VARCHAR(40)")
+        _ensure_column(conn, "creator_recommendations", "is_current", "INTEGER")
+        _set_nulls_typed(conn, "creator_recommendations", "is_current", 1)
+        _ensure_index(conn, "ix_creator_recommendations_source_type", "creator_recommendations", "source_type")
+        _ensure_index(conn, "ix_creator_recommendations_rule_version", "creator_recommendations", "rule_version")
+        _ensure_index(conn, "ix_creator_recommendations_is_current", "creator_recommendations", "is_current")
 
 
 def _columns(conn, table: str) -> set[str]:

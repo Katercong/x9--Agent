@@ -37,8 +37,18 @@ export default function CollectShop() {
       if (c) cat.set(c, (cat.get(c) ?? 0) + 1);
     }
     const categories = [...cat.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
-    return { creators: handles.size, withGmv, categories, topCategory: categories[0]?.[0] ?? '—' };
-  }, [items]);
+    // Prefer the contacts block from /source-stats (counts from `creators`
+    // table, accurate even when raw_json was wiped).
+    const fromContacts = shop?.contacts
+      ? { creators: shop.contacts.today_total, withGmv: shop.contacts.today_total }
+      : null;
+    return {
+      creators: fromContacts ? fromContacts.creators : handles.size,
+      withGmv: fromContacts ? fromContacts.withGmv : withGmv,
+      categories,
+      topCategory: categories[0]?.[0] ?? '—',
+    };
+  }, [items, shop]);
 
   const funnel = shop?.funnel ?? { shop_list_seen: 0, shop_profile_collected: 0 };
 
