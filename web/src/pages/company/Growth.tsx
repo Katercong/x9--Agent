@@ -1,159 +1,108 @@
-import { TrendingUp, Users, ShoppingBag, ShoppingCart } from 'lucide-react';
+import { TrendingUp, Users, ShoppingBag, ShoppingCart, UserCheck } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
-import { growthSeries } from '@/mock/company';
+import { AsyncState } from '@/components/states/States';
+import { useAnalyticsCompanyGrowth, useProducts, useDepartmentDashboardSummary } from '@/hooks/useApi';
 
 export default function Growth() {
+  const growth = useAnalyticsCompanyGrowth(90);
+  const products = useProducts({ limit: 200 });
+  const dashboard = useDepartmentDashboardSummary();
+
+  const loading = growth.isLoading || products.isLoading || dashboard.isLoading;
+  const error = growth.error || products.error || dashboard.error;
+
+  const analytics = growth.data;
+  const trendRows = analytics?.trend ?? [];
+  const summary = analytics?.summary;
+  const dashboardSummary = dashboard.data?.summary;
+
+  const totalProcessedInWindow = trendRows.reduce((sum, row) => sum + row.processed, 0);
+  const totalSentInWindow = trendRows.reduce((sum, row) => sum + row.sent, 0);
+  const totalPartneredInWindow = trendRows.reduce((sum, row) => sum + row.partnered, 0);
+  const conversionPct = totalSentInWindow > 0 ? ((totalPartneredInWindow / totalSentInWindow) * 100).toFixed(1) : '0';
+
   const linesOption = {
-    grid: { top: 40, right: 20, bottom: 40, left: 50, containLabel: true },
+    grid: { top: 40, right: 20, bottom: 30, left: 50, containLabel: true },
     legend: { top: 4, textStyle: { fontSize: 11 } },
     tooltip: { trigger: 'axis' },
     xAxis: {
-      type: 'category',
-      data: growthSeries.dates,
-      axisLine: { lineStyle: { color: '#e5e6eb' } },
-      axisTick: { show: false },
-      axisLabel: { color: '#86909c', fontSize: 10, interval: 9 },
+      type: 'category', data: trendRows.map((d) => d.date.slice(5)),
+      axisLine: { lineStyle: { color: '#e5e6eb' } }, axisTick: { show: false },
+      axisLabel: { color: '#86909c', fontSize: 10, interval: 5 },
     },
     yAxis: {
-      type: 'value',
-      splitLine: { lineStyle: { color: '#f0f1f5', type: 'dashed' } },
-      axisLine: { show: false },
-      axisTick: { show: false },
+      type: 'value', splitLine: { lineStyle: { color: '#f0f1f5', type: 'dashed' } },
+      axisLine: { show: false }, axisTick: { show: false },
       axisLabel: { color: '#86909c', fontSize: 11 },
     },
     series: [
       {
-        name: '达人数',
-        type: 'line',
-        data: growthSeries.creators,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: { color: '#3370ff', width: 2 },
-        itemStyle: { color: '#3370ff' },
-        areaStyle: {
-          color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [{ offset: 0, color: 'rgba(51,112,255,0.15)' }, { offset: 1, color: 'rgba(51,112,255,0)' }] },
-        },
+        name: '处理入库', type: 'line', data: trendRows.map((d) => d.processed),
+        smooth: true, symbol: 'none', lineStyle: { color: '#3370ff', width: 2 },
+        areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [{ offset: 0, color: 'rgba(51,112,255,0.15)' }, { offset: 1, color: 'rgba(51,112,255,0)' }] } },
       },
       {
-        name: 'SKU 数',
-        type: 'line',
-        data: growthSeries.skus,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: { color: '#f5a623', width: 2 },
-        itemStyle: { color: '#f5a623' },
+        name: '推荐', type: 'line', data: trendRows.map((d) => d.recommended),
+        smooth: true, symbol: 'none', lineStyle: { color: '#8b5cf6', width: 2 },
       },
       {
-        name: '订单数',
-        type: 'line',
-        data: growthSeries.orders,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: { color: '#16a34a', width: 2 },
-        itemStyle: { color: '#16a34a' },
+        name: '已发送', type: 'line', data: trendRows.map((d) => d.sent),
+        smooth: true, symbol: 'none', lineStyle: { color: '#f5a623', width: 2 },
+      },
+      {
+        name: '合作', type: 'line', data: trendRows.map((d) => d.partnered),
+        smooth: true, symbol: 'none', lineStyle: { color: '#16a34a', width: 2 },
       },
     ],
   };
 
-  const calendarOption = {
-    tooltip: { formatter: '{c}%' },
-    visualMap: {
-      min: -5,
-      max: 35,
-      orient: 'horizontal',
-      left: 'center',
-      bottom: 0,
-      inRange: { color: ['#fee2e2', '#fef3c7', '#d1fae5', '#16a34a'] },
-      text: ['增长高', '下降'],
-      textStyle: { fontSize: 11 },
-    },
-    calendar: {
-      top: 36,
-      left: 30,
-      right: 30,
-      cellSize: ['auto', 20],
-      range: '2026-04',
-      itemStyle: { borderColor: '#fff', borderWidth: 1 },
-      yearLabel: { show: false },
-      dayLabel: { color: '#86909c', fontSize: 10 },
-      monthLabel: { color: '#4e5969', fontSize: 12 },
-    },
-    series: [
-      {
-        type: 'heatmap',
-        coordinateSystem: 'calendar',
-        data: Array.from({ length: 30 }, (_, i) => {
-          const day = String(i + 1).padStart(2, '0');
-          return [`2026-04-${day}`, Math.floor(Math.random() * 40 - 5)];
-        }),
-      },
-    ],
-  };
-
-  const waterfallOption = {
-    grid: { top: 30, right: 20, bottom: 30, left: 50, containLabel: true },
+  const dailyOption = {
+    grid: { top: 30, right: 20, bottom: 30, left: 36, containLabel: true },
+    legend: { top: 0, textStyle: { fontSize: 11 } },
     tooltip: { trigger: 'axis' },
     xAxis: {
-      type: 'category',
-      data: ['月初', '新增', '复购', '流失', '迁移', '月底'],
-      axisLine: { lineStyle: { color: '#e5e6eb' } },
-      axisTick: { show: false },
+      type: 'category', data: trendRows.slice(-30).map((d) => d.date.slice(5)),
+      axisLine: { lineStyle: { color: '#e5e6eb' } }, axisTick: { show: false },
+      axisLabel: { color: '#86909c', fontSize: 10, interval: 2 },
     },
     yAxis: {
-      type: 'value',
-      splitLine: { lineStyle: { color: '#f0f1f5', type: 'dashed' } },
-      axisLine: { show: false },
-      axisTick: { show: false },
+      type: 'value', splitLine: { lineStyle: { color: '#f0f1f5', type: 'dashed' } },
+      axisLine: { show: false }, axisTick: { show: false },
     },
     series: [
       {
-        type: 'bar',
-        stack: 'wf',
-        itemStyle: { borderColor: 'transparent', color: 'rgba(0,0,0,0)' },
-        emphasis: { itemStyle: { borderColor: 'transparent', color: 'rgba(0,0,0,0)' } },
-        data: [0, 380, 460, 720, 600, 0],
+        name: '处理入库', type: 'bar', data: trendRows.slice(-30).map((d) => d.processed),
+        barWidth: 8, itemStyle: { color: '#3370ff', borderRadius: [2, 2, 0, 0] },
       },
       {
-        type: 'bar',
-        stack: 'wf',
-        data: [
-          { value: 380, itemStyle: { color: '#94a3b8' } },
-          { value: 80, itemStyle: { color: '#16a34a' } },
-          { value: 260, itemStyle: { color: '#16a34a' } },
-          { value: -120, itemStyle: { color: '#ef4444' } },
-          { value: -40, itemStyle: { color: '#ef4444' } },
-          { value: 560, itemStyle: { color: '#3370ff' } },
-        ],
-        barWidth: 30,
-        label: { show: true, position: 'top', fontSize: 11, color: '#4e5969' },
+        name: '已发送', type: 'bar', data: trendRows.slice(-30).map((d) => d.sent),
+        barWidth: 8, itemStyle: { color: '#16a34a', borderRadius: [2, 2, 0, 0] },
       },
     ],
   };
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiCard label="达人池 + 90d" value="486" delta={28} icon={Users} iconBg="#e0e7ff" iconColor="#4f46e5" />
-        <KpiCard label="SKU + 90d" value="44" delta={10} icon={ShoppingBag} iconBg="#cffafe" iconColor="#0891b2" />
-        <KpiCard label="订单 + 90d" value="8.4K" delta={26} icon={ShoppingCart} iconBg="#d1fae5" iconColor="#16a34a" />
-        <KpiCard label="月环比增长" value="+18%" delta={18} icon={TrendingUp} iconBg="#fed7aa" iconColor="#ea580c" />
-      </div>
+    <AsyncState loading={loading} error={error} height={400}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <KpiCard label="总发现量" value={dashboardSummary?.total_creators ?? summary?.total_creators ?? 0} icon={Users} iconBg="#e0e7ff" iconColor="#4f46e5" />
+          <KpiCard label="去重达人主档" value={summary?.processed_creators ?? dashboardSummary?.processed_creators ?? 0} icon={UserCheck} iconBg="#dcfce7" iconColor="#16a34a" />
+          <KpiCard label="SKU 总数" value={products.data?.total ?? 0} icon={ShoppingBag} iconBg="#cffafe" iconColor="#0891b2" />
+          <KpiCard label="90 日入库" value={totalProcessedInWindow} icon={ShoppingCart} iconBg="#d1fae5" iconColor="#16a34a" />
+          <KpiCard label="合作转化" value={`${conversionPct}%`} icon={TrendingUp} iconBg="#fed7aa" iconColor="#ea580c" />
+        </div>
 
-      <ChartCard title="近 90 天增长趋势 · 达人 / SKU / 订单">
-        <EChart option={linesOption} height={300} />
-      </ChartCard>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <ChartCard title="达人池流转 · 本月">
-          <EChart option={waterfallOption} height={280} />
+        <ChartCard title="公司成长 KPI · 入库 / 推荐 / 发送 / 合作">
+          <EChart option={linesOption} height={300} />
         </ChartCard>
-        <ChartCard title="日增长率日历 · 4 月">
-          <EChart option={calendarOption} height={280} />
+
+        <ChartCard title="近 30 天每日处理入库 vs 建联发送">
+          <EChart option={dailyOption} height={280} />
         </ChartCard>
       </div>
-    </div>
+    </AsyncState>
   );
 }

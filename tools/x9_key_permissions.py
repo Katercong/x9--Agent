@@ -27,7 +27,7 @@ import time
 from datetime import datetime
 from urllib import request, error
 
-BASE = "http://192.168.1.168:18765"
+BASE = "https://usx9.us"
 
 # Set X9_KEY_A / X9_KEY_B env vars to override — do NOT commit real keys.
 KEYS = {

@@ -27,7 +27,7 @@
 ```
 
 浏览器自动打开 `http://localhost:18765`(Core 的产品/达人/建联管理界面)。
-Desktop 的桌面应用界面在 `http://localhost:8000/ui/`。
+Desktop / Portal 统一访问 `https://usx9.us`。
 
 ## 目录结构
 

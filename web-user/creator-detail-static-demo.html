@@ -1,0 +1,1414 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>X9 达人详情静态演示</title>
+  <style>
+    :root {
+      --paper: #f3f7fb;
+      --surface: #ffffff;
+      --surface-2: #f8fbfe;
+      --ink: #111318;
+      --ink-2: #333946;
+      --muted: #687284;
+      --line: #dce4ee;
+      --line-2: #c9d4e1;
+      --cyan: #00a6c8;
+      --cyan-2: #0fd1e8;
+      --coral: #ff3b63;
+      --green: #1eaa6f;
+      --amber: #c88415;
+      --violet: #6a5cff;
+      --black: #0d1016;
+      --shadow: 0 18px 42px rgba(32, 45, 63, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body { min-height: 100%; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(135deg, rgba(0, 166, 200, 0.10), transparent 36%),
+        linear-gradient(225deg, rgba(255, 59, 99, 0.08), transparent 30%),
+        var(--paper);
+      font-family: "Aptos", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+      font-size: 13px;
+      letter-spacing: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button,
+    input,
+    textarea,
+    select { font: inherit; }
+
+    button { cursor: pointer; }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .page {
+      max-width: 1520px;
+      margin: 0 auto;
+      padding: 16px 20px 28px;
+    }
+
+    .command-bar {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      display: grid;
+      grid-template-columns: auto minmax(260px, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      margin: -16px -20px 18px;
+      padding: 12px 20px;
+      color: white;
+      background: rgba(13, 16, 22, 0.94);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(16px);
+    }
+
+    .nav-cluster,
+    .action-cluster,
+    .creator-title,
+    .signal-row,
+    .inline {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .back-btn {
+      width: 34px;
+      height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 7px;
+      color: #b8c2cf;
+      background: rgba(255,255,255,0.04);
+    }
+
+    .back-btn:hover,
+    .ghost-dark:hover {
+      color: white;
+      border-color: rgba(15, 209, 232, 0.5);
+      background: rgba(15, 209, 232, 0.12);
+    }
+
+    .creator-mark {
+      width: 38px;
+      height: 38px;
+      position: relative;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 11px;
+      color: white;
+      font-family: "Bahnschrift", "Aptos", sans-serif;
+      font-size: 18px;
+      font-weight: 800;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,0.18), transparent 35%),
+        linear-gradient(135deg, var(--coral), #751b35);
+      overflow: hidden;
+    }
+
+    .creator-mark::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(110deg, transparent 20%, rgba(255,255,255,0.26), transparent 72%);
+      transform: translateX(-110%);
+      animation: scan 5.4s ease-in-out infinite;
+    }
+
+    h1,
+    h2,
+    h3 {
+      font-family: "Bahnschrift", "Aptos", "Microsoft YaHei UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .subtitle {
+      margin-top: 4px;
+      color: #a8b4c2;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .toolbar-score {
+      display: grid;
+      place-items: center;
+      min-width: 58px;
+      height: 34px;
+      border-radius: 8px;
+      color: var(--black);
+      background: linear-gradient(135deg, #f9fcff, #94f1ff);
+      font-family: "Bahnschrift", sans-serif;
+      font-size: 18px;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .btn {
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      border: 1px solid var(--line-2);
+      border-radius: 8px;
+      padding: 0 12px;
+      color: var(--ink);
+      background: var(--surface);
+      transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease;
+      white-space: nowrap;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+      border-color: var(--cyan);
+      box-shadow: 0 10px 22px rgba(0, 166, 200, 0.12);
+    }
+
+    .btn-main {
+      border-color: #121b20;
+      color: white;
+      background: linear-gradient(135deg, #111318, #17242a);
+      font-weight: 800;
+      box-shadow: 0 10px 26px rgba(17, 19, 24, 0.18);
+    }
+
+    .btn-main::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 99px;
+      background: var(--cyan-2);
+      box-shadow: 0 0 0 4px rgba(15, 209, 232, 0.14);
+    }
+
+    .btn-main:hover {
+      border-color: var(--cyan-2);
+      background: linear-gradient(135deg, #0a1518, #063541);
+      box-shadow: 0 14px 32px rgba(0, 166, 200, 0.22);
+    }
+
+    .ghost-dark {
+      min-height: 34px;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 8px;
+      padding: 0 10px;
+      color: #c5cfdb;
+      background: rgba(255,255,255,0.04);
+    }
+
+    .icon {
+      width: 15px;
+      height: 15px;
+      flex: 0 0 auto;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 22px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      font-size: 11px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .chip-cyan { color: #02677a; background: rgba(0,166,200,0.12); border-color: rgba(0,166,200,0.22); }
+    .chip-coral { color: #be1f43; background: rgba(255,59,99,0.11); border-color: rgba(255,59,99,0.22); }
+    .chip-green { color: #0a7549; background: rgba(30,170,111,0.11); border-color: rgba(30,170,111,0.22); }
+    .chip-amber { color: #8a5c00; background: rgba(200,132,21,0.13); border-color: rgba(200,132,21,0.22); }
+    .chip-gray { color: var(--muted); background: #eef3f8; border-color: #dfe7f0; }
+    .chip-dark { color: #dce8f2; background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.12); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(260px, 0.78fr) minmax(460px, 1.42fr) minmax(300px, 0.86fr);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.86);
+      box-shadow: 0 1px 0 rgba(255,255,255,0.65) inset;
+      overflow: hidden;
+    }
+
+    .panel-head {
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(248,251,254,0.92);
+    }
+
+    .panel-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 800;
+      color: var(--ink);
+    }
+
+    .panel-body {
+      padding: 14px;
+    }
+
+    .profile-panel {
+      background:
+        linear-gradient(180deg, rgba(255,59,99,0.08), transparent 150px),
+        rgba(255,255,255,0.88);
+    }
+
+    .profile-plate {
+      display: grid;
+      grid-template-columns: 76px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .avatar {
+      width: 76px;
+      height: 76px;
+      border-radius: 20px;
+      display: grid;
+      place-items: center;
+      color: white;
+      font-family: "Bahnschrift", sans-serif;
+      font-size: 34px;
+      font-weight: 900;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,0.24), transparent 35%),
+        linear-gradient(145deg, #ff3b63, #2f1424 76%);
+      box-shadow: 0 12px 28px rgba(255,59,99,0.16);
+    }
+
+    .name {
+      font-size: 18px;
+      font-weight: 900;
+      line-height: 1.16;
+      word-break: break-word;
+    }
+
+    .handle {
+      margin-top: 4px;
+      color: var(--muted);
+      font-family: "Bahnschrift", "Aptos", sans-serif;
+      font-size: 13px;
+    }
+
+    .mini-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 9px;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 13px;
+    }
+
+    .stat {
+      min-height: 68px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface-2);
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .value {
+      margin-top: 6px;
+      color: var(--ink);
+      font-family: "Bahnschrift", "Aptos", sans-serif;
+      font-size: 19px;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere;
+    }
+
+    .facts {
+      display: grid;
+      gap: 0;
+      margin-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+
+    .fact {
+      display: grid;
+      grid-template-columns: 76px minmax(0, 1fr);
+      gap: 10px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .fact dt {
+      margin: 0;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .fact dd {
+      margin: 0;
+      line-height: 1.46;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .product-strip {
+      margin-top: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfdff;
+      overflow: hidden;
+    }
+
+    .product-strip img {
+      width: 100%;
+      height: 128px;
+      object-fit: cover;
+      display: block;
+      background: #eef3f8;
+    }
+
+    .product-caption {
+      padding: 10px;
+      display: grid;
+      gap: 4px;
+    }
+
+    .product-caption strong {
+      font-size: 13px;
+    }
+
+    .product-caption span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .decision {
+      position: relative;
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(100deg, rgba(0,166,200,0.13), transparent 48%),
+        linear-gradient(260deg, rgba(255,59,99,0.10), transparent 40%),
+        var(--surface);
+    }
+
+    .decision-grid {
+      display: grid;
+      grid-template-columns: 158px minmax(0, 1fr);
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .score-block {
+      min-height: 178px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      border-radius: 14px;
+      padding: 14px;
+      color: white;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,0.16), transparent 35%),
+        linear-gradient(145deg, #111318, #043543 70%);
+      box-shadow: 0 18px 36px rgba(0, 67, 80, 0.18);
+    }
+
+    .score-block small {
+      color: #b6ced7;
+      font-size: 11px;
+    }
+
+    .score-number {
+      font-family: "Bahnschrift", sans-serif;
+      font-size: 64px;
+      line-height: .9;
+      font-weight: 900;
+      letter-spacing: 0;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .verdict {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .verdict h2 {
+      margin: 0;
+      font-size: 23px;
+      line-height: 1.16;
+    }
+
+    .verdict p {
+      margin: 0;
+      color: var(--ink-2);
+      line-height: 1.7;
+    }
+
+    .bar-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .bar {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255,255,255,0.72);
+    }
+
+    .bar-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .bar-top strong {
+      color: var(--ink);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .track {
+      height: 7px;
+      margin-top: 8px;
+      border-radius: 99px;
+      background: #e8eef5;
+      overflow: hidden;
+    }
+
+    .fill {
+      height: 100%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, var(--cyan), var(--cyan-2));
+    }
+
+    .tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-2);
+      overflow-x: auto;
+    }
+
+    .tab {
+      min-width: 108px;
+      height: 42px;
+      padding: 0 12px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      color: var(--muted);
+      background: transparent;
+      font-weight: 700;
+    }
+
+    .tab.active {
+      color: var(--ink);
+      background: white;
+      box-shadow: inset 0 -3px 0 var(--cyan);
+    }
+
+    .tab-page {
+      display: none;
+      padding: 14px;
+      animation: rise .22s ease both;
+    }
+
+    .tab-page.active { display: block; }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .section {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .section-title {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-2);
+      font-weight: 800;
+    }
+
+    .section-body {
+      padding: 12px;
+      line-height: 1.62;
+      color: var(--ink-2);
+    }
+
+    .tag-cloud {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .evidence-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .evidence-list li {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+    }
+
+    .dot {
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+      border-radius: 99px;
+      color: white;
+      background: var(--black);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .history {
+      display: grid;
+      gap: 8px;
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 94px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface);
+    }
+
+    .event-time {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .event-title {
+      font-weight: 800;
+    }
+
+    .event-desc {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .action-panel {
+      position: sticky;
+      top: 76px;
+      border-color: #cfd8e4;
+      box-shadow: var(--shadow);
+    }
+
+    .outreach-focus {
+      padding: 14px;
+      color: white;
+      background:
+        linear-gradient(145deg, rgba(0,166,200,0.28), transparent 48%),
+        linear-gradient(315deg, rgba(255,59,99,0.22), transparent 44%),
+        #111318;
+    }
+
+    .outreach-focus h3 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.18;
+    }
+
+    .outreach-focus p {
+      margin: 8px 0 0;
+      color: #c7d5e2;
+      line-height: 1.58;
+    }
+
+    .primary-mail {
+      width: 100%;
+      min-height: 44px;
+      margin-top: 13px;
+      border: 1px solid var(--cyan-2);
+      border-radius: 10px;
+      color: var(--black);
+      background: linear-gradient(135deg, #eaffff, #55e6f7);
+      font-weight: 900;
+      box-shadow: 0 14px 32px rgba(0,166,200,0.20);
+    }
+
+    .primary-mail:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 18px 38px rgba(0,166,200,0.28);
+    }
+
+    .action-body {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .kv {
+      display: grid;
+      gap: 8px;
+    }
+
+    .kv-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+    }
+
+    .kv-row strong {
+      color: var(--ink);
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+
+    .mini-mail {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfdff;
+      overflow: hidden;
+    }
+
+    .mini-mail-head {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      font-weight: 800;
+      background: var(--surface-2);
+    }
+
+    .mini-mail-body {
+      padding: 12px;
+      color: var(--ink-2);
+      line-height: 1.58;
+    }
+
+    .secondary-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .secondary-actions .btn {
+      min-height: 38px;
+    }
+
+    .drawer {
+      position: fixed;
+      inset: 0;
+      z-index: 70;
+      display: none;
+    }
+
+    .drawer.open { display: block; }
+
+    .shade {
+      position: absolute;
+      inset: 0;
+      background: rgba(13,16,22,0.58);
+      backdrop-filter: blur(3px);
+      animation: fade .18s ease both;
+    }
+
+    .drawer-panel {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: min(620px, 100vw);
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      border-left: 1px solid var(--line);
+      box-shadow: -24px 0 58px rgba(13,16,22,0.22);
+      animation: slide .25s cubic-bezier(.2,.9,.2,1) both;
+    }
+
+    .drawer-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: start;
+      padding: 16px;
+      color: white;
+      background:
+        linear-gradient(115deg, rgba(0,166,200,0.28), transparent 45%),
+        linear-gradient(290deg, rgba(255,59,99,0.26), transparent 40%),
+        var(--black);
+    }
+
+    .drawer-head h2 {
+      margin: 0;
+      font-size: 19px;
+    }
+
+    .drawer-head p {
+      margin: 5px 0 0;
+      color: #becbd8;
+      line-height: 1.5;
+    }
+
+    .close {
+      width: 34px;
+      height: 34px;
+      border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 8px;
+      color: #d6e0eb;
+      background: rgba(255,255,255,0.06);
+    }
+
+    .drawer-body {
+      flex: 1;
+      overflow: auto;
+      display: grid;
+      gap: 12px;
+      padding: 14px 16px;
+      background: var(--paper);
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .field-control {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field-control label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .field-control input,
+    .field-control select,
+    .field-control textarea {
+      width: 100%;
+      border: 1px solid var(--line-2);
+      border-radius: 10px;
+      padding: 10px;
+      color: var(--ink);
+      background: white;
+      outline: 0;
+    }
+
+    .field-control input:focus,
+    .field-control select:focus,
+    .field-control textarea:focus {
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 3px rgba(0,166,200,0.12);
+    }
+
+    textarea {
+      min-height: 282px;
+      resize: vertical;
+      line-height: 1.6;
+    }
+
+    .drawer-foot {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 12px 16px;
+      border-top: 1px solid var(--line);
+      background: white;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 20px;
+      z-index: 90;
+      display: none;
+      transform: translateX(-50%);
+      padding: 10px 14px;
+      border-radius: 999px;
+      color: white;
+      background: var(--black);
+      box-shadow: var(--shadow);
+    }
+
+    .toast.show {
+      display: block;
+      animation: rise .2s ease both;
+    }
+
+    @keyframes scan {
+      0%, 62% { transform: translateX(-110%); }
+      82%, 100% { transform: translateX(120%); }
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes fade {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    @keyframes slide {
+      from { opacity: 0; transform: translateX(26px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+
+    @media (max-width: 1180px) {
+      .grid {
+        grid-template-columns: minmax(250px, .78fr) minmax(430px, 1.22fr);
+      }
+
+      .action-panel {
+        position: static;
+        grid-column: 1 / -1;
+      }
+
+      .action-panel .action-body {
+        grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr);
+      }
+    }
+
+    @media (max-width: 860px) {
+      .page {
+        padding: 12px 12px 24px;
+      }
+
+      .command-bar {
+        grid-template-columns: 1fr;
+        margin: -12px -12px 14px;
+        padding: 10px 12px;
+      }
+
+      .action-cluster {
+        flex-wrap: wrap;
+      }
+
+      .action-cluster .btn,
+      .action-cluster .ghost-dark {
+        flex: 1;
+      }
+
+      .grid,
+      .decision-grid,
+      .two-col,
+      .form-grid,
+      .action-panel .action-body {
+        grid-template-columns: 1fr;
+      }
+
+      .bar-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .event {
+        grid-template-columns: 1fr;
+      }
+
+      .event-desc {
+        white-space: normal;
+      }
+    }
+
+    @media (max-width: 520px) {
+      .stat-grid,
+      .bar-grid,
+      .secondary-actions {
+        grid-template-columns: 1fr;
+      }
+
+      .profile-plate {
+        grid-template-columns: 1fr;
+      }
+
+      .avatar {
+        width: 64px;
+        height: 64px;
+        border-radius: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="command-bar">
+      <div class="nav-cluster">
+        <button class="back-btn" type="button" aria-label="返回推荐列表">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <div class="creator-mark">C</div>
+        <div style="min-width:0;">
+          <div class="creator-title">
+            <h1>@cicigiginana</h1>
+            <span class="chip chip-dark">TikTok Shop</span>
+            <span class="chip chip-dark">P1</span>
+          </div>
+          <div class="subtitle">Cici Nana · 女性护理 / 家居生活方式 · 详情已采集</div>
+        </div>
+      </div>
+
+      <div class="signal-row">
+        <div class="toolbar-score">92</div>
+        <span class="chip chip-dark">推荐状态 recommended_after_review</span>
+        <span class="chip chip-dark">邮箱可用</span>
+        <span class="chip chip-dark">负责人 bd_amy@x9.us</span>
+      </div>
+
+      <div class="action-cluster">
+        <button class="btn btn-main js-open-mail" type="button">邮件建联</button>
+        <button class="ghost-dark js-toast" type="button">认领</button>
+        <button class="ghost-dark" type="button">打开主页</button>
+      </div>
+    </header>
+
+    <main class="grid">
+      <aside class="panel profile-panel">
+        <div class="panel-body">
+          <div class="profile-plate">
+            <div class="avatar">C</div>
+            <div>
+              <div class="name">Cici Nana</div>
+              <div class="handle">@cicigiginana</div>
+              <div class="mini-tags">
+                <span class="chip chip-green">可联系</span>
+                <span class="chip chip-coral">女性护理</span>
+                <span class="chip chip-gray">美国</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="stat-grid">
+            <div class="stat">
+              <div class="label">粉丝数</div>
+              <div class="value">128.6K</div>
+            </div>
+            <div class="stat">
+              <div class="label">近似 GMV</div>
+              <div class="value">$42.8K</div>
+            </div>
+            <div class="stat">
+              <div class="label">GPM</div>
+              <div class="value">$7.41</div>
+            </div>
+            <div class="stat">
+              <div class="label">邀约状态</div>
+              <div class="value" style="font-size:16px;">未邀约</div>
+            </div>
+          </div>
+
+          <dl class="facts">
+            <div class="fact">
+              <dt>邮箱</dt>
+              <dd>collab@cicinana.co</dd>
+            </div>
+            <div class="fact">
+              <dt>联系方式</dt>
+              <dd>
+                <span class="chip chip-cyan">Email</span>
+                <span class="chip chip-gray">Instagram</span>
+                <span class="chip chip-gray">Linktree</span>
+              </dd>
+            </div>
+            <div class="fact">
+              <dt>商品</dt>
+              <dd>Ultra Thin Pads / Period Underwear</dd>
+            </div>
+            <div class="fact">
+              <dt>合作</dt>
+              <dd>Affiliate test + sample seeding</dd>
+            </div>
+            <div class="fact">
+              <dt>采集</dt>
+              <dd>列表与详情均已采 · 18 分钟前更新</dd>
+            </div>
+          </dl>
+
+          <div class="product-strip">
+            <img src="../core/assets/reference-images/ultra_thin_pads.png" alt="Ultra thin pads product reference" />
+            <div class="product-caption">
+              <strong>推荐主推款：Ultra Thin Pads</strong>
+              <span>首轮建议样品包 + 联盟佣金测试，不直接承诺固定坑位费。</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div class="decision">
+          <div class="decision-grid">
+            <div class="score-block">
+              <small>RECOMMENDATION SCORE</small>
+              <div class="score-number">92</div>
+              <span class="chip chip-dark">强推荐 · P1</span>
+            </div>
+            <div class="verdict">
+              <div class="inline">
+                <span class="chip chip-green">建议今日建联</span>
+                <span class="chip chip-cyan">证据强度 strong</span>
+              </div>
+              <h2>适合做低成本首轮合作测试的中腰部女性护理达人。</h2>
+              <p>
+                内容方向、受众语境、商品关键词与女性护理产品高度重合；邮箱可用且商业入口清晰。建议用英文邮件发起样品包邀约，并把联盟佣金作为轻量测试条件。
+              </p>
+            </div>
+          </div>
+
+          <div class="bar-grid">
+            <div class="bar">
+              <div class="bar-top"><span>商品匹配</span><strong>96</strong></div>
+              <div class="track"><div class="fill" style="width:96%"></div></div>
+            </div>
+            <div class="bar">
+              <div class="bar-top"><span>商业价值</span><strong>88</strong></div>
+              <div class="track"><div class="fill" style="width:88%;background:linear-gradient(90deg,var(--green),#71d99d)"></div></div>
+            </div>
+            <div class="bar">
+              <div class="bar-top"><span>可联系性</span><strong>94</strong></div>
+              <div class="track"><div class="fill" style="width:94%"></div></div>
+            </div>
+            <div class="bar">
+              <div class="bar-top"><span>数据完整度</span><strong>82</strong></div>
+              <div class="track"><div class="fill" style="width:82%;background:linear-gradient(90deg,var(--amber),#f5c263)"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tabs" role="tablist">
+          <button class="tab active" type="button" data-tab="overview">推荐判断</button>
+          <button class="tab" type="button" data-tab="evidence">证据来源</button>
+          <button class="tab" type="button" data-tab="risk">风险复核</button>
+          <button class="tab" type="button" data-tab="history">外联历史</button>
+        </div>
+
+        <section class="tab-page active" data-page="overview">
+          <div class="two-col">
+            <div class="section">
+              <div class="section-title">推荐理由</div>
+              <div class="section-body">
+                该达人长期发布女性护理、妈妈生活方式、居家清洁内容，评论互动稳定。近期 TikTok Shop 内容中出现护理垫、经期内裤、薄款卫生巾相关关键词，适合以样品体验切入。
+              </div>
+            </div>
+            <div class="section">
+              <div class="section-title">下一步动作</div>
+              <div class="section-body">
+                今日发送首封合作邮件，主推 Ultra Thin Pads 样品包。72 小时未回复时，切换 Instagram 私信补触达。
+              </div>
+            </div>
+          </div>
+
+          <div class="section" style="margin-top:12px;">
+            <div class="section-title">标签</div>
+            <div class="section-body">
+              <div class="tag-cloud">
+                <span class="chip chip-green">女性护理强相关</span>
+                <span class="chip chip-green">邮箱可用</span>
+                <span class="chip chip-cyan">中腰部达人</span>
+                <span class="chip chip-cyan">Shop 内容稳定</span>
+                <span class="chip chip-gray">美国受众</span>
+                <span class="chip chip-gray">样品合作优先</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-page" data-page="evidence">
+          <div class="two-col">
+            <div class="section">
+              <div class="section-title">命中关键词</div>
+              <div class="section-body">
+                <div class="tag-cloud">
+                  <span class="chip chip-cyan">period care</span>
+                  <span class="chip chip-cyan">postpartum</span>
+                  <span class="chip chip-cyan">ultra thin</span>
+                  <span class="chip chip-cyan">mom routine</span>
+                  <span class="chip chip-cyan">hygiene</span>
+                </div>
+              </div>
+            </div>
+            <div class="section">
+              <div class="section-title">Profile Snapshot</div>
+              <div class="section-body">
+                Bio 包含合作邮箱与 Linktree，最近 30 天出现 4 条生活方式带货内容，受众评论集中在美国女性用户。
+              </div>
+            </div>
+          </div>
+          <div class="section" style="margin-top:12px;">
+            <div class="section-title">证据链</div>
+            <div class="section-body">
+              <ul class="evidence-list">
+                <li><span class="dot">1</span><span>TikTok Shop 列表指标：粉丝、GMV、GPM、类目文本。</span></li>
+                <li><span class="dot">2</span><span>详情页可见文本：护理相关商品词与内容方向。</span></li>
+                <li><span class="dot">3</span><span>主页 Bio 与外链识别：邮箱、Instagram、Linktree。</span></li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-page" data-page="risk">
+          <div class="two-col">
+            <div class="section">
+              <div class="section-title">风险摘要</div>
+              <div class="section-body">
+                GMV 可能受单条爆款影响，内容垂类包含部分居家清洁，不建议第一轮承诺固定坑位费。
+              </div>
+            </div>
+            <div class="section">
+              <div class="section-title">风险标签</div>
+              <div class="section-body">
+                <div class="tag-cloud">
+                  <span class="chip chip-amber">GMV 波动</span>
+                  <span class="chip chip-amber">内容垂类混合</span>
+                  <span class="chip chip-gray">需人工复核价格</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-page" data-page="history">
+          <div class="history">
+            <div class="event">
+              <div class="event-time">今天 15:42</div>
+              <div>
+                <div class="event-title">生成建联草稿</div>
+                <div class="event-desc">模板：女性护理样品邀约 · 英文 · 180 词</div>
+              </div>
+              <span class="chip chip-cyan">草稿</span>
+            </div>
+            <div class="event">
+              <div class="event-time">今天 14:58</div>
+              <div>
+                <div class="event-title">推荐入池</div>
+                <div class="event-desc">推荐分 92，状态 recommended_after_review</div>
+              </div>
+              <span class="chip chip-green">推荐</span>
+            </div>
+            <div class="event">
+              <div class="event-time">今天 14:16</div>
+              <div>
+                <div class="event-title">采集详情页</div>
+                <div class="event-desc">TikTok Shop profile collected，补充 GMV / GPM / 类目</div>
+              </div>
+              <span class="chip chip-gray">采集</span>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <aside class="panel action-panel">
+        <div class="outreach-focus">
+          <div class="inline">
+            <span class="chip chip-dark">ACTION</span>
+            <span class="chip chip-dark">待建联</span>
+          </div>
+          <h3 style="margin-top:12px;">把判断转成邮件动作。</h3>
+          <p>邮件入口固定保留，打开后带入达人邮箱、推荐商品、合作类型和推荐理由。</p>
+          <button class="primary-mail js-open-mail" type="button">邮件建联</button>
+        </div>
+
+        <div class="action-body">
+          <div class="kv">
+            <div class="kv-row"><span>负责人</span><strong>bd_amy@x9.us</strong></div>
+            <div class="kv-row"><span>店铺归属</span><strong>Hygiene US</strong></div>
+            <div class="kv-row"><span>最近外联</span><strong>暂无发送</strong></div>
+            <div class="kv-row"><span>当前状态</span><strong>待建联</strong></div>
+            <div class="kv-row"><span>证据强度</span><strong>strong</strong></div>
+          </div>
+
+          <div class="mini-mail">
+            <div class="mini-mail-head">邮件预览</div>
+            <div class="mini-mail-body">
+              Hi Cici, I came across your TikTok Shop content around period care and everyday hygiene routines...
+            </div>
+          </div>
+
+          <div class="secondary-actions">
+            <button class="btn js-toast" type="button">保存草稿</button>
+            <button class="btn js-toast" type="button">标记风险</button>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <div class="drawer" id="mailDrawer" aria-hidden="true">
+    <div class="shade js-close-mail"></div>
+    <aside class="drawer-panel" aria-label="邮件建联面板">
+      <div class="drawer-head">
+        <div>
+          <h2>邮件建联 · @cicigiginana</h2>
+          <p>已带入邮箱、推荐商品、合作类型和推荐理由，适合直接编辑后发送。</p>
+        </div>
+        <button class="close js-close-mail" type="button" aria-label="关闭">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+
+      <div class="drawer-body">
+        <div class="form-grid">
+          <div class="field-control">
+            <label>收件人</label>
+            <input value="collab@cicinana.co" />
+          </div>
+          <div class="field-control">
+            <label>模板</label>
+            <select>
+              <option>女性护理样品邀约 · 英文</option>
+              <option>联盟合作邀约 · 英文</option>
+              <option>Instagram 补触达 · 英文</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-control">
+          <label>主题</label>
+          <input value="Collaboration idea for your period care content" />
+        </div>
+        <div class="field-control">
+          <label>正文</label>
+          <textarea>Hi Cici,
+
+I came across your TikTok Shop content around period care and everyday hygiene routines. Your audience feels closely aligned with our ultra-thin pads and period underwear line, especially for women looking for comfortable daily protection.
+
+We would love to send you a sample kit and discuss a simple affiliate test. The first step can be lightweight: product try-on, honest feedback, and a short content plan if you feel the products fit your audience.
+
+Would you be open to reviewing the sample details this week?
+
+Best,
+Amy
+X9 Creator Partnerships</textarea>
+        </div>
+        <div class="tag-cloud">
+          <span class="chip chip-green">邮箱已识别</span>
+          <span class="chip chip-cyan">推荐商品已带入</span>
+          <span class="chip chip-cyan">合作类型已带入</span>
+          <span class="chip chip-gray">可保存草稿</span>
+        </div>
+      </div>
+
+      <div class="drawer-foot">
+        <button class="btn js-toast" type="button">改写语气</button>
+        <button class="btn js-toast" type="button">保存草稿</button>
+        <button class="btn btn-main js-toast" type="button">发送邮件</button>
+      </div>
+    </aside>
+  </div>
+
+  <div class="toast" id="toast">演示动作已触发</div>
+
+  <script>
+    const tabs = document.querySelectorAll('.tab');
+    const pages = document.querySelectorAll('.tab-page');
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const key = tab.dataset.tab;
+        tabs.forEach((item) => item.classList.toggle('active', item === tab));
+        pages.forEach((page) => page.classList.toggle('active', page.dataset.page === key));
+      });
+    });
+
+    const drawer = document.getElementById('mailDrawer');
+    const openMail = () => {
+      drawer.classList.add('open');
+      drawer.setAttribute('aria-hidden', 'false');
+      document.body.style.overflow = 'hidden';
+    };
+    const closeMail = () => {
+      drawer.classList.remove('open');
+      drawer.setAttribute('aria-hidden', 'true');
+      document.body.style.overflow = '';
+    };
+    document.querySelectorAll('.js-open-mail').forEach((button) => button.addEventListener('click', openMail));
+    document.querySelectorAll('.js-close-mail').forEach((button) => button.addEventListener('click', closeMail));
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') closeMail();
+    });
+
+    const toast = document.getElementById('toast');
+    let toastTimer;
+    document.querySelectorAll('.js-toast').forEach((button) => {
+      button.addEventListener('click', () => {
+        toast.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove('show'), 1400);
+      });
+    });
+  </script>
+</body>
+</html>

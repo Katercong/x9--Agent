@@ -15,9 +15,8 @@ if errorlevel 1 (
 
 echo.
 echo [start_all] Done. X9 services are running in the background.
-echo   Workspace : http://localhost:8000/workspace/cross-border/
-echo   Desktop   : http://localhost:8000
-echo   Public    : https://usx9.us
+echo   X9        : https://usx9.us
+echo   Workspace : https://usx9.us/workspace/cross-border/
 echo.
 echo Closing this window will NOT stop the servers. To stop them:
 echo   stop_desktop.bat                (kills :8000)

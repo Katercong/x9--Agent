@@ -403,10 +403,28 @@
         setStatus("");
       }
 
-      function redirectFor(user) {
-        if (user.entry_scope === "admin" && ["department_admin", "company_admin", "super_admin"].includes(user.role)) return "/admin/";
+      function homeFor(user) {
+        if (user.entry_scope === "admin") {
+          if (user.role === "super_admin") return "/a/monitor";
+          if (user.role === "company_admin") return "/c/overview";
+          if (user.role === "department_admin") return "/d/dashboard";
+        }
         if (user.department_slug) return `/workspace/${user.department_slug}/`;
         return "/workspace/cross-border/";
+      }
+
+      function safeNextFor(user) {
+        const next = new URLSearchParams(window.location.search).get("next");
+        if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/admin/")) return null;
+        if (user.role === "super_admin" && next.startsWith("/a/")) return next;
+        if (user.role === "company_admin" && next.startsWith("/c/")) return next;
+        if (user.role === "department_admin" && next.startsWith("/d/")) return next;
+        if (user.entry_scope !== "admin" && (next.startsWith("/workspace/") || next.startsWith("/portal/"))) return next;
+        return null;
+      }
+
+      function redirectFor(user) {
+        return safeNextFor(user) || homeFor(user);
       }
 
       async function postJson(path, body) {

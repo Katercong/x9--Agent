@@ -37,7 +37,7 @@ DB_PATH = ROOT / "database.db"
 API_KEY_FILE = ROOT / ".api_key"
 
 # 服务器端口（与 run.bat 的 PORT 保持一致）
-API_BASE = os.environ.get("X9_API_BASE", "http://127.0.0.1:18765")
+API_BASE = os.environ.get("X9_API_BASE", "https://usx9.us")
 
 
 def get_api_key() -> str:

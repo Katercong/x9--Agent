@@ -1,0 +1,68 @@
+# Dependabot — 自动监控依赖更新和安全漏洞
+#
+# 启用方法:把这个文件复制到 .github/dependabot.yml,push 即可生效。
+# 文档:https://docs.github.com/en/code-security/dependabot
+
+version: 2
+updates:
+  # ----- Python 依赖 -----
+  - package-ecosystem: "pip"
+    directory: "/core"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "pip"
+    directory: "/desktop"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "pip"
+    directory: "/scrapers"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "python"]
+
+  # ----- Node 依赖 -----
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "node"]
+    commit-message:
+      prefix: "chore(deps)"
+    # 主版本升级单独 PR,小心
+    groups:
+      minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/web-user"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "node"]
+    groups:
+      minor-patch:
+        update-types: ["minor", "patch"]
+
+  # ----- GitHub Actions -----
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    labels: ["dependencies", "ci"]

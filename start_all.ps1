@@ -7,11 +7,12 @@
 #
 # Optional:
 #   .\start_all.ps1 -NoBrowser
-#   .\start_all.ps1 -StartCore   # legacy local API, normally off
+#   .\start_all.ps1 -SkipCore    # only for local desktop UI work without /api/v1
 
 param(
     [switch]$NoBrowser,
-    [switch]$StartCore
+    [switch]$StartCore,
+    [switch]$SkipCore
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,7 +22,8 @@ $desktopPort = 8000
 $workspaceSlug = if ($env:X9_WORKSPACE_SLUG) { $env:X9_WORKSPACE_SLUG } else { "cross-border" }
 $coreUrl = "http://localhost:$corePort"
 $desktopUrl = "http://localhost:$desktopPort"
-$workspaceUrl = "$desktopUrl/workspace/$workspaceSlug/"
+$publicBaseUrl = if ($env:PUBLIC_BASE_URL) { $env:PUBLIC_BASE_URL.TrimEnd("/") } else { "https://usx9.us" }
+$workspaceUrl = "$publicBaseUrl/workspace/$workspaceSlug/"
 
 function Test-PortListening([int]$port) {
     return [bool](Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
@@ -117,9 +119,9 @@ if (Test-PortListening 15432) {
 }
 if (-not (Wait-Port 15432 30)) { throw "postgres port 15432 not listening" }
 
-# ----- 2. Legacy core backend (:18765) -----
-if (-not $StartCore) {
-    Write-Host "[start_all] skipping legacy core (:18765)"
+# ----- 2. Core backend (:18765), required by /api/v1 through usx9.us -----
+if ($SkipCore) {
+    Write-Host "[start_all] skipping core (:18765)"
 } elseif (Test-PortListening $corePort) {
     Write-Host "[start_all] core is already running on :$corePort"
 } else {
@@ -143,11 +145,11 @@ if ($dtRunning) {
 # Wait until both ports are ready
 Write-Host "[start_all] waiting for ports to be ready..."
 $desktopReady = Wait-Port $desktopPort 60
-$coreReady = (-not $StartCore) -or (Wait-Port $corePort 60)
+$coreReady = $SkipCore -or (Wait-Port $corePort 60)
 
 if ($desktopReady -and $coreReady) {
     Write-Host ""
-    if ($StartCore) { Write-Host "OK Core API : $coreUrl" }
+    if (-not $SkipCore) { Write-Host "OK Core API : $coreUrl" }
     Write-Host "OK Desktop : $workspaceUrl"
     Write-Host ""
     if (-not $NoBrowser) {

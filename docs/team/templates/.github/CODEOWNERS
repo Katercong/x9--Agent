@@ -1,0 +1,44 @@
+# X9_AI_system CODEOWNERS
+#
+# 作用:PR 改了哪些文件,会自动指派对应的 owner 来 review。
+# 配合 Branch Protection 中的 "Require review from Code Owners"。
+#
+# 语法参考:https://docs.github.com/en/repositories/managing-your-repositories-settings-and-features/customizing-your-repository/about-code-owners
+#
+# 使用前:把所有 @your-github-username 替换成真实的 GitHub 用户名。
+
+# ===== 兜底:任何文件改动都需要 Rocky 知道 =====
+*                                @rocky-github-username
+
+# ===== 后端 Python =====
+/core/                           @rocky-github-username
+/desktop/backend/                @rocky-github-username
+/scrapers/                       @rocky-github-username
+
+# ===== 前端 =====
+/web/                            @frontend-lead-username
+/web-user/                       @frontend-lead-username
+
+# ===== 扩展 / 桌面 =====
+/desktop/chrome-extension/       @desktop-lead-username
+/desktop/desktop/                @desktop-lead-username
+
+# ===== 基础设施 / 部署 / 数据库 =====
+# 这些都必须 Rocky 亲自 review
+/infra/                          @rocky-github-username
+/.github/                        @rocky-github-username
+**/migrate_v*.py                 @rocky-github-username
+**/schema*.sql                   @rocky-github-username
+**/docker-compose*.yml           @rocky-github-username
+Dockerfile*                      @rocky-github-username
+**/deploy*.ps1                   @rocky-github-username
+**/db_init*.ps1                  @rocky-github-username
+
+# ===== 安全敏感 =====
+.env.shared.example              @rocky-github-username
+.gitignore                       @rocky-github-username
+**/auth*.py                      @rocky-github-username
+**/oauth*.py                     @rocky-github-username
+
+# ===== 团队文档 =====
+/docs/team/                      @rocky-github-username

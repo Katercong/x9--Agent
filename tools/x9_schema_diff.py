@@ -18,7 +18,7 @@ LOCAL_SQLITE = Path(
     r"F:\AI Agent\Auto boker grab\x9_creator_desktop_system\data\creators.sqlite"
 )
 LOCAL_TABLE = "creators"
-REMOTE_BASE = "http://192.168.1.168:18765"
+REMOTE_BASE = "https://usx9.us"
 TIMEOUT = 10
 
 

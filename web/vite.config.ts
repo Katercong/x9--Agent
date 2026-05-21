@@ -11,7 +11,15 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    host: '0.0.0.0',
+    proxy: {
+      // Forward all API + auth + asset traffic to the desktop backend
+      // running on :8000. Lets the Vite dev server preview the new
+      // /preview/* pages against real production data.
+      '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true, cookieDomainRewrite: '' },
+      '/login': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/health': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/portal': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+    },
   },
   build: {
     outDir: 'dist',

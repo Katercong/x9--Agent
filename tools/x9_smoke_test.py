@@ -1,8 +1,7 @@
 """
 X9 API smoke test
 -----------------
-Run this on a machine that's on the same WiFi as 192.168.1.168 (i.e. NOT
-from a cloud sandbox; it has to see the LAN).
+Run this against the live X9 API.
 
 Usage:
     python x9_smoke_test.py
@@ -26,7 +25,7 @@ import sys
 import time
 from urllib import request, error, parse
 
-BASE = "http://192.168.1.168:18765"
+BASE = "https://usx9.us"
 KEY  = "-PheaIjXfZLZIL4s_uK2FYUAqYZyWTSRYRm52u6jcm0"
 
 TIMEOUT = 8  # seconds

@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="X9 跨境达人智能建联系统 · 登录入口。" />
+    <meta name="theme-color" content="#0b0d12" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f8f9fb" media="(prefers-color-scheme: light)" />
+    <title>X9 · 登录</title>
+    <link rel="stylesheet" href="/ui/theme.css" />
+    <style>
+      body {
+        min-height: 100vh;
+        background:
+          radial-gradient(ellipse 70% 50% at 20% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%),
+          radial-gradient(ellipse 60% 50% at 100% 100%, color-mix(in srgb, var(--info) 7%, transparent), transparent 60%),
+          var(--bg);
+        display: grid;
+        place-items: center;
+        padding: var(--sp-5);
+      }
+
+      .header-bar {
+        position: absolute; top: 0; left: 0; right: 0;
+        display: flex; align-items: center; justify-content: space-between;
+        padding: var(--sp-4) var(--sp-5);
+      }
+      .logo {
+        display: flex; align-items: center; gap: 10px;
+        font-weight: 700; font-size: 16px;
+        color: var(--text);
+        text-decoration: none;
+      }
+      .logo-mark {
+        width: 26px; height: 26px;
+        background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+        border-radius: 7px;
+        display: grid; place-items: center;
+        color: var(--accent-text);
+        font-weight: 800; font-size: 12px;
+        box-shadow: var(--glow-accent);
+      }
+
+      main {
+        width: min(940px, 100%);
+        display: grid;
+        grid-template-columns: 1fr 420px;
+        gap: var(--sp-7);
+        align-items: center;
+      }
+      @media (max-width: 880px) { main { grid-template-columns: 1fr; } }
+
+      .intro h1 {
+        font-size: clamp(28px, 4vw, var(--fs-3xl));
+        font-weight: 700;
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+        margin: 0 0 var(--sp-3);
+      }
+      .intro h1 .accent {
+        background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+        -webkit-background-clip: text; background-clip: text;
+        color: transparent;
+      }
+      .intro p { color: var(--text-muted); margin: 0 0 var(--sp-5); line-height: var(--lh-loose); }
+
+      .entries { display: grid; gap: var(--sp-3); }
+      .entry-row {
+        display: flex; align-items: flex-start; gap: var(--sp-3);
+        padding: var(--sp-3) var(--sp-4);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: color-mix(in srgb, var(--bg-elev-1) 60%, transparent);
+        transition: border-color var(--t-fast) var(--ease-out),
+                    background-color var(--t-fast) var(--ease-out);
+      }
+      .entry-row:hover { border-color: var(--border-strong); background: var(--bg-elev-1); }
+      .entry-row .ico {
+        width: 32px; height: 32px; flex-shrink: 0;
+        border-radius: var(--radius-sm);
+        background: color-mix(in srgb, var(--accent) 14%, var(--bg-elev-2));
+        color: var(--accent);
+        display: grid; place-items: center;
+      }
+      .entry-row .ico svg { width: 16px; height: 16px; }
+      .entry-row strong { display: block; font-size: var(--fs-md); margin-bottom: 2px; }
+      .entry-row .sub { color: var(--text-muted); font-size: var(--fs-sm); line-height: var(--lh-loose); }
+
+      /* ─── auth panel ─── */
+      .auth {
+        background: var(--bg-elev-1);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        padding: var(--sp-5) var(--sp-5) var(--sp-4);
+        box-shadow: var(--shadow-lg);
+      }
+      .tabs {
+        display: grid; grid-template-columns: 1fr 1fr;
+        background: var(--bg-elev-2);
+        border-radius: var(--radius-md);
+        padding: 3px;
+        gap: 2px;
+        margin-bottom: var(--sp-5);
+      }
+      .tab {
+        background: transparent;
+        border: 0;
+        padding: 9px 12px;
+        border-radius: var(--radius-sm);
+        color: var(--text-muted);
+        font: inherit;
+        font-size: var(--fs-sm);
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color var(--t-fast) var(--ease-out),
+                    color var(--t-fast) var(--ease-out);
+      }
+      .tab.active { background: var(--bg-elev-1); color: var(--text); box-shadow: var(--shadow-sm); }
+
+      form h2 {
+        margin: 0 0 var(--sp-4);
+        font-size: var(--fs-xl);
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      label {
+        display: grid; gap: 6px;
+        margin-bottom: var(--sp-4);
+        font-size: var(--fs-xs);
+        color: var(--text-muted);
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      input, select {
+        width: 100%;
+        background: var(--bg-elev-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 11px 12px;
+        border-radius: var(--radius-sm);
+        font: inherit;
+        font-size: var(--fs-md);
+        outline: none;
+        transition: border-color var(--t-fast) var(--ease-out),
+                    box-shadow var(--t-fast) var(--ease-out);
+      }
+      input:focus, select:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+      }
+
+      .submit {
+        width: 100%;
+        padding: 12px 16px;
+        font-size: var(--fs-md);
+        font-weight: 600;
+        border-radius: var(--radius-md);
+      }
+
+      .hidden { display: none; }
+      #status {
+        min-height: 22px;
+        margin-top: var(--sp-3);
+        padding: var(--sp-2) var(--sp-3);
+        border-radius: var(--radius-sm);
+        font-size: var(--fs-sm);
+        line-height: var(--lh-base);
+      }
+      #status.info  { background: color-mix(in srgb, var(--info) 12%, transparent); color: var(--info); }
+      #status.danger { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
+      #status.ok { background: color-mix(in srgb, var(--good) 12%, transparent); color: var(--good); }
+
+      .header-bar { gap: 8px; }
+      .header-bar .lang-toggle + .theme-toggle { margin-left: 4px; }
+    </style>
+  </head>
+  <body>
+    <div class="header-bar">
+      <a class="logo" href="/">
+        <span class="logo-mark">X9</span>
+        <span>X9 系统</span>
+      </a>
+      <button id="lang-toggle" class="lang-toggle" type="button" title="切换中英文" aria-label="切换中英文">
+        <svg class="lang-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M2 12h20"/>
+          <path d="M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z"/>
+        </svg>
+        <span class="lang-current">中</span>
+      </button>
+      <button class="theme-toggle" id="theme-toggle" title="切换主题" aria-label="Toggle theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>
+      </button>
+    </div>
+
+    <main>
+      <section class="intro">
+        <h1><span data-i18n="welcome">欢迎回到</span> <span class="accent">X9</span></h1>
+        <p data-i18n="intro">使用本地用户名和密码登录。Gmail 只在进入工作台后用于绑定发件账号,不能再作为登录方式。</p>
+        <div class="entries">
+          <div class="entry-row">
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>
+            <div>
+              <strong data-i18n="role.admin">管理员</strong>
+              <div class="sub" data-i18n="role.adminDesc">审核注册账号,查看部门面板。超级管理员还可以重置密码和管理管理员。</div>
+            </div>
+          </div>
+          <div class="entry-row">
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z"/></svg></div>
+            <div>
+              <strong data-i18n="role.cross">跨境部</strong>
+              <div class="sub" data-i18n="role.crossDesc">完整工作台:采集、推荐、人工审、导入导出、Gmail 建联、扩展控制。</div>
+            </div>
+          </div>
+          <div class="entry-row">
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></div>
+            <div>
+              <strong data-i18n="role.trade">外贸部</strong>
+              <div class="sub" data-i18n="role.tradeDesc">同样的工作台模式,目前无历史数据,后续可独立采集和导入。</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="auth">
+        <div class="tabs">
+          <button class="tab active" id="tab-login" type="button" data-i18n="tab.login">登录</button>
+          <button class="tab" id="tab-register" type="button" data-i18n="tab.register">注册</button>
+        </div>
+        <form id="login-form">
+          <h2 data-i18n="form.loginTitle">账号登录</h2>
+          <label>
+            <span data-i18n="field.username">用户名</span>
+            <input id="login-username" autocomplete="username" required />
+          </label>
+          <label>
+            <span data-i18n="field.password">密码</span>
+            <input id="login-password" type="password" autocomplete="current-password" required />
+          </label>
+          <button class="x9-btn primary submit" id="login-button" type="submit" data-i18n="form.loginSubmit">登录</button>
+        </form>
+        <form id="register-form" class="hidden">
+          <h2 data-i18n="form.registerTitle">申请账号</h2>
+          <label>
+            <span data-i18n="field.username">用户名</span>
+            <input id="register-username" autocomplete="username" minlength="3" maxlength="40" required />
+          </label>
+          <label>
+            <span data-i18n="field.password">密码</span>
+            <input id="register-password" type="password" autocomplete="new-password" minlength="6" required />
+          </label>
+          <label>
+            <span data-i18n="field.name">姓名</span>
+            <input id="register-name" autocomplete="name" />
+          </label>
+          <label>
+            <span data-i18n="field.email">邮箱(可选)</span>
+            <input id="register-email" type="email" autocomplete="email" />
+          </label>
+          <label>
+            <span data-i18n="field.department">部门</span>
+            <select id="register-department">
+              <option value="cross_border" data-i18n="role.cross">跨境部</option>
+              <option value="foreign_trade" data-i18n="role.trade">外贸部</option>
+            </select>
+          </label>
+          <button class="x9-btn primary submit" id="register-button" type="submit" data-i18n="form.registerSubmit">提交审核</button>
+        </form>
+        <div id="status"></div>
+      </section>
+    </main>
+
+    <script>
+      // ─── Theme toggle ───
+      // If user has an explicit choice, lock it in. Otherwise let CSS
+      // @media (prefers-color-scheme) follow the OS automatically.
+      (function () {
+        const saved = localStorage.getItem("x9-theme");
+        if (saved === "dark" || saved === "light") {
+          document.documentElement.setAttribute("data-theme", saved);
+        }
+      })();
+      document.getElementById("theme-toggle").addEventListener("click", () => {
+        const explicit = document.documentElement.getAttribute("data-theme");
+        const systemDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+        const effective = explicit || (systemDark ? "dark" : "light");
+        const next = effective === "dark" ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", next);
+        localStorage.setItem("x9-theme", next);
+      });
+      window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
+        if (!localStorage.getItem("x9-theme")) {
+          document.documentElement.removeAttribute("data-theme");
+        }
+      });
+
+      // ─── i18n ───
+      const I18N = {
+        "zh-CN": {
+          "welcome": "欢迎回到",
+          "intro": "使用本地用户名和密码登录。Gmail 只在进入工作台后用于绑定发件账号,不能再作为登录方式。",
+          "role.admin": "管理员",
+          "role.adminDesc": "审核注册账号,查看部门面板。超级管理员还可以重置密码和管理管理员。",
+          "role.cross": "跨境部",
+          "role.crossDesc": "完整工作台:采集、推荐、人工审、导入导出、Gmail 建联、扩展控制。",
+          "role.trade": "外贸部",
+          "role.tradeDesc": "同样的工作台模式,目前无历史数据,后续可独立采集和导入。",
+          "tab.login": "登录",
+          "tab.register": "注册",
+          "form.loginTitle": "账号登录",
+          "form.registerTitle": "申请账号",
+          "form.loginSubmit": "登录",
+          "form.registerSubmit": "提交审核",
+          "field.username": "用户名",
+          "field.password": "密码",
+          "field.name": "姓名",
+          "field.email": "邮箱(可选)",
+          "field.department": "部门",
+          "status.loggingIn": "正在登录…",
+          "status.submitting": "正在提交…",
+          "status.registered": "注册已提交,请等待管理员审核后再登录。",
+          "doc.title": "X9 · 登录",
+        },
+        "en": {
+          "welcome": "Welcome back to",
+          "intro": "Sign in with your local username and password. Gmail is only used inside the workspace to bind a sender account — no longer an entry method.",
+          "role.admin": "Admin",
+          "role.adminDesc": "Approve registrations, view department dashboards. Super admins can also reset passwords and manage admins.",
+          "role.cross": "Cross-border",
+          "role.crossDesc": "Full workspace: scraping, recommendations, manual review, import/export, Gmail outreach, extension control.",
+          "role.trade": "Foreign trade",
+          "role.tradeDesc": "Same workspace shape. No history yet — collect and import independently.",
+          "tab.login": "Sign in",
+          "tab.register": "Register",
+          "form.loginTitle": "Sign in",
+          "form.registerTitle": "Request an account",
+          "form.loginSubmit": "Sign in",
+          "form.registerSubmit": "Submit for review",
+          "field.username": "Username",
+          "field.password": "Password",
+          "field.name": "Name",
+          "field.email": "Email (optional)",
+          "field.department": "Department",
+          "status.loggingIn": "Signing in…",
+          "status.submitting": "Submitting…",
+          "status.registered": "Submitted. Wait for an admin to approve, then sign in.",
+          "doc.title": "X9 · Sign in",
+        }
+      };
+
+      const LANG_KEY = "x9_ui_language";
+      let currentLang = localStorage.getItem(LANG_KEY) === "en" ? "en" : "zh-CN";
+      if (localStorage.getItem(LANG_KEY) === "zh") currentLang = "zh-CN";
+
+      function t(key) { return I18N[currentLang]?.[key] ?? I18N["zh-CN"][key] ?? key; }
+      function applyI18n() {
+        document.documentElement.lang = currentLang === "en" ? "en" : "zh-CN";
+        document.title = t("doc.title");
+        document.querySelectorAll("[data-i18n]").forEach((el) => {
+          el.textContent = t(el.getAttribute("data-i18n"));
+        });
+        const btn = document.getElementById("lang-toggle");
+        if (btn) {
+          const label = btn.querySelector(".lang-current");
+          if (label) label.textContent = currentLang === "en" ? "EN" : "中";
+          const tip = currentLang === "en" ? "切换到中文" : "Switch to English";
+          btn.title = tip;
+          btn.setAttribute("aria-label", tip);
+        }
+      }
+      function setLang(next) {
+        currentLang = next === "en" ? "en" : "zh-CN";
+        localStorage.setItem(LANG_KEY, currentLang === "en" ? "en" : "zh");
+        applyI18n();
+      }
+      document.getElementById("lang-toggle")?.addEventListener("click", (e) => {
+        const btn = e.currentTarget;
+        btn.classList.add("swapping");
+        setTimeout(() => {
+          setLang(currentLang === "en" ? "zh" : "en");
+          btn.classList.remove("swapping");
+        }, 120);
+      });
+      applyI18n();
+
+      const API = "/api/local";
+      const statusEl = document.getElementById("status");
+      const loginForm = document.getElementById("login-form");
+      const registerForm = document.getElementById("register-form");
+      const loginTab = document.getElementById("tab-login");
+      const registerTab = document.getElementById("tab-register");
+
+      function setStatus(text, kind) {
+        statusEl.textContent = text || "";
+        statusEl.className = kind || "";
+      }
+
+      function showMode(mode) {
+        const isLogin = mode === "login";
+        loginForm.classList.toggle("hidden", !isLogin);
+        registerForm.classList.toggle("hidden", isLogin);
+        loginTab.classList.toggle("active", isLogin);
+        registerTab.classList.toggle("active", !isLogin);
+        setStatus("");
+      }
+
+      function homeFor(user) {
+        if (user.entry_scope === "admin") {
+          if (user.role === "super_admin") return "/a/monitor";
+          if (user.role === "company_admin") return "/c/overview";
+          if (user.role === "department_admin") return "/d/dashboard";
+        }
+        if (user.department_slug) return `/workspace/${user.department_slug}/`;
+        return "/workspace/cross-border/";
+      }
+
+      function safeNextFor(user) {
+        const next = new URLSearchParams(window.location.search).get("next");
+        if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/admin/")) return null;
+        if (user.role === "super_admin" && next.startsWith("/a/")) return next;
+        if (user.role === "company_admin" && next.startsWith("/c/")) return next;
+        if (user.role === "department_admin" && next.startsWith("/d/")) return next;
+        if (user.entry_scope !== "admin" && (next.startsWith("/workspace/") || next.startsWith("/portal/"))) return next;
+        return null;
+      }
+
+      function redirectFor(user) {
+        return safeNextFor(user) || homeFor(user);
+      }
+
+      async function postJson(path, body) {
+        const response = await fetch(`${API}${path}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || `请求失败 ${response.status}`);
+        return payload;
+      }
+
+      loginTab.addEventListener("click", () => showMode("login"));
+      registerTab.addEventListener("click", () => showMode("register"));
+
+      loginForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const button = document.getElementById("login-button");
+        button.disabled = true;
+        setStatus(t("status.loggingIn"), "info");
+        try {
+          const payload = await postJson("/auth/login", {
+            username: document.getElementById("login-username").value.trim(),
+            password: document.getElementById("login-password").value,
+          });
+          window.location.href = redirectFor(payload.user || {});
+        } catch (err) {
+          setStatus(err.message, "danger");
+          button.disabled = false;
+        }
+      });
+
+      registerForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const button = document.getElementById("register-button");
+        button.disabled = true;
+        setStatus(t("status.submitting"), "info");
+        try {
+          await postJson("/auth/register", {
+            username: document.getElementById("register-username").value.trim(),
+            password: document.getElementById("register-password").value,
+            display_name: document.getElementById("register-name").value.trim() || null,
+            email: document.getElementById("register-email").value.trim() || null,
+            department_code: document.getElementById("register-department").value,
+          });
+          setStatus(t("status.registered"), "ok");
+          registerForm.reset();
+          button.disabled = false;
+        } catch (err) {
+          setStatus(err.message, "danger");
+          button.disabled = false;
+        }
+      });
+
+      fetch(`${API}/auth/me`).then((r) => r.json()).then((payload) => {
+        if (payload.logged_in && payload.user) window.location.href = redirectFor(payload.user);
+      }).catch(() => undefined);
+    </script>
+  </body>
+</html>

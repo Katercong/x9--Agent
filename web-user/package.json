@@ -1,0 +1,40 @@
+{
+  "name": "x9-user-portal",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "X9 用户端 React 重构 — 对接 desktop/backend (/api/local/*)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:deploy": "tsc -b && vite build --base /portal/ --outDir dist-deploy --emptyOutDir",
+    "build:root": "tsc -b && vite build --base / --outDir dist-root --emptyOutDir",
+    "preview": "vite preview",
+    "deploy": "node ./scripts/deploy.mjs",
+    "deploy:root": "node ./scripts/deploy-root.mjs"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2",
+    "echarts": "^5.5.1",
+    "echarts-for-react": "^3.0.2",
+    "@tanstack/react-query": "^5.100.10",
+    "@tanstack/react-table": "^8.20.5",
+    "zustand": "^4.5.5",
+    "lucide-react": "^0.446.0",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.5.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "@types/react": "^18.3.10",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.13",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.8"
+  }
+}

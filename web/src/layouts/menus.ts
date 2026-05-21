@@ -23,6 +23,9 @@ import {
   Database,
   FileCode,
   Gauge,
+  Store,
+  Radar,
+  FileSpreadsheet,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -33,8 +36,27 @@ export type MenuItem = {
   icon: LucideIcon;
 };
 
-export const departmentMenu: MenuItem[] = [
+export type MenuGroup = {
+  key: string;
+  label: string;
+  icon: LucideIcon;
+  children: MenuItem[];
+};
+
+export type MenuEntry = MenuItem | MenuGroup;
+
+export const departmentMenu: MenuEntry[] = [
   { key: 'd-dashboard', label: '数据看板', to: '/d/dashboard', icon: LayoutDashboard },
+  {
+    key: 'd-creator-data',
+    label: '达人数据采集',
+    icon: Users,
+    children: [
+      { key: 'd-collect-shop', label: '采集 · TikTok Shop', to: '/d/collect-shop', icon: Store },
+      { key: 'd-collect-leads', label: '采集 · X9 线索', to: '/d/collect-leads', icon: Radar },
+      { key: 'd-collect-import', label: '采集 · 表格导入', to: '/d/collect-import', icon: FileSpreadsheet },
+    ],
+  },
   { key: 'd-creators', label: '达人管理', to: '/d/creators', icon: Users },
   { key: 'd-leads', label: '线索管理', to: '/d/leads', icon: Search },
   { key: 'd-emails', label: '邮件管理', to: '/d/emails', icon: Mail },
@@ -44,7 +66,7 @@ export const departmentMenu: MenuItem[] = [
   { key: 'd-settings', label: '设置中心', to: '/d/settings', icon: Settings },
 ];
 
-export const companyMenu: MenuItem[] = [
+export const companyMenu: MenuEntry[] = [
   { key: 'c-overview', label: '业绩总览', to: '/c/overview', icon: LayoutDashboard },
   { key: 'c-revenue', label: '营收与利润', to: '/c/revenue', icon: Wallet },
   { key: 'c-departments', label: '部门绩效', to: '/c/departments', icon: Building2 },
@@ -55,8 +77,19 @@ export const companyMenu: MenuItem[] = [
   { key: 'c-events', label: '重要事件', to: '/c/events', icon: CalendarClock },
 ];
 
-export const superMenu: MenuItem[] = [
+export const superMenu: MenuEntry[] = [
+  { key: 'a-dashboard', label: '数据看板', to: '/a/dashboard', icon: LayoutDashboard },
   { key: 'a-monitor', label: '系统监控', to: '/a/monitor', icon: Activity },
+  {
+    key: 'a-creator-data',
+    label: '达人数据采集',
+    icon: Users,
+    children: [
+      { key: 'a-collect-shop', label: '采集 · TikTok Shop', to: '/a/collect-shop', icon: Store },
+      { key: 'a-collect-leads', label: '采集 · X9 线索', to: '/a/collect-leads', icon: Radar },
+      { key: 'a-collect-import', label: '采集 · 表格导入', to: '/a/collect-import', icon: FileSpreadsheet },
+    ],
+  },
   { key: 'a-users', label: '用户与权限', to: '/a/users', icon: KeyRound },
   { key: 'a-llm', label: 'LLM 配置', to: '/a/llm', icon: Brain },
   { key: 'a-webhooks', label: 'Webhook 集成', to: '/a/webhooks', icon: Webhook },
@@ -68,6 +101,9 @@ export const superMenu: MenuItem[] = [
 
 export const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/d/dashboard': { title: '数据看板', subtitle: '全面掌握业务运营情况,驱动高效增长' },
+  '/d/collect-shop': { title: '采集 · TikTok Shop', subtitle: 'affiliate-us 全自动采集 · 列表→详情漏斗与运行状态' },
+  '/d/collect-leads': { title: '采集 · X9 线索', subtitle: 'www.tiktok.com 卡片流 · 联系方式覆盖与趋势' },
+  '/d/collect-import': { title: '采集 · 表格导入', subtitle: 'CSV / XLSX 批量导入 · 国家 / Tier / 质量分布' },
   '/d/creators': { title: '达人管理', subtitle: '管辖范围内达人的全生命周期管理' },
   '/d/leads': { title: '线索管理', subtitle: '从爬虫池筛选高质量达人候选' },
   '/d/emails': { title: '邮件管理', subtitle: 'AI 辅助邮件外联与跟进' },
@@ -85,7 +121,11 @@ export const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/c/creators': { title: '达人资产总览', subtitle: 'Tier 结构、地理分布、头部达人' },
   '/c/events': { title: '重要事件时间线', subtitle: '公司级里程碑与异常事件' },
 
+  '/a/dashboard': { title: '数据看板', subtitle: '全公司业绩总览 · 全局视角' },
   '/a/monitor': { title: '系统监控', subtitle: '服务状态、性能指标与资源消耗' },
+  '/a/collect-shop': { title: '采集 · TikTok Shop（全局）', subtitle: '全部门 TikTok Shop 采集 · 列表→详情漏斗' },
+  '/a/collect-leads': { title: '采集 · X9 线索（全局）', subtitle: '全部门 X9 卡片流线索 · 联系方式覆盖' },
+  '/a/collect-import': { title: '采集 · 表格导入（全局）', subtitle: '全部门 CSV / XLSX 导入 · 国家 / Tier 分布' },
   '/a/users': { title: '用户与权限', subtitle: '全公司用户管理与 API Key 签发' },
   '/a/llm': { title: 'LLM 配置中心', subtitle: 'Provider 管理、Feature 绑定与用量' },
   '/a/webhooks': { title: 'Webhook 集成', subtitle: '钉钉、企微、Slack 等外部通知' },

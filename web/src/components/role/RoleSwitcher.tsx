@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ChevronDown, Briefcase, Building, Shield } from 'lucide-react';
-import { useRoleStore, roleLabel, roleSubtitle, roleHome, type Role } from '@/stores/roleStore';
-import { cn } from '@/lib/cn';
+import { ChevronDown, Briefcase, Building, Shield, LogIn, LogOut, Loader2 } from 'lucide-react';
+import {
+  useRoleStore, backendRoleLabel,
+  type Role,
+} from '@/stores/roleStore';
+import { useLogout } from '@/hooks/useAuth';
 
 const roleIcon: Record<Role, typeof Briefcase> = {
   company: Briefcase,
@@ -17,10 +19,10 @@ const roleColor: Record<Role, string> = {
 };
 
 export default function RoleSwitcher() {
-  const { currentRole, switchRole } = useRoleStore();
+  const { currentRole, currentUser } = useRoleStore();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const navigate = useNavigate();
+  const logout = useLogout();
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -30,13 +32,21 @@ export default function RoleSwitcher() {
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
 
-  const handleSwitch = (role: Role) => {
-    switchRole(role);
-    navigate(roleHome[role]);
-    setOpen(false);
+  const username = currentUser?.display_name || currentUser?.username || '未登录';
+  const userRoleLabel = currentUser ? backendRoleLabel[currentUser.role] : '未登录';
+  const departmentName = currentUser?.department_name || currentUser?.department_code || '';
+  const Icon = roleIcon[currentRole];
+
+  const handleLogout = () => {
+    if (!confirm('确定退出登录？')) return;
+    logout.mutate(undefined, {
+      onSettled: () => { window.location.href = '/login'; },
+    });
   };
 
-  const Icon = roleIcon[currentRole];
+  const handleLogin = () => {
+    window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+  };
 
   return (
     <div className="relative" ref={ref}>
@@ -46,46 +56,64 @@ export default function RoleSwitcher() {
       >
         <span
           className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold"
-          style={{ background: roleColor[currentRole] }}
+          style={{ background: currentUser ? roleColor[currentRole] : '#86909c' }}
         >
           <Icon size={14} />
         </span>
-        <div className="flex flex-col items-start leading-tight">
-          <span className="text-xs font-medium text-gray-800">testadmin1</span>
-          <span className="text-xxs text-muted">{roleLabel[currentRole]}</span>
+        <div className="hidden md:flex flex-col items-start leading-tight">
+          <span className="text-xs font-medium text-gray-800 truncate max-w-[160px]">{username}</span>
+          <span className="text-xxs text-muted">{userRoleLabel}{departmentName ? ` · ${departmentName}` : ''}</span>
         </div>
         <ChevronDown size={14} className="text-muted" />
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-1 w-64 bg-white border border-line rounded-md shadow-soft py-1 z-50">
-          <div className="px-3 py-2 text-xxs text-muted border-b border-line">切换视角(预览专用)</div>
-          {(['company', 'department', 'super'] as Role[]).map((r) => {
-            const RI = roleIcon[r];
-            const active = r === currentRole;
-            return (
-              <button
-                key={r}
-                onClick={() => handleSwitch(r)}
-                className={cn(
-                  'w-full flex items-center gap-3 px-3 py-2 hover:bg-soft text-left transition-colors',
-                  active && 'bg-soft',
-                )}
+        <div className="absolute right-0 mt-1 w-72 bg-white border border-line rounded-md shadow-soft py-1 z-50">
+          <div className="px-3 py-3 border-b border-line">
+            <div className="flex items-center gap-2.5">
+              <span
+                className="w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0"
+                style={{ background: currentUser ? roleColor[currentRole] : '#86909c' }}
               >
-                <span
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-white shrink-0"
-                  style={{ background: roleColor[r] }}
-                >
-                  <RI size={14} />
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium text-gray-800">{roleLabel[r]}</div>
-                  <div className="text-xxs text-muted truncate">{roleSubtitle[r]}</div>
+                {username[0]?.toUpperCase() || '?'}
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-gray-800 truncate">{username}</div>
+                <div className="text-xxs text-muted truncate">
+                  {currentUser?.username && currentUser.username !== username && (
+                    <span>@{currentUser.username} · </span>
+                  )}
+                  {userRoleLabel}
                 </div>
-                {active && <span className="text-xxs text-brand-500">当前</span>}
+                {departmentName && <div className="text-xxs text-muted truncate">部门：{departmentName}</div>}
+              </div>
+            </div>
+          </div>
+
+          <div className="px-3 py-2 text-xxs text-muted">
+            角色由登录会话决定，不能在前端切换身份。
+          </div>
+
+          <div className="border-t border-line">
+            {currentUser ? (
+              <button
+                onClick={handleLogout}
+                disabled={logout.isPending}
+                className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-soft text-left transition-colors text-xs text-bad disabled:opacity-50"
+              >
+                {logout.isPending ? <Loader2 size={14} className="animate-spin" /> : <LogOut size={14} />}
+                <span>退出登录</span>
               </button>
-            );
-          })}
+            ) : (
+              <button
+                onClick={handleLogin}
+                className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-soft text-left transition-colors text-xs text-brand-500"
+              >
+                <LogIn size={14} />
+                <span>前往登录</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

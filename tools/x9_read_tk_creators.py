@@ -19,7 +19,7 @@ import json
 import sys
 from urllib import request, parse, error
 
-BASE = "http://192.168.1.168:18765"
+BASE = "https://usx9.us"
 RESOURCE = "tk_creators"
 TIMEOUT = 10
 

@@ -14,8 +14,8 @@
                     ],
     "host_permissions":  [
                              "https://www.tiktok.com/*",
-                             "http://127.0.0.1:8000/*",
-                             "http://localhost:8000/*"
+                             "https://usx9.us/*",
+                             "https://*.usx9.us/*"
                          ],
     "action":  {
                    "default_title":  "TikTok Creator Lead Browser"

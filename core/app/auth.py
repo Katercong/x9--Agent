@@ -33,6 +33,8 @@ from fastapi import Header, HTTPException, Request, status, Depends
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "database.db"
 _TRUTHY = {"1", "true", "yes", "on", "local", "loopback"}
+# Explicit strict opt-out: require a valid X-API-Key even for loopback.
+_STRICT = {"0", "false", "no", "off", "none", "strict", "require"}
 
 
 def _env_core_auth_disabled() -> str:
@@ -57,12 +59,22 @@ def _is_loopback_request(request: Request | None) -> bool:
 
 
 def _core_auth_bypass_enabled(request: Request | None) -> bool:
+    """Local requests are auth-free by default ("后端本地免鉴权").
+
+    - mode == "all": bypass unconditionally (incl. public traffic).
+    - explicit strict opt-out (0/false/off/strict/...): always require key.
+    - default (env unset) OR any truthy value: bypass only for
+      loopback/same-machine requests. The desktop backend reverse-proxies
+      /api/v1/* to core over 127.0.0.1, so this makes those proxied calls
+      work without a key while public traffic (via the cloudflared tunnel,
+      never loopback) still needs a valid X-API-Key.
+    """
     mode = _env_core_auth_disabled()
     if mode == "all":
         return True
-    if mode in _TRUTHY:
-        return _is_loopback_request(request)
-    return False
+    if mode in _STRICT:
+        return False
+    return _is_loopback_request(request)
 
 
 def _local_admin_user() -> dict[str, Any]:

@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$RemoteApiUrl = "http://192.168.1.171:18765"
+$RemoteApiUrl = "https://usx9.us"
 $StartDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 function Find-ProjectRoot {
