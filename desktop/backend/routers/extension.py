@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -8,20 +9,25 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
+from ..models.app_user import AppUser
 from ..models.extension_command import ExtensionCommand
 from ..models.extension_run_progress import ExtensionRunProgress
 from ..models.extension_session import ExtensionSession
+from ..models.creator_source import CreatorSource
+from ..models.raw_observation import RawObservation
 from ..services.departments import DEFAULT_DEPARTMENT, current_department_code, department_where, normalize_department_code
+from ..services.departments import current_user as require_current_user
 from ..utils.id_utils import new_id
 from ..utils.json_utils import dumps_json, parse_followers_count
 
 
 router = APIRouter(prefix="/api/local/extension", tags=["extension"])
+ADMIN_ROLES = {"super_admin", "company_admin", "department_admin"}
 
 
 # Directory containing the merged extension (vendor v1.0.19 + relay).
@@ -97,6 +103,19 @@ class HeartbeatIn(BaseModel):
     tiktok_login_status: str | None = None
     active_tab_title: str | None = None
     timestamp: str | None = None
+    source: str | None = None
+    status: str | None = None
+    running: bool | None = None
+    current_action: str | None = None
+    current_handle: str | None = None
+    search_keyword: str | None = None
+    hourly_limit: int | None = None
+    hourly_used: int | None = None
+    hourly_remaining: int | None = None
+    next_resume_at: str | None = None
+    last_error: str | None = None
+    actor_user_id: str | None = None
+    actor: dict | None = None
 
 
 def _department_from_request(request: Request, fallback: str | None = None) -> str:
@@ -105,15 +124,183 @@ def _department_from_request(request: Request, fallback: str | None = None) -> s
     return normalize_department_code(fallback, default=DEFAULT_DEPARTMENT) or DEFAULT_DEPARTMENT
 
 
+def _actor_id(user: dict | None) -> str | None:
+    if not user:
+        return None
+    return str(user.get("id") or user.get("identity") or "").strip() or None
+
+
+def _is_admin_user(user: dict | None) -> bool:
+    return bool(user and user.get("entry_scope") == "admin" and user.get("role") in ADMIN_ROLES)
+
+
+def _is_admin_role(user: dict | None) -> bool:
+    return bool(user and user.get("role") in ADMIN_ROLES)
+
+
+def _auto_bind_actor_id(user: dict | None) -> str | None:
+    if not user or _is_admin_role(user):
+        return None
+    return _actor_id(user)
+
+
+def _payload_actor_id(payload: dict | HeartbeatIn | None) -> str | None:
+    if payload is None:
+        return None
+    if isinstance(payload, HeartbeatIn):
+        direct = payload.actor_user_id
+        actor = payload.actor
+    else:
+        direct = payload.get("actor_user_id")
+        actor = payload.get("actor")
+    actor_id = str(direct or "").strip()
+    if actor_id:
+        return actor_id
+    if isinstance(actor, dict):
+        actor_id = str(actor.get("id") or actor.get("identity") or "").strip()
+        if actor_id:
+            return actor_id
+    return None
+
+
+def _trusted_payload_actor_id(db: Session, request: Request, actor_id: str | None) -> str | None:
+    actor_id = str(actor_id or "").strip()
+    if not actor_id:
+        return None
+    row = db.get(AppUser, actor_id)
+    if row is None or int(row.is_active or 0) != 1:
+        return None
+    if row.role in ADMIN_ROLES:
+        return None
+    user = getattr(request.state, "current_user", None)
+    department_code = current_department_code(request) if user else None
+    if department_code is not None and normalize_department_code(row.department_code) != department_code:
+        return None
+    return row.id
+
+
+def _heartbeat_actor_id(db: Session, request: Request, payload: dict | HeartbeatIn | None) -> str | None:
+    return (
+        _auto_bind_actor_id(getattr(request.state, "current_user", None))
+        or _trusted_payload_actor_id(db, request, _payload_actor_id(payload))
+    )
+
+
+def _actor_summary(row: AppUser | None) -> dict | None:
+    if row is None:
+        return None
+    return {
+        "id": row.id,
+        "username": row.username,
+        "display_name": row.display_name,
+        "email": row.email,
+        "role": row.role,
+        "department_code": row.department_code,
+    }
+
+
+def _json_obj(value: str | None) -> dict:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _status_settings(**values) -> dict:
+    return {key: value for key, value in values.items() if value is not None}
+
+
+def _upsert_progress_from_status(
+    db: Session,
+    *,
+    worker_id: str,
+    department_code: str,
+    status: str | None,
+    running: bool | None,
+    current_action: str | None,
+    current_handle: str | None,
+    search_keyword: str | None,
+    hourly_limit: int | None,
+    hourly_used: int | None,
+    hourly_remaining: int | None,
+    next_resume_at: str | None,
+    last_error: str | None,
+    source: str | None,
+    extension_id: str | None,
+    account_id: str | None,
+) -> ExtensionRunProgress:
+    p = db.scalar(select(ExtensionRunProgress).where(ExtensionRunProgress.worker_id == worker_id))
+    if p is None:
+        p = ExtensionRunProgress(id=new_id("rp"), worker_id=worker_id)
+        db.add(p)
+    existing_settings = _json_obj(p.settings_json)
+    extra_settings = _status_settings(
+        source=source,
+        status=status,
+        extension_id=extension_id,
+        account_id=account_id,
+        hourly_limit=hourly_limit,
+        hourly_used=hourly_used,
+        hourly_remaining=hourly_remaining,
+        next_resume_at=next_resume_at,
+    )
+    p.department_code = department_code
+    if search_keyword is not None:
+        p.keyword = search_keyword
+    if current_handle is not None:
+        p.current_handle = current_handle
+    if current_action is not None:
+        p.current_action = current_action
+    if last_error is not None:
+        p.last_error = last_error
+    if running is not None:
+        p.running = 1 if running else 0
+    if status:
+        p.step = str(status)[:40]
+    elif running is not None:
+        p.step = "running" if running else "idle"
+    p.settings_json = dumps_json({**existing_settings, **extra_settings})
+    return p
+
+
+def _session_actor_filter(request: Request, actor_user_id: str | None = None) -> str | None:
+    user = getattr(request.state, "current_user", None)
+    if _is_admin_user(user):
+        requested = str(actor_user_id or "").strip()
+        if requested in {"", "all", "*"}:
+            return None
+        return requested
+    return _actor_id(user)
+
+
+def _visible_session_filter(q, actor_filter: str | None):
+    if not actor_filter:
+        return q
+    return q.where(or_(
+        ExtensionSession.actor_user_id == actor_filter,
+        ExtensionSession.actor_user_id.is_(None),
+        ExtensionSession.actor_user_id == "",
+    ))
+
+
 @router.post("/heartbeat")
 def heartbeat(payload: HeartbeatIn, request: Request, db: Session = Depends(get_db)) -> dict:
     department_code = _department_from_request(request, payload.department_code)
+    actor_user_id = _heartbeat_actor_id(db, request, payload)
+    actor_row = db.get(AppUser, actor_user_id) if actor_user_id else None
+    if actor_row and actor_row.department_code:
+        department_code = normalize_department_code(actor_row.department_code, default=DEFAULT_DEPARTMENT) or department_code
     sess = db.scalar(select(ExtensionSession).where(ExtensionSession.worker_id == payload.worker_id))
     if sess is None:
         sess = ExtensionSession(id=new_id("ext"), extension_id=payload.extension_id, worker_id=payload.worker_id)
         db.add(sess)
     sess.extension_id = payload.extension_id
     sess.department_code = department_code
+    if actor_user_id:
+        sess.actor_user_id = actor_user_id
     sess.extension_version = payload.extension_version
     sess.account_id = payload.account_id
     sess.browser_profile = payload.browser_profile
@@ -124,27 +311,78 @@ def heartbeat(payload: HeartbeatIn, request: Request, db: Session = Depends(get_
     sess.active_tab_title = payload.active_tab_title
     sess.status = "online"
     sess.last_heartbeat_at = datetime.now(timezone.utc)
+    _upsert_progress_from_status(
+        db,
+        worker_id=payload.worker_id,
+        department_code=department_code,
+        status=payload.status,
+        running=payload.running,
+        current_action=payload.current_action,
+        current_handle=payload.current_handle,
+        search_keyword=payload.search_keyword,
+        hourly_limit=payload.hourly_limit,
+        hourly_used=payload.hourly_used,
+        hourly_remaining=payload.hourly_remaining,
+        next_resume_at=payload.next_resume_at,
+        last_error=payload.last_error,
+        source=payload.source,
+        extension_id=payload.extension_id,
+        account_id=payload.account_id,
+    )
     db.commit()
     return {"ok": True, "session_id": sess.id, "status": "online"}
 
 
 @router.get("/status")
-def extension_status(request: Request, db: Session = Depends(get_db)) -> dict:
+def extension_status(
+    request: Request,
+    actor_user_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
     threshold = datetime.now(timezone.utc) - timedelta(seconds=settings.extension_offline_seconds)
     q = select(ExtensionSession)
     where_department = department_where(ExtensionSession, current_department_code(request))
     if where_department is not None:
         q = q.where(where_department)
+    actor_filter = _session_actor_filter(request, actor_user_id)
+    q = _visible_session_filter(q, actor_filter)
     sessions = list(db.scalars(q.order_by(ExtensionSession.last_heartbeat_at.desc())).all())
+    actor_ids = {s.actor_user_id for s in sessions if s.actor_user_id}
+    actors = {
+        row.id: row
+        for row in db.scalars(select(AppUser).where(AppUser.id.in_(actor_ids))).all()
+    } if actor_ids else {}
+    worker_ids = {s.worker_id for s in sessions if s.worker_id}
+    progress_by_worker = {
+        row.worker_id: row
+        for row in db.scalars(select(ExtensionRunProgress).where(ExtensionRunProgress.worker_id.in_(worker_ids))).all()
+    } if worker_ids else {}
     out = []
     for s in sessions:
         last = _as_aware_utc(s.last_heartbeat_at)
         online = bool(last and last >= threshold)
+        actor = actors.get(s.actor_user_id or "")
+        progress = progress_by_worker.get(s.worker_id)
+        progress_settings = _json_obj(progress.settings_json if progress else None)
         out.append({
             "session_id": s.id,
             "department_code": s.department_code,
+            "actor_user_id": s.actor_user_id,
+            "actor": _actor_summary(actor),
             "worker_id": s.worker_id,
             "account_id": s.account_id,
+            "source": progress_settings.get("source"),
+            "status": progress_settings.get("status") or (progress.step if progress else s.status),
+            "session_status": s.status,
+            "running": bool(progress.running) if progress else False,
+            "current_action": progress.current_action if progress else None,
+            "current_handle": progress.current_handle if progress else None,
+            "search_keyword": progress.keyword if progress else None,
+            "hourly_limit": progress_settings.get("hourly_limit"),
+            "hourly_used": progress_settings.get("hourly_used"),
+            "hourly_remaining": progress_settings.get("hourly_remaining"),
+            "next_resume_at": progress_settings.get("next_resume_at"),
+            "last_error": progress.last_error if progress else None,
             "extension_version": s.extension_version,
             "current_url": s.current_url,
             "page_type": s.page_type,
@@ -154,6 +392,174 @@ def extension_status(request: Request, db: Session = Depends(get_db)) -> dict:
             "last_heartbeat_at": last.isoformat() if last else None,
         })
     return {"ok": True, "sessions": out, "any_online": any(s["online"] for s in out)}
+
+
+class WorkerBindingIn(BaseModel):
+    actor_user_id: str | None = None
+    backfill: bool = False
+
+
+def _backfill_worker_actor(
+    db: Session,
+    *,
+    worker_id: str,
+    actor_user_id: str,
+    department_code: str,
+) -> dict[str, int]:
+    raw_stmt = (
+        update(RawObservation)
+        .where(RawObservation.worker_id == worker_id)
+        .where(or_(RawObservation.actor_user_id.is_(None), RawObservation.actor_user_id == ""))
+        .values(actor_user_id=actor_user_id, department_code=department_code)
+    )
+    source_stmt = (
+        update(CreatorSource)
+        .where(CreatorSource.worker_id == worker_id)
+        .where(or_(CreatorSource.actor_user_id.is_(None), CreatorSource.actor_user_id == ""))
+        .values(actor_user_id=actor_user_id, department_code=department_code)
+    )
+    raw_result = db.execute(raw_stmt)
+    source_result = db.execute(source_stmt)
+    return {
+        "raw_observations": int(raw_result.rowcount or 0),
+        "creator_sources": int(source_result.rowcount or 0),
+    }
+
+
+def _validate_target_actor(
+    db: Session,
+    request: Request,
+    user: dict,
+    actor_user_id: str | None,
+) -> AppUser | None:
+    is_admin = _is_admin_user(user)
+    current_actor = _actor_id(user)
+    target = str(actor_user_id or "").strip() or (current_actor if not is_admin else None)
+    if not target:
+        if is_admin:
+            return None
+        raise HTTPException(status_code=400, detail="actor_user_id is required")
+    if not is_admin and target != current_actor:
+        raise HTTPException(status_code=403, detail="cannot bind another user")
+
+    actor = db.get(AppUser, target)
+    if actor is None:
+        raise HTTPException(status_code=404, detail="actor user not found")
+    department_code = current_department_code(request)
+    if department_code is not None and normalize_department_code(actor.department_code) != department_code:
+        raise HTTPException(status_code=403, detail="actor user is outside current department")
+    return actor
+
+
+@router.post("/workers/{worker_id}/binding")
+def bind_worker(
+    worker_id: str,
+    body: WorkerBindingIn,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    user = require_current_user(request)
+    if not worker_id.strip():
+        raise HTTPException(status_code=400, detail="worker_id is required")
+    if not _is_admin_user(user) and not body.actor_user_id:
+        body.actor_user_id = _actor_id(user)
+
+    actor = _validate_target_actor(db, request, user, body.actor_user_id)
+    actor_user_id = actor.id if actor else None
+    department_code = normalize_department_code(actor.department_code if actor else current_department_code(request), default=DEFAULT_DEPARTMENT)
+
+    sess = db.scalar(select(ExtensionSession).where(ExtensionSession.worker_id == worker_id))
+    if sess is None:
+        sess = ExtensionSession(
+            id=new_id("ext"),
+            extension_id="manual_binding",
+            worker_id=worker_id,
+            department_code=department_code or DEFAULT_DEPARTMENT,
+            status="offline",
+        )
+        db.add(sess)
+    sess.actor_user_id = actor_user_id
+    if department_code:
+        sess.department_code = department_code
+
+    backfill = {"raw_observations": 0, "creator_sources": 0}
+    if actor_user_id and body.backfill:
+        backfill = _backfill_worker_actor(
+            db,
+            worker_id=worker_id,
+            actor_user_id=actor_user_id,
+            department_code=department_code or DEFAULT_DEPARTMENT,
+        )
+
+    db.commit()
+    return {
+        "ok": True,
+        "worker_id": worker_id,
+        "actor_user_id": actor_user_id,
+        "actor": _actor_summary(actor),
+        "backfill": backfill,
+    }
+
+
+@router.get("/worker-self-bind")
+def worker_self_bind(
+    request: Request,
+    worker_id: str = Query(...),
+    backfill: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Bind a worker_id to the logged-in user, server-side.
+
+    The Cloudflare-bypass upload path POSTs observations to the LAN desktop
+    backend without the usx9.us session cookie, so those uploads cannot say
+    who is collecting. The extension calls this GET against usx9.us while the
+    user is logged into the portal — a GET traverses Cloudflare and carries
+    the cookie — so the worker -> user link is recorded here.
+    `_apply_worker_binding_attribution` then attributes every later cookieless
+    upload that carries this worker_id."""
+    worker_id = (worker_id or "").strip()
+    if not worker_id:
+        raise HTTPException(status_code=400, detail="worker_id is required")
+    user = require_current_user(request)
+    actor_user_id = _actor_id(user)
+    if not actor_user_id:
+        raise HTTPException(status_code=401, detail="login required")
+    if _is_admin_role(user):
+        raise HTTPException(status_code=409, detail="actor_binding_required")
+    actor = _validate_target_actor(db, request, user, actor_user_id)
+    department_code = normalize_department_code(
+        actor.department_code if actor and actor.department_code else current_department_code(request),
+        default=DEFAULT_DEPARTMENT,
+    )
+    sess = db.scalar(select(ExtensionSession).where(ExtensionSession.worker_id == worker_id))
+    if sess is None:
+        sess = ExtensionSession(
+            id=new_id("ext"),
+            extension_id="worker_self_bind",
+            worker_id=worker_id,
+            department_code=department_code,
+            status="offline",
+        )
+        db.add(sess)
+    sess.actor_user_id = actor_user_id
+    if department_code:
+        sess.department_code = department_code
+    backfill_counts = {"raw_observations": 0, "creator_sources": 0}
+    if backfill:
+        backfill_counts = _backfill_worker_actor(
+            db,
+            worker_id=worker_id,
+            actor_user_id=actor_user_id,
+            department_code=department_code or DEFAULT_DEPARTMENT,
+        )
+    db.commit()
+    return {
+        "ok": True,
+        "worker_id": worker_id,
+        "actor_user_id": actor_user_id,
+        "actor": _actor_summary(actor),
+        "backfill": backfill_counts,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -307,10 +713,13 @@ class RunProgressIn(BaseModel):
 
 
 def _serialize_progress(p: ExtensionRunProgress) -> dict:
+    settings_obj = _json_obj(p.settings_json)
     return {
         "id": p.id,
         "department_code": p.department_code,
         "worker_id": p.worker_id,
+        "source": settings_obj.get("source"),
+        "status": settings_obj.get("status") or p.step,
         "keyword": p.keyword,
         "step": p.step,
         "running": bool(p.running),
@@ -328,6 +737,11 @@ def _serialize_progress(p: ExtensionRunProgress) -> dict:
         "current_handle": p.current_handle,
         "current_action": p.current_action,
         "last_error": p.last_error,
+        "hourly_limit": settings_obj.get("hourly_limit"),
+        "hourly_used": settings_obj.get("hourly_used"),
+        "hourly_remaining": settings_obj.get("hourly_remaining"),
+        "next_resume_at": settings_obj.get("next_resume_at"),
+        "settings": settings_obj,
         "settings_json": p.settings_json,
         "queue_json": p.queue_json,
         "recent_leads_json": p.recent_leads_json,
@@ -384,18 +798,30 @@ def push_progress(body: RunProgressIn, request: Request, db: Session = Depends(g
 def get_progress(
     request: Request,
     worker_id: str | None = Query(default=None),
+    actor_user_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> dict:
     department_code = _department_from_request(request)
+    actor_filter = _session_actor_filter(request, actor_user_id)
     if worker_id:
         p = db.scalar(select(ExtensionRunProgress).where(ExtensionRunProgress.worker_id == worker_id))
         if p and p.department_code != department_code:
             p = None
+        if p and actor_filter:
+            sess = db.scalar(select(ExtensionSession).where(ExtensionSession.worker_id == worker_id))
+            if not sess or sess.actor_user_id != actor_filter:
+                p = None
         return {"ok": True, "progress": _serialize_progress(p) if p else None}
     q = select(ExtensionRunProgress)
     where_department = department_where(ExtensionRunProgress, department_code)
     if where_department is not None:
         q = q.where(where_department)
+    if actor_filter:
+        scoped_workers = select(ExtensionSession.worker_id).where(ExtensionSession.actor_user_id == actor_filter)
+        where_session_department = department_where(ExtensionSession, department_code)
+        if where_session_department is not None:
+            scoped_workers = scoped_workers.where(where_session_department)
+        q = q.where(ExtensionRunProgress.worker_id.in_(scoped_workers))
     rows = list(db.scalars(q.order_by(ExtensionRunProgress.updated_at.desc())).all())
     return {"ok": True, "items": [_serialize_progress(r) for r in rows]}
 
@@ -581,14 +1007,22 @@ def launcher_heartbeat(body: dict, request: Request, db: Session = Depends(get_d
         or "tiktok_creator_lead_browser"
     )
     department_code = _department_from_request(request, body.get("department_code"))
+    actor_user_id = _heartbeat_actor_id(db, request, body)
+    actor_row = db.get(AppUser, actor_user_id) if actor_user_id else None
+    if actor_row and actor_row.department_code:
+        department_code = normalize_department_code(actor_row.department_code, default=DEFAULT_DEPARTMENT) or department_code
+    extension_id = body.get("extension_id") or body.get("app") or "tiktok_creator_lead_browser"
 
     # ---- session row (shows up in /extension/status) ----
     sess = db.scalar(select(ExtensionSession).where(ExtensionSession.worker_id == worker_id))
     if sess is None:
-        sess = ExtensionSession(id=new_id("ext"), extension_id=body.get("app") or "tiktok_creator_lead_browser", worker_id=worker_id)
+        sess = ExtensionSession(id=new_id("ext"), extension_id=extension_id, worker_id=worker_id)
         db.add(sess)
-    sess.extension_id = body.get("app") or sess.extension_id
+    sess.extension_id = extension_id or sess.extension_id
     sess.department_code = department_code
+    if actor_user_id:
+        sess.actor_user_id = actor_user_id
+    sess.account_id = body.get("account_id") or settings_obj.get("accountId") or settings_obj.get("account_id") or sess.account_id
     sess.extension_version = body.get("version")
     sess.current_url = active_tab.get("url")
     sess.active_tab_title = active_tab.get("title")
@@ -613,8 +1047,9 @@ def launcher_heartbeat(body: dict, request: Request, db: Session = Depends(get_d
         p = ExtensionRunProgress(id=new_id("rp"), worker_id=worker_id)
         db.add(p)
     p.department_code = department_code
-    p.keyword = settings_obj.get("currentKeyword") or page.get("inferredSearchKeyword") or p.keyword
-    p.running = 1 if run_timer.get("running") else 0
+    p.keyword = body.get("search_keyword") or settings_obj.get("currentKeyword") or settings_obj.get("searchKeyword") or page.get("inferredSearchKeyword") or p.keyword
+    running_value = body.get("running") if isinstance(body.get("running"), bool) else run_timer.get("running")
+    p.running = 1 if running_value else 0
     p.stop_requested = 1 if settings_obj.get("autoStopRequested") else 0
     p.started_at = _coerce_dt(run_timer.get("started_at"))
     p.finished_at = _coerce_dt(run_timer.get("finished_at"))
@@ -622,19 +1057,45 @@ def launcher_heartbeat(body: dict, request: Request, db: Session = Depends(get_d
         p.elapsed_seconds = int(run_timer["elapsed_ms"]) // 1000
     elif p.started_at and not p.finished_at:
         p.elapsed_seconds = int((datetime.now(timezone.utc) - p.started_at.replace(tzinfo=p.started_at.tzinfo or timezone.utc)).total_seconds())
-    p.profiles_visited = int(counts.get("leads", 0)) + int(counts.get("skipped", 0))
-    p.queue_size = int(counts.get("pending", 0))
-    p.profiles_remaining = max(0, int(settings_obj.get("maxProfiles") or 0) - p.profiles_visited)
-    p.leads_saved = int(counts.get("leads", 0))
-    p.skipped = int(counts.get("skipped", 0))
-    if p.running:
+    if body.get("source") == "tiktok_shop":
+        detail_done = int(counts.get("detailDone", 0) or 0)
+        detail_fail = int(counts.get("detailFail", 0) or 0)
+        list_items = int(counts.get("listItems", 0) or 0)
+        p.profiles_visited = detail_done + detail_fail
+        p.queue_size = max(0, list_items - p.profiles_visited)
+        p.profiles_remaining = max(0, int(settings_obj.get("taskCount") or list_items or 0) - p.profiles_visited)
+        p.leads_saved = detail_done
+        p.skipped = detail_fail
+    else:
+        p.profiles_visited = int(counts.get("leads", 0)) + int(counts.get("skipped", 0))
+        p.queue_size = int(counts.get("pending", 0))
+        p.profiles_remaining = max(0, int(settings_obj.get("maxProfiles") or 0) - p.profiles_visited)
+        p.leads_saved = int(counts.get("leads", 0))
+        p.skipped = int(counts.get("skipped", 0))
+    if body.get("status"):
+        p.step = str(body.get("status"))[:40]
+    elif p.running:
         p.step = "running"
     elif p.finished_at:
         p.step = "finished"
     else:
         p.step = "idle"
     latest_log = body.get("latestLog") or {}
-    p.current_action = latest_log.get("message") or latest_log.get("event_type") or body.get("reason") or p.current_action
-    p.settings_json = dumps_json(settings_obj)
+    p.current_handle = body.get("current_handle") or p.current_handle
+    p.current_action = body.get("current_action") or latest_log.get("message") or latest_log.get("event_type") or body.get("reason") or p.current_action
+    p.last_error = body.get("last_error") or p.last_error
+    p.settings_json = dumps_json({
+        **settings_obj,
+        **_status_settings(
+            source=body.get("source"),
+            status=body.get("status"),
+            extension_id=extension_id,
+            account_id=sess.account_id,
+            hourly_limit=body.get("hourly_limit"),
+            hourly_used=body.get("hourly_used"),
+            hourly_remaining=body.get("hourly_remaining"),
+            next_resume_at=body.get("next_resume_at"),
+        ),
+    })
     db.commit()
     return {"ok": True, "session_id": sess.id, "progress_id": p.id}

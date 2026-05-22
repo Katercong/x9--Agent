@@ -125,6 +125,21 @@ def _ensure_schema_columns() -> None:
         _ensure_index(conn, "ix_gmail_accounts_user_id", "gmail_accounts", "user_id")
         _ensure_index(conn, "ix_gmail_accounts_department_code", "gmail_accounts", "department_code")
 
+        _ensure_column(conn, "raw_observations", "actor_user_id", "VARCHAR(120)")
+        _ensure_column_type(conn, "raw_observations", "worker_id", "VARCHAR(120)")
+        _ensure_column_type(conn, "raw_observations", "account_id", "VARCHAR(120)")
+        _ensure_column(conn, "raw_observations", "lead_status", "VARCHAR(60)")
+        _ensure_index(conn, "ix_raw_observations_actor_user_id", "raw_observations", "actor_user_id")
+        _ensure_index(conn, "ix_raw_observations_lead_status", "raw_observations", "lead_status")
+        _ensure_column(conn, "extension_sessions", "actor_user_id", "VARCHAR(120)")
+        _ensure_column_type(conn, "extension_sessions", "worker_id", "VARCHAR(120)")
+        _ensure_column_type(conn, "extension_sessions", "account_id", "VARCHAR(120)")
+        _ensure_index(conn, "ix_extension_sessions_actor_user_id", "extension_sessions", "actor_user_id")
+        _ensure_column_type(conn, "extension_run_progress", "worker_id", "VARCHAR(120)")
+        _ensure_column_type(conn, "extension_commands", "worker_id", "VARCHAR(120)")
+        _ensure_column_type(conn, "creator_sources", "worker_id", "VARCHAR(120)")
+        _ensure_column_type(conn, "creator_sources", "account_id", "VARCHAR(120)")
+
         _set_nulls(conn, "app_sessions", "entry_scope", "workspace")
         _set_nulls(conn, "app_users", "approval_status", "active")
         _set_nulls_typed(conn, "app_users", "must_change_password", 0)
@@ -228,6 +243,12 @@ def _ensure_column(conn, table: str, column: str, sql_type: str) -> None:
     if column in _columns(conn, table):
         return
     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))
+
+
+def _ensure_column_type(conn, table: str, column: str, sql_type: str) -> None:
+    if engine.dialect.name == "sqlite" or column not in _columns(conn, table):
+        return
+    conn.execute(text(f"ALTER TABLE {table} ALTER COLUMN {column} TYPE {sql_type}"))
 
 
 def _ensure_index(conn, index_name: str, table: str, column: str) -> None:
