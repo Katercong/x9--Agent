@@ -1,5 +1,5 @@
 import {
-  Home, Activity, BarChart3, Telescope, Sparkles,
+  Home, BarChart3, Telescope, Sparkles,
   ArrowDownToLine, TrendingUp, Bot, Users, Store, Radar, FileSpreadsheet,
   type LucideIcon,
 } from 'lucide-react';
@@ -24,13 +24,12 @@ export type MenuEntry = MenuItem | MenuGroup;
 export const portalMenu: MenuEntry[] = [
   { key: 'workbench', label: '工作台', to: '/', icon: Home },
   { key: 'business', label: '业务看板', to: '/business', icon: BarChart3 },
-  { key: 'dashboard', label: '系统状态', to: '/dashboard', icon: Activity },
-  { key: 'collection', label: '采集监控', to: '/collection', icon: Telescope },
   {
     key: 'creator-data',
     label: '达人数据采集',
     icon: Users,
     children: [
+      { key: 'collection', label: '采集总览', to: '/collection', icon: Telescope },
       { key: 'collect-shop', label: '采集 · TikTok Shop', to: '/collect-shop', icon: Store },
       { key: 'collect-leads', label: '采集 · X9 线索', to: '/collect-leads', icon: Radar },
       { key: 'collect-import', label: '采集 · 表格导入', to: '/collect-import', icon: FileSpreadsheet },
@@ -45,8 +44,7 @@ export const portalMenu: MenuEntry[] = [
 export const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/': { title: '工作台', subtitle: '待处理事项、采集状态与常用入口' },
   '/business': { title: '业务看板', subtitle: '管理员看公司全量，部门账号看当前部门' },
-  '/dashboard': { title: '系统状态', subtitle: '总体数据口径、采集回传与服务健康度' },
-  '/collection': { title: '采集监控', subtitle: '浏览器扩展实时上传创作者观察记录' },
+  '/collection': { title: '采集总览', subtitle: '插件状态、任务进度与三类达人采集渠道统一入口' },
   '/collect-shop': { title: '采集 · TikTok Shop', subtitle: 'affiliate-us 全自动采集 · 漏斗 / 类目 / 点击达人看详情' },
   '/collect-leads': { title: '采集 · X9 线索', subtitle: 'www.tiktok.com 卡片流 · 联系方式覆盖与趋势' },
   '/collect-import': { title: '采集 · 表格导入', subtitle: 'CSV / XLSX 批量导入 · 国家 / Tier / 质量分布' },

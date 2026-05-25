@@ -138,7 +138,7 @@ export default function Workbench() {
         <section>
           <h3 className="sec-title">常用入口</h3>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <ActionCard icon={Play} title="开始采集" desc="下发插件采集任务" to="/collection" tone="#06b6d4" />
+            <ActionCard icon={Play} title="采集总览" desc="查看插件状态和采集任务" to="/collection" tone="#06b6d4" />
             <ActionCard icon={FileSpreadsheet} title="导入表格" desc="CSV / XLSX 批量入库" to="/collect-import" tone="#f59e0b" />
             <ActionCard icon={Users} title="达人库" desc="推荐池和全部达人统一入口" to="/recommendations" tone="#22c55e" />
             <ActionCard icon={BarChart3} title="业务看板" desc="查看统一业务口径" to="/business" tone="#6366f1" />
@@ -150,7 +150,7 @@ export default function Workbench() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold">采集状态</h3>
               <Link to="/collection" className="chip text-xxs">
-                进入采集监控 <ArrowRight size={11} />
+                进入采集总览 <ArrowRight size={11} />
               </Link>
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -221,7 +221,7 @@ export default function Workbench() {
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-3">
           <SmallSummary icon={Database} label="数据口径" value="/dashboard/department-summary" />
           <SmallSummary icon={Clock} label="生成时间" value={data.generated_at ? new Date(data.generated_at).toLocaleString() : '等待生成'} />
-          <SmallSummary icon={CheckCircle2} label="整理规则" value="业务看板看结果，采集页面看来源，系统状态看健康" />
+          <SmallSummary icon={CheckCircle2} label="整理规则" value="业务看板看结果，达人数据采集看来源和任务状态" />
         </section>
       </div>
     </AsyncState>
