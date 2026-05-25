@@ -1,1 +1,1 @@
-globalThis.X9_BUNDLED_ACTOR_CONFIG = {"ok":true,"source":"download_user","actor_user_id":"user_132272b9946147fd","actor":{"id":"user_132272b9946147fd","username":"testuser","display_name":"testuser01","email":"","role":"department_user","department_code":"cross_border"},"actor_token":"v1.1e1b5108562425b4d83f119485f349f4f2a5c3c1d564a42e16738c32f26d8ed2","downloaded_at":"2026-05-23T04:20:20.827047+00:00"};
+globalThis.X9_BUNDLED_ACTOR_CONFIG = {"ok":false,"source":"extension_source","detail":"download_from_logged_in_portal"};

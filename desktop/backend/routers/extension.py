@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import io
 import json
+import hashlib
+import hmac
+import os
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -35,8 +38,54 @@ ADMIN_ROLES = {"super_admin", "company_admin", "department_admin"}
 _EXTENSION_DIR = Path(__file__).resolve().parents[2] / "chrome-extension"
 
 
+def _extension_actor_token(actor_user_id: str, downloaded_at: str) -> str:
+    secret = (
+        os.getenv("X9_EXTENSION_ACTOR_TOKEN_SECRET")
+        or settings.gmail_token_encryption_key
+        or settings.super_admin_password
+        or settings.app_name
+    )
+    message = f"{actor_user_id}|{downloaded_at}|{settings.app_name}"
+    digest = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"v1.{digest}"
+
+
+def _actor_config_for_user(user: dict | None, *, source: str) -> dict:
+    if not user:
+        return {"ok": False, "source": source, "detail": "login_required"}
+    if _is_admin_role(user):
+        return {"ok": False, "source": source, "detail": "actor_binding_required"}
+    actor = {
+        "id": _actor_id(user),
+        "username": user.get("username") or "",
+        "display_name": user.get("display_name") or "",
+        "email": user.get("email") or "",
+        "role": user.get("role") or "",
+        "department_code": user.get("department_code") or "",
+    }
+    if not actor["id"]:
+        return {"ok": False, "source": source, "detail": "actor_user_id_missing"}
+    downloaded_at = datetime.now(timezone.utc).isoformat()
+    return {
+        "ok": True,
+        "source": source,
+        "actor_user_id": actor["id"],
+        "actor": actor,
+        "actor_token": _extension_actor_token(actor["id"], downloaded_at),
+        "downloaded_at": downloaded_at,
+    }
+
+
+def _actor_config_js(payload: dict) -> str:
+    return (
+        "globalThis.X9_BUNDLED_ACTOR_CONFIG = "
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        + ";\n"
+    )
+
+
 @router.get("/download")
-def download_extension() -> Response:
+def download_extension(request: Request) -> Response:
     """Stream the merged Chrome extension as a zip file for the user to install.
 
     Public (no auth) so anyone with dashboard access can grab it.
@@ -46,6 +95,10 @@ def download_extension() -> Response:
     if not _EXTENSION_DIR.is_dir():
         raise HTTPException(status_code=500, detail=f"extension dir missing: {_EXTENSION_DIR}")
 
+    actor_config = _actor_config_for_user(
+        getattr(request.state, "current_user", None),
+        source="download_user",
+    )
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         for path in sorted(_EXTENSION_DIR.rglob("*")):
@@ -55,7 +108,10 @@ def download_extension() -> Response:
                 # the root). chrome://extensions Load unpacked needs the
                 # manifest.json at the root of the extracted folder.
                 arcname = path.relative_to(_EXTENSION_DIR).as_posix()
-                zf.write(path, arcname)
+                if arcname == "x9_actor_config.js":
+                    zf.writestr(arcname, _actor_config_js(actor_config))
+                else:
+                    zf.write(path, arcname)
 
     buf.seek(0)
     return Response(
@@ -63,8 +119,20 @@ def download_extension() -> Response:
         media_type="application/zip",
         headers={
             "Content-Disposition": 'attachment; filename="x9-tk-creator-extension.zip"',
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+            "Vary": "Cookie",
         },
     )
+
+
+@router.get("/actor-config")
+def actor_config(request: Request) -> dict:
+    user = require_current_user(request)
+    payload = _actor_config_for_user(user, source="portal_user")
+    if not payload.get("ok"):
+        raise HTTPException(status_code=409, detail=payload.get("detail") or "actor_binding_required")
+    return payload
 
 
 # ---------------------------------------------------------------------------
