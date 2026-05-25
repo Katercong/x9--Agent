@@ -11,6 +11,7 @@ from ..models.creator import Creator
 from ..models.creator_source import CreatorSource
 from ..models.raw_observation import RawObservation
 from ..services.departments import department_where
+from ..utils import stats_cache
 from ..utils.json_utils import loads_json_list
 from ..utils.source_classify import (
     SOURCE_OTHER as SRC_OTHER,
@@ -23,6 +24,7 @@ from ..utils.source_classify import (
 UNASSIGNED_ACTOR = "__unassigned__"
 SOURCE_KEYS = (SRC_SHOP, SRC_X9_LEADS, SRC_TABLE_IMPORT, SRC_OTHER)
 SOURCE_VIDEO_SEED_PATTERN = '%"lead_status":"source_video_seen"%'
+STATS_CACHE_TTL_SECONDS = 60.0
 
 
 def _iso_or_text(value: Any) -> str | None:
@@ -272,7 +274,7 @@ def _source_ingested_raw_ids(
     return ids
 
 
-def get_source_stats(
+def _compute_source_stats(
     db: Session,
     *,
     department_code: str | None,
@@ -363,6 +365,48 @@ def get_source_stats(
     }
 
 
+def get_source_stats(
+    db: Session,
+    *,
+    department_code: str | None,
+    actor_filter: str | None,
+    days: int = 7,
+) -> dict[str, Any]:
+    days = max(1, min(int(days or 7), 90))
+    return stats_cache.get_or_compute(
+        "collector_source_stats",
+        (department_code or "__all__", actor_filter or "__all__", days),
+        lambda: _compute_source_stats(
+            db,
+            department_code=department_code,
+            actor_filter=actor_filter,
+            days=days,
+        ),
+        ttl_seconds=STATS_CACHE_TTL_SECONDS,
+    )
+
+
+def refresh_source_stats(
+    db: Session,
+    *,
+    department_code: str | None,
+    actor_filter: str | None,
+    days: int = 7,
+) -> None:
+    days = max(1, min(int(days or 7), 90))
+    stats_cache.refresh(
+        "collector_source_stats",
+        (department_code or "__all__", actor_filter or "__all__", days),
+        lambda: _compute_source_stats(
+            db,
+            department_code=department_code,
+            actor_filter=actor_filter,
+            days=days,
+        ),
+        ttl_seconds=STATS_CACHE_TTL_SECONDS * 2,
+    )
+
+
 def _iter_actor_raw_rows(db: Session, actor_ids: set[str], department_code: str | None):
     if not actor_ids:
         return []
@@ -382,7 +426,7 @@ def _iter_actor_raw_rows(db: Session, actor_ids: set[str], department_code: str 
     return db.execute(q).all()
 
 
-def get_actor_collection_stats_map(
+def _compute_actor_collection_stats_map(
     db: Session,
     actor_ids: Iterable[str],
     *,
@@ -486,6 +530,40 @@ def get_actor_collection_stats_map(
         )
 
     return out
+
+
+def get_actor_collection_stats_map(
+    db: Session,
+    actor_ids: Iterable[str],
+    *,
+    department_code: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    ids = tuple(sorted(str(actor_id or "").strip() for actor_id in actor_ids if str(actor_id or "").strip()))
+    if not ids:
+        return {}
+    return stats_cache.get_or_compute(
+        "collector_actor_stats",
+        (department_code or "__all__", ids),
+        lambda: _compute_actor_collection_stats_map(db, ids, department_code=department_code),
+        ttl_seconds=STATS_CACHE_TTL_SECONDS,
+    )
+
+
+def refresh_actor_collection_stats_map(
+    db: Session,
+    actor_ids: Iterable[str],
+    *,
+    department_code: str | None = None,
+) -> None:
+    ids = tuple(sorted(str(actor_id or "").strip() for actor_id in actor_ids if str(actor_id or "").strip()))
+    if not ids:
+        return
+    stats_cache.refresh(
+        "collector_actor_stats",
+        (department_code or "__all__", ids),
+        lambda: _compute_actor_collection_stats_map(db, ids, department_code=department_code),
+        ttl_seconds=STATS_CACHE_TTL_SECONDS * 2,
+    )
 
 
 def get_actor_collection_stats(

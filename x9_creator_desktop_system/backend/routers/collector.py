@@ -343,10 +343,14 @@ def observations_feed(
     department_code = current_department_code(request)
     where_department = department_where(RawObservation, department_code)
     ts = func.coalesce(RawObservation.collected_at, RawObservation.created_at)
+    want = (source or "all").lower().strip()
+    plat = platform.lower() if platform else None
     light_q = select(RawObservation.id, RawObservation.platform, RawObservation.source)
     if where_department is not None:
         light_q = light_q.where(where_department)
     light_q = _exclude_source_video_seed_rows(light_q)
+    if plat:
+        light_q = light_q.where(func.lower(RawObservation.platform) == plat)
     start, end = _date_bounds(date_from, date_to)
     if start is not None:
         light_q = light_q.where(ts >= start)
@@ -354,21 +358,26 @@ def observations_feed(
         light_q = light_q.where(ts <= end)
     light_q = light_q.order_by(ts.desc(), RawObservation.id.desc())
 
-    want = (source or "all").lower().strip()
-    plat = platform.lower() if platform else None
     ordered_ids: list[str] = []
     bucket_by_id: dict[str, str] = {}
-    for oid, p, s in db.execute(light_q).all():
-        bucket = _classify(p, s)
-        if want not in ("all", "", bucket):
-            continue
-        if plat and (p or "").lower() != plat:
-            continue
-        ordered_ids.append(oid)
-        bucket_by_id[oid] = bucket
-
-    total = len(ordered_ids)
-    page_ids = ordered_ids[offset:offset + limit]
+    can_page_in_db = want in ("all", "") or (want == SRC_SHOP and plat == "tiktok_shop")
+    if can_page_in_db:
+        total = int(db.scalar(select(func.count()).select_from(light_q.order_by(None).subquery())) or 0)
+        for oid, p, s in db.execute(light_q.limit(limit).offset(offset)).all():
+            ordered_ids.append(oid)
+            bucket_by_id[oid] = _classify(p, s)
+        page_ids = ordered_ids
+    else:
+        for oid, p, s in db.execute(light_q).all():
+            bucket = _classify(p, s)
+            if want not in ("all", "", bucket):
+                continue
+            if plat and (p or "").lower() != plat:
+                continue
+            ordered_ids.append(oid)
+            bucket_by_id[oid] = bucket
+        total = len(ordered_ids)
+        page_ids = ordered_ids[offset:offset + limit]
     items: list[dict] = []
     if page_ids:
         full = {
