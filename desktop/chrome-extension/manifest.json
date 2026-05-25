@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "TikTok Creator Lead Browser",
-    "version": "2.3",
+    "version": "2.14",
     "description": "Collect TikTok creator + TikTok Shop creator leads. Auto-run scrapes affiliate-us list pages and detail pages, uploads to https://usx9.us, and relays to the X9 dashboard.",
     "permissions": [
         "activeTab",

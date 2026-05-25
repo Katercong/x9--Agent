@@ -5,15 +5,20 @@ const X9_API_BASE_ACTIVE_KEY = "x9_api_base_active";  // last-known-good
 const X9_HEARTBEAT_ALARM = "x9-relay-heartbeat";
 const X9_COMMAND_ALARM = "x9-dashboard-commands";
 const X9_DASHBOARD_COMMAND_MESSAGE = "X9_DASHBOARD_COMMAND";
+const X9_STABLE_WORKER_ID_KEY = "x9StableWorkerId";
+const X9_SHOP_STABLE_WORKER_ID_KEY = "x9ShopStableWorkerId";
+const X9_LAST_HEARTBEAT_KEY = "x9LastHeartbeat";
+const X9_ACTOR_CONFIG_OVERRIDE_KEY = "x9ActorConfigOverride";
+const X9_USX9_BASE = "https://usx9.us";
 const X9_LEGACY_WORKER_IDS = [
   "tiktok_creator_lead_browser_1_0_19",
   "tiktok_shop_creator_lead_browser_2_2",
 ];
 
-// Candidates tried in order when no user override is set. Whichever responds
-// first to a heartbeat becomes the cached "active" base.
+// New collection traffic must go to usx9.us so the backend can resolve the
+// logged-in portal user and attach actor_user_id consistently.
 const X9_API_BASE_CANDIDATES = [
-  "https://usx9.us",
+  X9_USX9_BASE,
 ];
 
 function joinPath(base, path) {
@@ -69,6 +74,74 @@ async function setActiveApiBase(base) {
   await chrome.storage.local.set({ [X9_API_BASE_ACTIVE_KEY]: base });
 }
 
+async function x9BuildAuthHeaders(headers) {
+  return Object.assign({}, headers || {});
+}
+
+function x9ActorFromUser(user) {
+  if (!user) return null;
+  const id = String(user.id || user.identity || "").trim();
+  if (!id) return null;
+  return {
+    id,
+    username: user.username || "",
+    display_name: user.display_name || user.name || "",
+    email: user.email || "",
+    role: user.role || "",
+    department_code: user.department_code || "",
+  };
+}
+
+async function x9ResolveActorIdentity() {
+  const config = await x9GetActorConfig();
+  return x9ActorFromUser(config.actor);
+}
+
+function x9AttachActorIdentity(payload, actor) {
+  if (!payload) return payload;
+  const config = x9BundledActorConfig();
+  const bundledActor = actor || x9ActorFromUser(config.actor);
+  if (bundledActor && bundledActor.id) {
+    payload.actor_user_id = bundledActor.id;
+    payload.actor = bundledActor;
+  }
+  if (config.actor_token) {
+    payload.actor_token = config.actor_token;
+    payload.actor_downloaded_at = config.downloaded_at || "";
+  }
+  return payload;
+}
+
+function x9BundledActorConfig() {
+  return x9NormalizeActorConfig(globalThis.X9_ACTIVE_ACTOR_CONFIG)
+    || x9NormalizeActorConfig(globalThis.X9_BUNDLED_ACTOR_CONFIG)
+    || {};
+}
+
+async function x9GetActorConfig() {
+  const stored = await chrome.storage.local.get([X9_ACTOR_CONFIG_OVERRIDE_KEY]).catch(() => ({}));
+  const config = x9NormalizeActorConfig(stored[X9_ACTOR_CONFIG_OVERRIDE_KEY])
+    || x9NormalizeActorConfig(globalThis.X9_BUNDLED_ACTOR_CONFIG)
+    || null;
+  globalThis.X9_ACTIVE_ACTOR_CONFIG = config;
+  return config || {};
+}
+
+function x9NormalizeActorConfig(config) {
+  if (!config || config.ok === false) return null;
+  const actor = x9ActorFromUser(config.actor);
+  const actorToken = String(config.actor_token || "").trim();
+  const downloadedAt = String(config.downloaded_at || config.actor_downloaded_at || "").trim();
+  if (!actor || !actor.id || !actorToken || !downloadedAt) return null;
+  return Object.assign({}, config, {
+    ok: true,
+    actor_user_id: actor.id,
+    actor,
+    actor_token: actorToken,
+    downloaded_at: downloadedAt,
+  });
+}
+
 async function getCandidateOrder() {
   const stored = await getStoredApiBase();
   const override = allowedApiBase(stored.override);
@@ -89,6 +162,8 @@ async function getCandidateOrder() {
   return ordered;
 }
 
+// New upload traffic is intentionally pinned to usx9.us so user attribution
+// comes from the portal session, not a local/LAN bypass.
 function allowedApiBase(base) {
   const normalized = normalizeApiBase(base);
   if (!normalized) return "";
@@ -103,6 +178,44 @@ function allowedApiBase(base) {
   }
   chrome.storage.local.remove([X9_API_BASE_KEY, X9_API_BASE_ACTIVE_KEY]).catch(() => undefined);
   return "";
+}
+
+async function ensureX9LeadWorkerIdentity() {
+  return ensureStableWorkerIdentity(X9_STABLE_WORKER_ID_KEY, "x9_leads");
+}
+
+async function ensureX9ShopWorkerIdentity() {
+  return ensureStableWorkerIdentity(X9_SHOP_STABLE_WORKER_ID_KEY, "tiktok_shop");
+}
+
+const stableWorkerIdentityPromises = {};
+
+async function ensureStableWorkerIdentity(storageKey, prefixName) {
+  if (!stableWorkerIdentityPromises[storageKey]) {
+    stableWorkerIdentityPromises[storageKey] = (async () => {
+      const extensionId = runtimeExtensionId();
+      const prefix = `${prefixName}_${extensionId}_`;
+      const stored = await chrome.storage.local.get([storageKey]).catch(() => ({}));
+      let workerId = String(stored[storageKey] || "").trim();
+      if (!workerId.startsWith(prefix)) {
+        workerId = `${prefix}${createStableUuid()}`;
+        await chrome.storage.local.set({ [storageKey]: workerId }).catch(() => undefined);
+      }
+      return { extensionId, workerId, accountId: workerId };
+    })();
+  }
+  return stableWorkerIdentityPromises[storageKey];
+}
+
+function runtimeExtensionId() {
+  return String(chrome?.runtime?.id || "unknown_extension").trim() || "unknown_extension";
+}
+
+function createStableUuid() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -148,16 +261,19 @@ async function relayCurrentState(reason) {
 
 async function relayState(rawState, reason) {
   const state = normalizeX9State(rawState);
-  const ingestBatch = await collectNewIngestItems(state);
+  const identity = await ensureX9LeadWorkerIdentity();
+  const actor = await x9ResolveActorIdentity();
+  const ingestBatch = await collectNewIngestItems(state, identity);
   if (ingestBatch.items.length > 0) {
     const base = await resolveApiBase();
     if (base) {
+      ingestBatch.items.forEach((item) => x9AttachActorIdentity(item, actor));
       await postJson(joinPath(base, "/api/local/extension/x9-compat/ingest-creators"),
-                     { items: ingestBatch.items, time: new Date().toISOString() });
+                     { items: ingestBatch.items, actor_user_id: actor?.id || null, actor, time: new Date().toISOString() });
       await markRelayedKeys(ingestBatch.keys);
     }
   }
-  await postHeartbeat(state, reason);
+  await postHeartbeat(state, reason, identity, actor);
 }
 
 // Walk the candidate list and return the first base where the heartbeat
@@ -179,14 +295,14 @@ async function resolveApiBase() {
   return null;
 }
 
-async function collectNewIngestItems(state) {
+async function collectNewIngestItems(state, identity) {
   const stored = await chrome.storage.local.get([X9_RELAYED_KEYS]);
   const relayed = new Set(Array.isArray(stored[X9_RELAYED_KEYS]) ? stored[X9_RELAYED_KEYS] : []);
   const nextKeys = new Set(relayed);
   const items = [];
 
   for (const lead of state.leads) {
-    const item = buildLeadIngestItem(lead);
+    const item = buildLeadIngestItem(lead, identity);
     const key = buildRelayKey(item);
     if (item && key && !relayed.has(key)) {
       items.push(item);
@@ -195,7 +311,7 @@ async function collectNewIngestItems(state) {
   }
 
   for (const skipped of state.skippedProfiles) {
-    const item = buildSkippedIngestItem(skipped);
+    const item = buildSkippedIngestItem(skipped, identity);
     const key = buildRelayKey(item);
     if (item && key && !relayed.has(key)) {
       items.push(item);
@@ -210,7 +326,7 @@ async function markRelayedKeys(keys) {
   await chrome.storage.local.set({ [X9_RELAYED_KEYS]: keys });
 }
 
-function buildLeadIngestItem(lead) {
+function buildLeadIngestItem(lead, identity) {
   const handle = normalizeHandle(lead.username) || handleFromUrl(lead.profile_url);
   if (!handle) {
     return null;
@@ -220,6 +336,9 @@ function buildLeadIngestItem(lead) {
     platform: "tiktok",
     profile_url: lead.profile_url || `https://www.tiktok.com/@${encodeURIComponent(handle)}`,
     display_name: lead.nickname || handle,
+    extension_id: identity.extensionId,
+    worker_id: identity.workerId,
+    account_id: identity.accountId,
     bio: lead.bio || "",
     followers: numericFollowerCount(lead.followers_count, lead.followers_raw),
     followers_raw: lead.followers_raw || "",
@@ -242,7 +361,7 @@ function buildLeadIngestItem(lead) {
   return item;
 }
 
-function buildSkippedIngestItem(skipped) {
+function buildSkippedIngestItem(skipped, identity) {
   const handle = normalizeHandle(skipped.username) || handleFromUrl(skipped.profile_url);
   if (!handle) {
     return null;
@@ -253,6 +372,9 @@ function buildSkippedIngestItem(skipped) {
     platform: "tiktok",
     profile_url: skipped.profile_url || `https://www.tiktok.com/@${encodeURIComponent(handle)}`,
     display_name: skipped.nickname || skipped.username || handle,
+    extension_id: identity.extensionId,
+    worker_id: identity.workerId,
+    account_id: identity.accountId,
     bio: skipped.bio || "",
     followers: numericFollowerCount(skipped.followers_count, skipped.followers_raw),
     followers_raw: skipped.followers_raw || "",
@@ -288,7 +410,7 @@ function buildRelayKey(item) {
   ].join("|").toLowerCase();
 }
 
-async function postHeartbeat(state, reason) {
+async function postHeartbeat(state, reason, identity, actor) {
   const activeTab = await getActiveTab();
   const page = classifyPage(activeTab?.url || "");
   const autoSettings = state.settings.autoSettings || {};
@@ -299,12 +421,32 @@ async function postHeartbeat(state, reason) {
     ...leadFilters,
   };
   const pending = state.pendingProfiles.filter((item) => !item.handled).length;
+  const latestLog = state.taskLogs[state.taskLogs.length - 1] || {};
+  const running = Boolean(state.runTimer?.running);
+  const pendingProfile = state.pendingProfiles.find((item) => item && !item.handled) || {};
+  const currentHandle = normalizeHandle(pendingProfile.username) || handleFromUrl(pendingProfile.profile_url) || null;
+  const currentAction = latestLog.message || latestLog.event_type || reason || (running ? "running" : "idle");
   const payload = {
     app: "tiktok-creator-lead-browser",
     version: chrome.runtime.getManifest().version,
-    source: "x9_relay",
+    source: "x9_leads",
     reason,
+    extension_id: identity.extensionId,
     extensionId: chrome.runtime.id,
+    worker_id: identity.workerId,
+    account_id: identity.accountId,
+    actor_user_id: actor?.id || null,
+    actor: actor || null,
+    status: running ? "running" : "idle",
+    running,
+    current_action: currentAction,
+    current_handle: currentHandle,
+    search_keyword: settings.currentKeyword || page.inferredSearchKeyword || "",
+    hourly_limit: null,
+    hourly_used: null,
+    hourly_remaining: null,
+    next_resume_at: null,
+    last_error: state.lastError || "",
     time: new Date().toISOString(),
     activeTab: {
       id: activeTab?.id || null,
@@ -322,13 +464,43 @@ async function postHeartbeat(state, reason) {
     },
     runTimer: state.runTimer,
     settings,
-    latestLog: state.taskLogs[state.taskLogs.length - 1] || {},
+    latestLog,
   };
+  x9AttachActorIdentity(payload, actor);
   const base = await resolveApiBase();
-  if (!base) return;  // No backend reachable — bail until next alarm.
+  if (!base) {
+    await chrome.storage.local.set({
+      [X9_LAST_HEARTBEAT_KEY]: {
+        ok: false,
+        status: 0,
+        detail: "backend_unreachable",
+        at: new Date().toISOString(),
+        actor_user_id: payload.actor_user_id || null,
+      },
+    }).catch(() => undefined);
+    return;
+  }
   try {
-    await postJson(joinPath(base, "/api/local/extension/launcher-heartbeat"), payload);
+    const result = await postJsonWithStatus(joinPath(base, "/api/local/extension/launcher-heartbeat"), payload);
+    await chrome.storage.local.set({
+      [X9_LAST_HEARTBEAT_KEY]: {
+        ok: true,
+        status: result.status,
+        detail: "",
+        at: new Date().toISOString(),
+        actor_user_id: payload.actor_user_id || null,
+      },
+    }).catch(() => undefined);
   } catch (e) {
+    await chrome.storage.local.set({
+      [X9_LAST_HEARTBEAT_KEY]: {
+        ok: false,
+        status: Number(e && e.status) || 0,
+        detail: String((e && e.detail) || (e && e.message) || e || "heartbeat_failed"),
+        at: new Date().toISOString(),
+        actor_user_id: payload.actor_user_id || null,
+      },
+    }).catch(() => undefined);
     // If the previously-active base fails, clear it so the next call retries
     // the full candidate list.
     await chrome.storage.local.remove(X9_API_BASE_ACTIVE_KEY);
@@ -339,7 +511,7 @@ async function pollDashboardCommands() {
   const base = await resolveApiBase();
   if (!base) return;
 
-  for (const workerId of getCommandWorkerIds()) {
+  for (const workerId of await getCommandWorkerIds()) {
     let data = null;
     try {
       const url = joinPath(
@@ -359,8 +531,15 @@ async function pollDashboardCommands() {
   }
 }
 
-function getCommandWorkerIds() {
-  const ids = [chrome.runtime.id, ...X9_LEGACY_WORKER_IDS]
+async function getCommandWorkerIds() {
+  const leadIdentity = await ensureX9LeadWorkerIdentity().catch(() => null);
+  const shopIdentity = await ensureX9ShopWorkerIdentity().catch(() => null);
+  const ids = [
+    leadIdentity?.workerId,
+    shopIdentity?.workerId,
+    chrome.runtime.id,
+    ...X9_LEGACY_WORKER_IDS,
+  ]
     .map((id) => String(id || "").trim())
     .filter(Boolean);
   return Array.from(new Set(ids));
@@ -471,7 +650,7 @@ function sendExtensionMessage(message) {
 }
 
 async function getJson(url) {
-  const response = await fetch(url, { method: "GET" });
+  const response = await fetch(url, { method: "GET", credentials: "include" });
   if (!response.ok) {
     throw new Error(`GET ${url} failed with ${response.status}`);
   }
@@ -515,15 +694,41 @@ function inferKeywordFromUrl(url) {
 }
 
 async function postJson(url, body) {
+  const result = await postJsonWithStatus(url, body);
+  return result.body;
+}
+
+async function postJsonWithStatus(url, body) {
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    headers: await x9BuildAuthHeaders({ "Content-Type": "application/json", "X-X9-Submit-Only": "1" }),
     body: JSON.stringify(body),
   });
+  const parsed = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(`POST ${url} failed with ${response.status}`);
+    const error = new Error(`POST ${url} failed with ${response.status}`);
+    error.status = response.status;
+    error.detail = x9ResponseDetail(parsed, `HTTP ${response.status}`);
+    error.body = parsed;
+    throw error;
   }
-  return response.json().catch(() => ({}));
+  return { status: response.status, body: parsed };
+}
+
+function x9ResponseDetail(body, fallback) {
+  const raw = body && (body.detail || body.error || body.message);
+  if (typeof raw === "string") {
+    return raw;
+  }
+  if (raw) {
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return String(raw);
+    }
+  }
+  return fallback || "";
 }
 
 function sleep(milliseconds) {
