@@ -15,6 +15,7 @@ class ExtensionSession(Base):
     extension_id: Mapped[str] = mapped_column(String(120), index=True)
     extension_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
     department_code: Mapped[str] = mapped_column(String(40), default="cross_border", index=True)
+    actor_user_id: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
     worker_id: Mapped[str] = mapped_column(String(80), index=True)
     account_id: Mapped[str | None] = mapped_column(String(80), index=True, nullable=True)
     browser_profile: Mapped[str | None] = mapped_column(String(120), nullable=True)
