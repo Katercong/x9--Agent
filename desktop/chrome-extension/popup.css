@@ -20,6 +20,93 @@ main.app { display: flex; flex-direction: column; gap: 12px; }
 }
 .lang-toggle:hover { background: #f9fafb; filter: brightness(0.97); }
 
+/* ============== Download-bound identity ============== */
+.identity-card {
+  background: #fff;
+  border: 1px solid #d9dee7;
+  border-left: 4px solid #64748b;
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.identity-card[data-state="ok"] { border-left-color: #059669; }
+.identity-card[data-state="checking"] { border-left-color: #2563eb; }
+.identity-card[data-state="warn"] { border-left-color: #d97706; }
+.identity-card[data-state="error"] { border-left-color: #dc2626; background: #fff7f7; }
+.identity-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.identity-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.identity-label {
+  font-size: 10px;
+  line-height: 1;
+  color: #6b7280;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.identity-copy strong {
+  color: #111827;
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.identity-pill {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+  background: #e5e7eb;
+  color: #374151;
+}
+.identity-card[data-state="ok"] .identity-pill { background: #dcfce7; color: #047857; }
+.identity-card[data-state="checking"] .identity-pill { background: #dbeafe; color: #1d4ed8; }
+.identity-card[data-state="warn"] .identity-pill { background: #fef3c7; color: #92400e; }
+.identity-card[data-state="error"] .identity-pill { background: #fee2e2; color: #b91c1c; }
+.identity-meta,
+.identity-message {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.identity-meta { color: #6b7280; }
+.identity-message { color: #4b5563; }
+.identity-card[data-state="error"] .identity-message { color: #b91c1c; font-weight: 600; }
+.identity-card[data-state="warn"] .identity-message { color: #92400e; }
+.identity-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 8px;
+}
+.identity-action {
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #374151;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.identity-action.primary {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+.identity-action:hover:not(:disabled) { filter: brightness(0.96); }
+.identity-action:disabled { opacity: 0.55; cursor: not-allowed; }
+
 /* ============== Auto-card ============== */
 .auto-card {
   background: #fff; border: 1px solid #e0e3e8; border-radius: 10px;

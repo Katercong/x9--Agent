@@ -22,6 +22,8 @@
   const HOST_SELLER = /(^|\.)seller-us\.tiktok\.com$/i;
   const LIST_PATH = /\/connection\/creator(?:\/?$|\/?\?)/i;
   const DETAIL_PATH = /\/connection\/creator\/detail/i;
+  const DETAIL_VISIBLE_TEXT_LIMIT = 60000;
+  const DETAIL_LINK_LIMIT = 120;
   const SECTION_NAMES = [
     "Sales", "Video", "LIVE", "Followers", "Trends", "Rating", "Audience",
     "Example videos", "All videos", "Top brands", "Brand collaborations",
@@ -273,7 +275,6 @@
   }
 
   function buildDetailObservation(expectedHandle) {
-    const rawDomHtml = trimTo((document.documentElement && document.documentElement.outerHTML) || "", 1500000);
     const fullVisibleText = visibleText(document.body);
     const identityText = truncateAtSimilarSection(fullVisibleText);
     const lines = textLines(identityText);
@@ -310,9 +311,10 @@
           page_type: "creator_detail",
           captured_at: new Date().toISOString(),
           links: collectRawLinks(),
+          raw_dom_omitted: true,
         },
-        raw_visible_text: trimTo(fullVisibleText, 300000),
-        raw_dom_html: rawDomHtml,
+        raw_visible_text: trimTo(fullVisibleText, DETAIL_VISIBLE_TEXT_LIMIT),
+        raw_dom_omitted: true,
       },
       lead_status: "shop_profile_collected",
       collected_at: new Date().toISOString(),
@@ -322,7 +324,7 @@
   function collectRawLinks() {
     return uniqueStrings(Array.from(document.querySelectorAll("a[href]"))
       .map((a) => absolutize(a.getAttribute("href") || ""))
-      .filter(Boolean)).slice(0, 300);
+      .filter(Boolean)).slice(0, DETAIL_LINK_LIMIT);
   }
 
   function truncateAtSimilarSection(text) {

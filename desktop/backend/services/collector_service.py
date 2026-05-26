@@ -88,6 +88,7 @@ def ingest_observation(
 
     platform = (payload.get("platform") or "tiktok").lower()
     department_code = normalize_department_code(payload.get("department_code"), default=DEFAULT_DEPARTMENT)
+    actor_user_id = str(payload.get("actor_user_id") or "").strip() or None
     collected_at = _parse_dt(payload.get("collected_at")) or datetime.now()
     raw_blob = dumps_json(payload)
     cid = creator_id_for(platform, handle) if handle else None
@@ -113,9 +114,11 @@ def ingest_observation(
             platform=platform,
             department_code=department_code,
             source=payload.get("source") or "chrome_extension",
+            actor_user_id=actor_user_id,
             worker_id=payload.get("worker_id"),
             account_id=payload.get("account_id"),
             search_keyword=payload.get("search_keyword"),
+            lead_status=payload.get("lead_status"),
             raw_json=raw_blob,
             content_hash=content_hash(raw_blob),
             collected_at=collected_at,
@@ -164,6 +167,7 @@ def ingest_observation(
         db,
         creator,
         source_type=canonical_source_type(payload.get("platform"), payload.get("source") or "chrome_extension"),
+        actor_user_id=actor_user_id,
         raw_observation_id=observation_id,
         worker_id=payload.get("worker_id"),
         account_id=payload.get("account_id"),

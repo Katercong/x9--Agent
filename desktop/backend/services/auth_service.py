@@ -6,9 +6,10 @@ import os
 import re
 import secrets
 from datetime import datetime, timedelta
+from collections import defaultdict
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import DateTime as SQLDateTime, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -19,6 +20,7 @@ from ..models.creator import Creator
 from ..models.gmail_account import GmailAccount
 from ..models.outreach_email import OutreachEmail
 from ..models.raw_observation import RawObservation
+from ..utils import stats_cache
 from ..utils.id_utils import new_id
 from .departments import DEFAULT_DEPARTMENT, DEPARTMENTS, department_slug, normalize_department_code
 
@@ -335,72 +337,154 @@ def _empty_user_stats() -> dict[str, Any]:
     }
 
 
-def _user_activity_stats(db: Session, users: list[AppUser]) -> dict[str, dict[str, Any]]:
+STATS_CACHE_TTL_SECONDS = 60.0
+
+
+def _user_activity_stats_cache_key(users: list[AppUser]) -> tuple:
+    return tuple(
+        sorted(
+            (
+                user.id,
+                normalize_role(user.role),
+                normalize_department_code(user.department_code, default=None),
+                user.username or "",
+                user.email or "",
+                user.display_name or "",
+            )
+            for user in users
+        )
+    )
+
+
+def _compute_user_activity_stats(db: Session, users: list[AppUser]) -> dict[str, dict[str, Any]]:
     if not users:
         return {}
     today = datetime.now().date()
+    today_start = datetime.combine(today, datetime.min.time())
     raw_company = {"total": 0, "today": 0}
     raw_by_dept: dict[str, dict[str, int]] = {}
-    raw_rows = db.execute(select(RawObservation.department_code, RawObservation.created_at, RawObservation.collected_at)).all()
-    for department_code, created_at, collected_at in raw_rows:
-        day = _as_date(collected_at) or _as_date(created_at)
-        is_today = day == today
-        raw_company["total"] += 1
-        if is_today:
-            raw_company["today"] += 1
+    ts = func.coalesce(RawObservation.collected_at, RawObservation.created_at)
+    dialect = db.bind.dialect.name if db.bind else ""
+    today_ts = func.cast(ts, SQLDateTime) if dialect.startswith("postgresql") else ts
+    raw_rows = db.execute(
+        select(
+            RawObservation.department_code,
+            func.count(RawObservation.id),
+            func.coalesce(func.sum(case((today_ts >= today_start, 1), else_=0)), 0),
+        ).group_by(RawObservation.department_code)
+    ).all()
+    for department_code, total, today_count in raw_rows:
+        total_int = int(total or 0)
+        today_int = int(today_count or 0)
+        raw_company["total"] += total_int
+        raw_company["today"] += today_int
         dept = normalize_department_code(department_code, default=DEFAULT_DEPARTMENT) or DEFAULT_DEPARTMENT
         bucket = raw_by_dept.setdefault(dept, {"total": 0, "today": 0})
-        bucket["total"] += 1
-        if is_today:
-            bucket["today"] += 1
-
-    creators = list(db.scalars(select(Creator)).all())
-    outreach_rows = list(db.scalars(select(OutreachEmail)).all())
+        bucket["total"] += total_int
+        bucket["today"] += today_int
 
     out: dict[str, dict[str, Any]] = {}
     for user in users:
         role = normalize_role(user.role)
-        aliases = _user_aliases(user)
         stats = _empty_user_stats()
         if role in COMPANY_WIDE_ROLES and not user.department_code:
             stats["collection"] = {"scope": "company", **raw_company}
         else:
             dept = normalize_department_code(user.department_code, default=DEFAULT_DEPARTMENT) or DEFAULT_DEPARTMENT
             stats["collection"] = {"scope": "department", **raw_by_dept.get(dept, {"total": 0, "today": 0})}
-
-        owned_creators = [c for c in creators if _matches_user_alias(c.owner_bd, aliases)]
-        owned_ids = {c.id for c in owned_creators}
-        stats["creators"]["owned"] = len(owned_creators)
-        stats["creators"]["pending_contact"] = sum(
-            1 for c in owned_creators if _norm_stat_key(c.current_status) in {_norm_stat_key(v) for v in PENDING_CONTACT_STATUSES}
-        )
-        stats["creators"]["contacted"] = sum(
-            1 for c in owned_creators if _norm_stat_key(c.current_status) in {_norm_stat_key(v) for v in CONTACTED_CREATOR_STATUSES}
-        )
-
-        user_outreach = []
-        for email in outreach_rows:
-            if _matches_user_alias(email.created_by, aliases):
-                user_outreach.append(email)
-            elif not email.created_by and email.creator_id in owned_ids:
-                user_outreach.append(email)
-        stats["outreach"]["total"] = len(user_outreach)
-        for email in user_outreach:
-            status = _norm_stat_key(email.status)
-            if status == "draft":
-                stats["outreach"]["drafts"] += 1
-            elif status == "queued":
-                stats["outreach"]["queued"] += 1
-            elif status == "sent":
-                stats["outreach"]["sent"] += 1
-            elif status == "failed":
-                stats["outreach"]["failed"] += 1
-            elif status == "cancelled":
-                stats["outreach"]["cancelled"] += 1
-        latest = max((email.sent_at or email.created_at for email in user_outreach if (email.sent_at or email.created_at)), default=None)
-        stats["outreach"]["last_at"] = _as_iso(latest)
         out[user.id] = stats
+
+    alias_to_user_ids: dict[str, set[str]] = defaultdict(set)
+    for user in users:
+        for alias in _user_aliases(user):
+            alias_to_user_ids[alias].add(user.id)
+
+    pending_statuses = {_norm_stat_key(v) for v in PENDING_CONTACT_STATUSES}
+    contacted_statuses = {_norm_stat_key(v) for v in CONTACTED_CREATOR_STATUSES}
+    creator_owner_user_ids: dict[str, set[str]] = defaultdict(set)
+    creator_rows = db.execute(select(Creator.id, Creator.owner_bd, Creator.current_status)).all()
+    for creator_id, owner_bd, current_status in creator_rows:
+        owner_user_ids = alias_to_user_ids.get(_norm_stat_key(owner_bd), set())
+        if not owner_user_ids:
+            continue
+        status = _norm_stat_key(current_status)
+        for user_id in owner_user_ids:
+            stats = out.get(user_id)
+            if stats is None:
+                continue
+            creator_owner_user_ids[str(creator_id)].add(user_id)
+            stats["creators"]["owned"] += 1
+            if status in pending_statuses:
+                stats["creators"]["pending_contact"] += 1
+            if status in contacted_statuses:
+                stats["creators"]["contacted"] += 1
+
+    outreach_rows = db.execute(
+        select(
+            OutreachEmail.creator_id,
+            OutreachEmail.created_by,
+            OutreachEmail.status,
+            OutreachEmail.created_at,
+            OutreachEmail.sent_at,
+        )
+    ).all()
+    latest_by_user: dict[str, Any] = {}
+    for creator_id, created_by, status, created_at, sent_at in outreach_rows:
+        user_ids: set[str] = set()
+        created_by_key = _norm_stat_key(created_by)
+        if created_by_key:
+            user_ids.update(alias_to_user_ids.get(created_by_key, set()))
+        elif not created_by:
+            user_ids.update(creator_owner_user_ids.get(str(creator_id), set()))
+        if not user_ids:
+            continue
+        normalized_status = _norm_stat_key(status)
+        last_at = sent_at or created_at
+        for user_id in user_ids:
+            stats = out.get(user_id)
+            if stats is None:
+                continue
+            stats["outreach"]["total"] += 1
+            if normalized_status == "draft":
+                stats["outreach"]["drafts"] += 1
+            elif normalized_status == "queued":
+                stats["outreach"]["queued"] += 1
+            elif normalized_status == "sent":
+                stats["outreach"]["sent"] += 1
+            elif normalized_status == "failed":
+                stats["outreach"]["failed"] += 1
+            elif normalized_status == "cancelled":
+                stats["outreach"]["cancelled"] += 1
+            if last_at and (user_id not in latest_by_user or last_at > latest_by_user[user_id]):
+                latest_by_user[user_id] = last_at
+
+    for user_id, latest in latest_by_user.items():
+        if user_id in out:
+            out[user_id]["outreach"]["last_at"] = _as_iso(latest)
     return out
+
+
+def _user_activity_stats(db: Session, users: list[AppUser]) -> dict[str, dict[str, Any]]:
+    if not users:
+        return {}
+    return stats_cache.get_or_compute(
+        "auth_user_activity",
+        _user_activity_stats_cache_key(users),
+        lambda: _compute_user_activity_stats(db, users),
+        ttl_seconds=STATS_CACHE_TTL_SECONDS,
+    )
+
+
+def refresh_user_activity_stats(db: Session, users: list[AppUser] | None = None) -> None:
+    rows = users if users is not None else list(db.scalars(select(AppUser)).all())
+    if not rows:
+        return
+    stats_cache.refresh(
+        "auth_user_activity",
+        _user_activity_stats_cache_key(rows),
+        lambda: _compute_user_activity_stats(db, rows),
+        ttl_seconds=STATS_CACHE_TTL_SECONDS * 2,
+    )
 
 
 def list_users(db: Session, actor: dict[str, Any] | None = None) -> list[dict[str, Any]]:

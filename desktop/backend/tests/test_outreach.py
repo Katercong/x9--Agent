@@ -5,6 +5,9 @@ network access and no google-* dependencies installed.
 """
 from __future__ import annotations
 
+import base64
+from email import policy
+from email.parser import BytesParser
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -28,6 +31,7 @@ from x9_creator_desktop_system.backend.services.outreach_service import (
     pick_template,
     render_template,
 )
+from desktop.backend.services import gmail_service as desktop_gmail_service
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +179,36 @@ def test_generate_with_ai_reports_not_configured(sample_creator):
     assert rendered.ai_used is False
     assert rendered.ai_status == "not_configured"
     assert rendered.subject
+
+
+def test_html_gmail_message_inlines_product_asset_image(tmp_path):
+    image_path = tmp_path / "product.png"
+    image_path.write_bytes(b"x9-image-bytes")
+    html = (
+        '<p>Hello creator</p>'
+        '<img src="/api/local/outreach/product-assets/sku_inline_test/image" alt="Product">'
+    )
+
+    with patch.object(desktop_gmail_service.product_asset_service, "get_asset", return_value={"id": "sku_inline_test"}):
+        with patch.object(desktop_gmail_service.product_asset_service, "image_path", return_value=image_path):
+            with patch.object(desktop_gmail_service.product_asset_service, "guess_mime_type", return_value="image/png"):
+                raw = desktop_gmail_service._build_mime_message(
+                    to_email="creator@example.com",
+                    subject="Inline image",
+                    body=html,
+                    body_format="html",
+                    from_email="bd@example.com",
+                    department_code="cross_border",
+                )
+
+    message = BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(raw.encode("utf-8")))
+    assert message.get_content_type() == "multipart/related"
+    html_parts = [part for part in message.walk() if part.get_content_type() == "text/html"]
+    assert html_parts
+    assert 'src="cid:x9-product-sku_inline_test@x9.local"' in html_parts[0].get_content()
+    image_parts = [part for part in message.walk() if part.get_content_type() == "image/png"]
+    assert image_parts
+    assert image_parts[0]["Content-ID"] == "<x9-product-sku_inline_test@x9.local>"
 
 
 def test_ai_context_prioritizes_recommendation_table_fields(sample_creator):

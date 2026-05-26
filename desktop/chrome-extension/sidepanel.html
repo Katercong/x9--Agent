@@ -13,6 +13,22 @@
         <button id="langToggle" class="lang-toggle" type="button" title="Switch language">EN</button>
       </div>
 
+      <section class="identity-card" id="actorNotice" data-state="checking">
+        <div class="identity-main">
+          <div class="identity-copy">
+            <span class="identity-label" data-zh="插件绑定账号" data-en="Plugin account">插件绑定账号</span>
+            <strong id="actorName">检查中</strong>
+          </div>
+          <span class="identity-pill" id="actorStatusPill">检查中</span>
+        </div>
+        <p class="identity-meta" id="actorMeta"></p>
+        <p class="identity-message" id="actorMessage">正在等待第一次心跳校验。</p>
+        <div class="identity-actions">
+          <button class="identity-action primary" id="actorBindBtn" type="button">绑定当前登录账号</button>
+          <button class="identity-action" id="actorLoginBtn" type="button">打开登录页</button>
+        </div>
+      </section>
+
       <section class="auto-card tt">
         <div class="card-head">
           <h2><span data-zh="🎯 TikTok 全自动" data-en="🎯 TikTok Auto">🎯 TikTok 全自动</span></h2>
@@ -89,6 +105,7 @@
       <button id="x9BackendDetect" type="button"></button>
     </div>
 
+    <script src="x9_actor_config.js"></script>
     <script src="popup.js"></script>
     <script src="shop_panel.js"></script>
     <script src="i18n_toggle.js"></script>

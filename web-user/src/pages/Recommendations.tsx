@@ -1,12 +1,12 @@
 ﻿import { useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  ArrowRight, CalendarDays, Download, ExternalLink, Filter, Mail, MessageSquare,
-  RotateCcw, Search, ShieldAlert, Sparkles, Star, Users,
+  ArrowRight, CalendarDays, CheckCircle2, Clock, Download, ExternalLink, Filter, Handshake, Mail,
+  RotateCcw, Search, ShieldAlert, SlidersHorizontal, Sparkles, Star, Tag, UserCheck, Users, X,
 } from 'lucide-react';
 import { AsyncState } from '@/components/states/States';
 import { OutreachDrawer } from '@/components/outreach/OutreachDrawer';
-import { TkScriptModal } from '@/components/outreach/TkScriptModal';
 import { useBusinessDashboard, useClaimCreator, useCreators, useRecommended } from '@/hooks/useApi';
 import { formatCompact, maskEmail } from '@/lib/format';
 import { pickItems, type Creator } from '@/api/types';
@@ -23,6 +23,7 @@ type OwnerFilter = 'all' | 'assigned' | 'unassigned';
 type SortFilter = 'recommended' | 'score' | 'followers' | 'fit' | 'priority' | 'recent' | 'contactable' | 'micro';
 
 type SelectOption = { value: string; label: string };
+type ActiveFilterBadge = { key: string; label: string; onClear: () => void };
 
 const SOURCE_META: Record<Exclude<SourceFilter, 'all'>, { label: string; color: string }> = {
   tiktok_shop: { label: 'TikTok Shop', color: '#ff3b63' },
@@ -45,6 +46,21 @@ const SCORE_FILTERS: Array<{ key: ScoreFilter; label: string }> = [
   { key: '70_84', label: '70-84 可测试' },
   { key: '50_69', label: '50-69 观察' },
   { key: 'lt50', label: '<50 低分' },
+];
+
+const PRIORITY_FILTERS: Array<{ key: PriorityFilter; label: string }> = [
+  { key: 'all', label: '全部优先级' },
+  { key: 'P1', label: 'P1' },
+  { key: 'P2', label: 'P2' },
+  { key: 'P3', label: 'P3' },
+  { key: 'P4', label: 'P4' },
+];
+
+const CONTACT_FILTERS: Array<{ key: ContactFilter; label: string }> = [
+  { key: 'all', label: '全部联系' },
+  { key: 'contactable', label: '可联系' },
+  { key: 'email', label: '有邮箱' },
+  { key: 'none', label: '无联系方式' },
 ];
 
 
@@ -78,6 +94,49 @@ const SORT_FILTERS: Array<{ key: SortFilter; label: string }> = [
   { key: 'contactable', label: '可联系优先' },
   { key: 'micro', label: '小达人优先' },
 ];
+
+const filterControlClass = 'h-9 w-full rounded-md border border-border bg-elev1 px-3 text-xs text-text outline-none transition-colors focus:border-accent';
+
+function optionLabel<T extends string>(items: Array<{ key: T; label: string }>, key: T) {
+  return items.find((item) => item.key === key)?.label || key;
+}
+
+function SegmentedButton({
+  active,
+  children,
+  onClick,
+  accent = 'rgb(var(--accent))',
+}: {
+  active: boolean;
+  children: ReactNode;
+  onClick: () => void;
+  accent?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded px-2.5 text-xs font-semibold transition-colors ${
+        active ? 'text-white shadow-sm' : 'text-muted hover:bg-elev1 hover:text-text'
+      }`}
+      style={active ? { background: accent } : undefined}
+    >
+      {children}
+    </button>
+  );
+}
+
+function FilterField({ label, icon, children, className = '' }: { label: string; icon: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <label className={`min-w-0 space-y-1 ${className}`}>
+      <span className="flex items-center gap-1.5 text-[11px] font-semibold text-muted">
+        {icon}
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
 
 function scoreTone(score?: number | null) {
   if ((score ?? 0) >= 85) return { fg: '#05343b', bg: '#c8f7ff', label: '强推荐' };
@@ -238,13 +297,11 @@ function RecommendationCard({
   creator,
   onOpen,
   onMail,
-  onScript,
   mailPending,
 }: {
   creator: Creator;
   onOpen: (creator: Creator) => void;
   onMail: (creator: Creator) => void;
-  onScript: (creator: Creator) => void;
   mailPending?: boolean;
 }) {
   const tone = scoreTone(creator.recommendation_score);
@@ -341,17 +398,6 @@ function RecommendationCard({
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              onScript(creator);
-            }}
-            className="btn !h-8 !px-2.5 text-xs"
-            title="生成 TK DM 邀约话术"
-          >
-            <MessageSquare size={13} /> 话术
-          </button>
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
               onMail(creator);
             }}
             disabled={mailPending}
@@ -386,7 +432,6 @@ export default function Recommendations() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [sort, setSort] = useState<SortFilter>('recommended');
   const [drawerCreator, setDrawerCreator] = useState<Creator | null>(null);
-  const [scriptCreator, setScriptCreator] = useState<Creator | null>(null);
   const [lockingCreatorId, setLockingCreatorId] = useState<string | null>(null);
   const claimCreator = useClaimCreator();
 
@@ -539,6 +584,25 @@ export default function Recommendations() {
   const summaryToday = Number(summary.today_new_creators ?? summary.today_collected);
   const todayAdded = source === 'all' && Number.isFinite(summaryToday) ? summaryToday : localTodayAdded;
   const activeSourceLabel = SOURCE_FILTERS.find((item) => item.key === source)?.label || '全部来源';
+  const activeFilterBadges: ActiveFilterBadge[] = [
+    source !== 'all' && { key: 'source', label: `来源: ${activeSourceLabel}`, onClear: () => setSource('all') },
+    Boolean(q.trim()) && { key: 'q', label: `搜索: ${q.trim()}`, onClear: () => setQ('') },
+    priority !== 'all' && { key: 'priority', label: `优先级: ${priority}`, onClear: () => setPriority('all') },
+    contact !== 'all' && { key: 'contact', label: `联系: ${optionLabel(CONTACT_FILTERS, contact)}`, onClear: () => setContact('all') },
+    scoreFilter !== 'all' && { key: 'score', label: `评分: ${optionLabel(SCORE_FILTERS, scoreFilter)}`, onClear: () => setScoreFilter('all') },
+    Boolean(minFollowers.trim() || maxFollowers.trim()) && {
+      key: 'followers',
+      label: `粉丝: ${minFollowers.trim() || '0'}-${maxFollowers.trim() || '不限'}`,
+      onClear: () => { setMinFollowers(''); setMaxFollowers(''); },
+    },
+    dateRange !== 'all' && { key: 'date', label: `时间: ${optionLabel(DATE_FILTERS, dateRange)}`, onClear: () => setDateRange('all') },
+    reviewFilter !== 'all' && { key: 'review', label: `复核: ${optionLabel(REVIEW_FILTERS, reviewFilter)}`, onClear: () => setReviewFilter('all') },
+    ownerFilter !== 'all' && { key: 'owner', label: `归属: ${optionLabel(OWNER_FILTERS, ownerFilter)}`, onClear: () => setOwnerFilter('all') },
+    productFilter !== 'all' && { key: 'product', label: `品类: ${productFilter}`, onClear: () => setProductFilter('all') },
+    collabFilter !== 'all' && { key: 'collab', label: `合作: ${collabFilter}`, onClear: () => setCollabFilter('all') },
+    statusFilter !== 'all' && { key: 'status', label: `状态: ${statusFilter}`, onClear: () => setStatusFilter('all') },
+    sort !== 'recommended' && { key: 'sort', label: `排序: ${optionLabel(SORT_FILTERS, sort)}`, onClear: () => setSort('recommended') },
+  ].filter(Boolean) as ActiveFilterBadge[];
 
   const openOutreach = async (creator: Creator) => {
     const creatorId = String(creator.id);
@@ -588,129 +652,175 @@ export default function Recommendations() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 border-t border-border p-3">
-          <div className="inline-flex max-w-full flex-wrap rounded-md border border-border bg-elev2 p-1">
-            {SOURCE_FILTERS.map((item) => (
+        <div className="border-t border-border">
+          <div className="grid gap-3 p-3 xl:grid-cols-[minmax(420px,1.05fr)_minmax(360px,0.95fr)]">
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs font-semibold text-text">
+                  <SlidersHorizontal size={14} className="text-accent" />
+                  <span>筛选工作台</span>
+                  <span className="rounded-full bg-elev2 px-2 py-0.5 text-[11px] font-medium text-muted">
+                    {filtered.length} / {formatCompact(items.length)}
+                  </span>
+                  {activeFilterCount > 0 && (
+                    <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold text-accent">
+                      {activeFilterCount} 项启用
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <a href="/api/local/export/recommended-creators.csv" className="btn btn-ghost !h-8 text-xs">
+                    <Download size={13} /> 导出 CSV
+                  </a>
+                  <button type="button" onClick={resetFilters} className="btn btn-ghost !h-8 text-xs">
+                    <RotateCcw size={13} /> 重置
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid gap-2 lg:grid-cols-[minmax(300px,1fr)_minmax(280px,0.85fr)]">
+                <div className="min-w-0 rounded-md border border-border bg-elev2/70 p-1">
+                  <div className="flex max-w-full gap-1 overflow-x-auto">
+                    {SOURCE_FILTERS.map((item) => {
+                      const meta = item.key === 'all' ? null : SOURCE_META[item.key];
+                      return (
+                        <SegmentedButton
+                          key={item.key}
+                          active={source === item.key}
+                          onClick={() => setSource(item.key)}
+                          accent={meta?.color || 'rgb(var(--accent))'}
+                        >
+                          {meta && <span className="h-1.5 w-1.5 rounded-full bg-current opacity-90" />}
+                          {item.label}
+                        </SegmentedButton>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex h-10 min-w-0 items-center gap-2 rounded-md border border-border bg-elev1 px-3 shadow-sm focus-within:border-accent">
+                  <Search size={15} className="shrink-0 text-muted" />
+                  <input
+                    value={q}
+                    onChange={(event) => setQ(event.target.value)}
+                    placeholder="搜索 handle / 邮箱 / 商品 / 推荐理由"
+                    className="min-w-0 flex-1 bg-transparent text-xs text-text outline-none placeholder:text-muted"
+                  />
+                  {q.trim() && (
+                    <button type="button" onClick={() => setQ('')} className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-elev2 hover:text-text">
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-2">
+                <div className="rounded-md border border-border bg-elev2/50 p-2">
+                  <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-muted">
+                    <Star size={12} /> 优先级
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {PRIORITY_FILTERS.map((item) => (
+                      <SegmentedButton key={item.key} active={priority === item.key} onClick={() => setPriority(item.key)}>
+                        {item.label}
+                      </SegmentedButton>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-md border border-border bg-elev2/50 p-2">
+                  <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-muted">
+                    <Mail size={12} /> 联系方式
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {CONTACT_FILTERS.map((item) => (
+                      <SegmentedButton key={item.key} active={contact === item.key} onClick={() => setContact(item.key)}>
+                        {item.key === 'contactable' && <CheckCircle2 size={12} />}
+                        {item.label}
+                      </SegmentedButton>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-md border border-border bg-elev2/40 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs font-semibold text-text">
+                  <Filter size={14} className="text-muted" />
+                  <span>高级条件</span>
+                </div>
+                <span className="text-[11px] text-muted">当前来源: {activeSourceLabel}</span>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <FilterField label="评分" icon={<Star size={12} />}>
+                  <select value={scoreFilter} onChange={(event) => setScoreFilter(event.target.value as ScoreFilter)} className={filterControlClass}>
+                    {SCORE_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                  </select>
+                </FilterField>
+                <FilterField label="粉丝范围" icon={<Users size={12} />}>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input value={minFollowers} onChange={(event) => setMinFollowers(event.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="最低" className={filterControlClass} />
+                    <input value={maxFollowers} onChange={(event) => setMaxFollowers(event.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="最高" className={filterControlClass} />
+                  </div>
+                </FilterField>
+                <FilterField label="品类 / 商品" icon={<Tag size={12} />}>
+                  <select value={productFilter} onChange={(event) => setProductFilter(event.target.value)} className={filterControlClass}>
+                    <option value="all">全部品类 / 商品类型</option>
+                    {productOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                  </select>
+                </FilterField>
+                <FilterField label="合作方式" icon={<Handshake size={12} />}>
+                  <select value={collabFilter} onChange={(event) => setCollabFilter(event.target.value)} className={filterControlClass}>
+                    <option value="all">全部合作方式</option>
+                    {collabOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                  </select>
+                </FilterField>
+                <FilterField label="状态" icon={<ShieldAlert size={12} />}>
+                  <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className={filterControlClass}>
+                    <option value="all">全部状态</option>
+                    {statusOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                  </select>
+                </FilterField>
+                <FilterField label="复核 / 风险" icon={<ShieldAlert size={12} />}>
+                  <select value={reviewFilter} onChange={(event) => setReviewFilter(event.target.value as ReviewFilter)} className={filterControlClass}>
+                    {REVIEW_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                  </select>
+                </FilterField>
+                <FilterField label="BD 归属" icon={<UserCheck size={12} />}>
+                  <select value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value as OwnerFilter)} className={filterControlClass}>
+                    {OWNER_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                  </select>
+                </FilterField>
+                <FilterField label="入库时间" icon={<Clock size={12} />}>
+                  <select value={dateRange} onChange={(event) => setDateRange(event.target.value as DateFilter)} className={filterControlClass}>
+                    {DATE_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                  </select>
+                </FilterField>
+                <FilterField label="排序" icon={<SlidersHorizontal size={12} />} className="md:col-span-2">
+                  <select value={sort} onChange={(event) => setSort(event.target.value as SortFilter)} className={filterControlClass}>
+                    {SORT_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                  </select>
+                </FilterField>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex min-h-11 flex-wrap items-center gap-2 border-t border-border bg-elev2/30 px-3 py-2">
+            <span className="text-[11px] font-semibold text-muted">已启用</span>
+            {activeFilterBadges.length === 0 ? (
+              <span className="rounded-full bg-elev1 px-2 py-1 text-[11px] text-muted">无额外条件</span>
+            ) : activeFilterBadges.map((item) => (
               <button
                 key={item.key}
                 type="button"
-                onClick={() => setSource(item.key)}
-                className={`h-8 rounded px-2.5 text-xs font-semibold transition-colors ${
-                  source === item.key ? 'bg-accent text-white' : 'text-muted hover:text-text'
-                }`}
+                onClick={item.onClear}
+                className="inline-flex max-w-[220px] items-center gap-1 rounded-full border border-border bg-elev1 px-2 py-1 text-[11px] text-text transition-colors hover:border-accent"
               >
-                {item.label}
+                <span className="truncate">{item.label}</span>
+                <X size={11} className="shrink-0 text-muted" />
               </button>
             ))}
-          </div>
-
-          <div className="flex h-9 min-w-[260px] flex-1 items-center gap-2 rounded-md border border-border bg-elev1 px-3 md:flex-none md:w-[360px]">
-            <Search size={15} className="text-muted" />
-            <input
-              value={q}
-              onChange={(event) => setQ(event.target.value)}
-              placeholder="搜索 handle / 推荐理由 / 商品类型"
-              className="min-w-0 flex-1 bg-transparent text-xs text-text outline-none placeholder:text-muted"
-            />
-          </div>
-          <select value={priority} onChange={(event) => setPriority(event.target.value as PriorityFilter)} className="h-9 rounded-md border border-border bg-elev1 px-3 text-xs text-text">
-            <option value="all">全部优先级</option>
-            <option value="P1">P1</option>
-            <option value="P2">P2</option>
-            <option value="P3">P3</option>
-            <option value="P4">P4</option>
-          </select>
-          <select value={contact} onChange={(event) => setContact(event.target.value as ContactFilter)} className="h-9 rounded-md border border-border bg-elev1 px-3 text-xs text-text">
-            <option value="all">全部联系方式</option>
-            <option value="contactable">可联系</option>
-            <option value="email">有邮箱</option>
-            <option value="none">无联系方式</option>
-          </select>
-          <a href="/api/local/export/recommended-creators.csv" className="btn btn-ghost ml-auto !h-9 text-xs">
-            <Download size={14} /> 导出推荐 CSV
-          </a>
-        </div>
-
-        <div className="border-t border-border bg-elev1/40 p-3">
-          <div className="rounded-md border border-border bg-elev2/60 p-3">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-xs font-semibold text-text">
-                <Filter size={14} className="text-muted" />
-                <span>更多筛选规则</span>
-                <span className="rounded-full bg-elev1 px-2 py-0.5 text-[11px] font-medium text-muted">
-                  {filtered.length} / {formatCompact(items.length)}
-                </span>
-                {activeFilterCount > 0 && (
-                  <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold text-accent">
-                    已启用 {activeFilterCount} 项
-                  </span>
-                )}
-              </div>
-              <button type="button" onClick={resetFilters} className="btn btn-ghost !h-8 text-xs">
-                <RotateCcw size={13} /> 重置筛选
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <label className="space-y-1">
-                <span className="text-[11px] font-medium text-muted">评分</span>
-                <select value={scoreFilter} onChange={(event) => setScoreFilter(event.target.value as ScoreFilter)} className="h-9 w-full rounded-md border border-border bg-elev1 px-3 text-xs text-text">
-                  {SCORE_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-                </select>
-              </label>
-              <label className="space-y-1 md:col-span-2 xl:col-span-1">
-                <span className="text-[11px] font-medium text-muted">粉丝范围</span>
-                <div className="grid grid-cols-2 gap-2">
-                  <input value={minFollowers} onChange={(event) => setMinFollowers(event.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="最低" className="h-9 rounded-md border border-border bg-elev1 px-3 text-xs text-text outline-none" />
-                  <input value={maxFollowers} onChange={(event) => setMaxFollowers(event.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="最高" className="h-9 rounded-md border border-border bg-elev1 px-3 text-xs text-text outline-none" />
-                </div>
-              </label>
-              <label className="space-y-1">
-                <span className="text-[11px] font-medium text-muted">品类 / 商品类型</span>
-                <select value={productFilter} onChange={(event) => setProductFilter(event.target.value)} className="h-9 w-full rounded-md border border-border bg-elev1 px-3 text-xs text-text">
-                  <option value="all">全部品类 / 商品类型</option>
-                  {productOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                </select>
-              </label>
-              <label className="space-y-1">
-                <span className="text-[11px] font-medium text-muted">合作方式</span>
-                <select value={collabFilter} onChange={(event) => setCollabFilter(event.target.value)} className="h-9 w-full rounded-md border border-border bg-elev1 px-3 text-xs text-text">
-                  <option value="all">全部合作方式</option>
-                  {collabOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                </select>
-              </label>
-              <label className="space-y-1">
-                <span className="text-[11px] font-medium text-muted">状态</span>
-                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="h-9 w-full rounded-md border border-border bg-elev1 px-3 text-xs text-text">
-                  <option value="all">全部状态</option>
-                  {statusOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                </select>
-              </label>
-              <label className="space-y-1">
-                <span className="text-[11px] font-medium text-muted">复核 / 风险</span>
-                <select value={reviewFilter} onChange={(event) => setReviewFilter(event.target.value as ReviewFilter)} className="h-9 w-full rounded-md border border-border bg-elev1 px-3 text-xs text-text">
-                  {REVIEW_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-                </select>
-              </label>
-              <label className="space-y-1">
-                <span className="text-[11px] font-medium text-muted">BD 归属</span>
-                <select value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value as OwnerFilter)} className="h-9 w-full rounded-md border border-border bg-elev1 px-3 text-xs text-text">
-                  {OWNER_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-                </select>
-              </label>
-              <label className="space-y-1">
-                <span className="text-[11px] font-medium text-muted">入库时间</span>
-                <select value={dateRange} onChange={(event) => setDateRange(event.target.value as DateFilter)} className="h-9 w-full rounded-md border border-border bg-elev1 px-3 text-xs text-text">
-                  {DATE_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-                </select>
-              </label>
-              <label className="space-y-1 md:col-span-2 xl:col-span-1">
-                <span className="text-[11px] font-medium text-muted">排序</span>
-                <select value={sort} onChange={(event) => setSort(event.target.value as SortFilter)} className="h-9 w-full rounded-md border border-border bg-elev1 px-3 text-xs text-text">
-                  {SORT_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-                </select>
-              </label>
-            </div>
           </div>
         </div>
       </div>
@@ -723,7 +833,6 @@ export default function Recommendations() {
               creator={creator}
               onOpen={(c) => navigate(`/recommendations/${encodeURIComponent(String(c.id))}`)}
               onMail={openOutreach}
-              onScript={(c) => setScriptCreator(c)}
               mailPending={lockingCreatorId === String(creator.id)}
             />
           ))}
@@ -731,7 +840,6 @@ export default function Recommendations() {
       </AsyncState>
 
       <OutreachDrawer creator={drawerCreator} open={!!drawerCreator} onClose={() => setDrawerCreator(null)} />
-      {scriptCreator && <TkScriptModal creator={scriptCreator} onClose={() => setScriptCreator(null)} />}
     </div>
   );
 }

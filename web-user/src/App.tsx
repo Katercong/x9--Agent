@@ -2,7 +2,6 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import AppShell from './layouts/AppShell';
 import Workbench from './pages/Workbench';
 import Business from './pages/Business';
-import Dashboard from './pages/Dashboard';
 import Collection from './pages/Collection';
 import CollectShop from './pages/CollectShop';
 import CollectLeads from './pages/CollectLeads';
@@ -20,7 +19,7 @@ export default function App() {
         <Route index element={<Workbench />} />
         <Route path="/workbench" element={<Navigate to="/" replace />} />
         <Route path="/business" element={<Business />} />
-        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/dashboard" element={<Navigate to="/collection" replace />} />
         <Route path="/collection" element={<Collection />} />
         <Route path="/collect-shop" element={<CollectShop />} />
         <Route path="/collect-leads" element={<CollectLeads />} />

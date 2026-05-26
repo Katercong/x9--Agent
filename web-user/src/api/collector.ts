@@ -11,6 +11,10 @@ export interface SourceBucket {
   total: number;
   today: number;
   daily: DailyPoint[];
+  queued_total?: number;
+  ingested_total?: number;
+  last_collected_at?: string | null;
+  user_status?: 'collecting' | 'idle' | 'offline' | 'error' | string;
   funnel?: { shop_list_seen: number; shop_profile_collected: number };
 }
 
@@ -30,6 +34,8 @@ export interface ObservationItem {
   search_keyword: string | null;
   collected_at: string | null;
   created_at: string | null;
+  ingest_status?: 'queued' | 'ingested' | string;
+  ingested_at?: string | null;
   shop?: {
     lead_status: string | null;
     gmv_raw: string | null;
@@ -73,6 +79,18 @@ export interface FeedResponse {
   items: ObservationItem[];
 }
 
+export interface ShopCollectionSummary {
+  ok: boolean;
+  generated_at: string;
+  stats: SourceBucket;
+  recent: FeedResponse;
+  scope?: {
+    actor_user_id?: string | null;
+    admin?: boolean;
+    department_code?: string | null;
+  };
+}
+
 export function useSourceStats() {
   return useQuery({
     queryKey: ['collector', 'source-stats'],
@@ -90,6 +108,14 @@ export function useObservationsFeed(params: { source?: SourceKey | 'all'; limit?
         limit: params.limit ?? 200,
         offset: params.offset ?? 0,
       }),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useShopCollectionSummary(limit = 300) {
+  return useQuery({
+    queryKey: ['collector', 'shop-summary', limit],
+    queryFn: () => api.get<ShopCollectionSummary>('/collector/shop-summary', { limit }),
     refetchInterval: 10_000,
   });
 }

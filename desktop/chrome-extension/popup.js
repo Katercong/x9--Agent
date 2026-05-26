@@ -40,11 +40,13 @@ const FAST_SEARCH_SETTLE_MS = 800;
 const FAST_TAB_SETTLE_MS = 700;
 const X9_BACKEND_BASE_URL = 'https://usx9.us';
 const X9_EXTENSION_ID = 'tiktok_creator_lead_browser_1_0_19';
-const X9_WORKER_ID = 'tiktok_creator_lead_browser_1_0_19';
-const X9_ACCOUNT_ID = 'local_tiktok_account';
+const X9_STABLE_WORKER_ID_KEY = 'x9StableWorkerId';
 const X9_HEARTBEAT_INTERVAL_MS = 5_000;
 const X9_UPLOAD_SYNC_INTERVAL_MS = 5_000;
 const X9_UPLOADED_OBSERVATION_KEYS = 'x9UploadedObservationKeys';
+const X9_LAST_HEARTBEAT_KEY = 'x9LastHeartbeat';
+const X9_LAST_OBSERVATION_UPLOAD_KEY = 'x9LastObservationUpload';
+const X9_ACTOR_CONFIG_OVERRIDE_KEY = 'x9ActorConfigOverride';
 const DEFAULT_LANGUAGE = 'zh';
 const I18N = {
   zh: {
@@ -182,9 +184,13 @@ const I18N = {
     'confirm.clear': 'Clear all leads, queue items, skipped records, and logs?'
   }
 };
+
 let autoRunActive = false;
 let autoStopRequested = false;
 let runTimerIntervalId = null;
+let x9ActorBlocked = false;
+let x9ControlsBusy = false;
+let x9ActorConfigCache = null;
 
 const elements = {
   languageSelect: document.getElementById('languageSelect'),
@@ -217,10 +223,18 @@ const elements = {
   clearBtn: document.getElementById('clearBtn'),
   queueList: document.getElementById('queueList'),
   leadList: document.getElementById('leadList'),
-  status: document.getElementById('status')
+  status: document.getElementById('status'),
+  actorNotice: document.getElementById('actorNotice'),
+  actorName: document.getElementById('actorName'),
+  actorMeta: document.getElementById('actorMeta'),
+  actorMessage: document.getElementById('actorMessage'),
+  actorStatusPill: document.getElementById('actorStatusPill'),
+  actorBindBtn: document.getElementById('actorBindBtn'),
+  actorLoginBtn: document.getElementById('actorLoginBtn')
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
+  await ensureX9StableWorkerIdentity().catch(() => undefined);
   const state = await getState();
   if (state.settings.speedProfileVersion !== FAST_SPEED_PROFILE_VERSION) {
     state.settings.autoSettings = { ...FAST_AUTO_SETTINGS };
@@ -242,10 +256,34 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (state.runTimer.running) {
     startRunTimerTicker();
   }
+  refreshX9ActorNotice().catch(() => undefined);
   startX9BackendHeartbeat();
   startX9UploadSync();
-  postX9BackendHeartbeat('panel_open').catch(() => undefined);
+  postX9BackendHeartbeat('panel_open')
+    .then(() => refreshX9ActorNotice())
+    .catch(() => refreshX9ActorNotice().catch(() => undefined));
 });
+
+elements.actorBindBtn?.addEventListener('click', () => {
+  bindX9ActorFromLogin().catch((error) => {
+    setX9ActorNoticeMessage('error', '绑定失败', error instanceof Error ? error.message : String(error));
+  });
+});
+
+elements.actorLoginBtn?.addEventListener('click', () => {
+  chrome.tabs.create({ url: `${X9_BACKEND_BASE_URL}/login?next=/portal/dashboard` }).catch(() => undefined);
+});
+
+if (chrome?.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local') {
+      return;
+    }
+    if (changes[X9_LAST_HEARTBEAT_KEY] || changes[X9_LAST_OBSERVATION_UPLOAD_KEY] || changes.x9UploadSyncStatus) {
+      refreshX9ActorNotice().catch(() => undefined);
+    }
+  });
+}
 
 elements.languageSelect.addEventListener('change', async () => {
   const state = await getState();
@@ -618,6 +656,7 @@ async function withBusy(fn) {
 }
 
 function setButtonsDisabled(disabled) {
+  x9ControlsBusy = Boolean(disabled);
   for (const button of document.querySelectorAll('button')) {
     button.disabled = disabled;
   }
@@ -626,6 +665,7 @@ function setButtonsDisabled(disabled) {
   }
   if (!disabled) {
     setPopupModeControls();
+    applyX9ActorButtonState();
   }
 }
 
@@ -645,6 +685,7 @@ function setAutoControlsRunning(running) {
     elements.openPanelBtn.disabled = true;
   }
   setPopupModeControls();
+  applyX9ActorButtonState();
 }
 
 async function openSidePanel() {
@@ -2003,8 +2044,9 @@ function buildX9ProfileObservation(profile, keyword, source, currentUrl, title, 
     event_type: 'creator_observation',
     platform: 'tiktok',
     source: 'tiktok_creator_lead_browser_extension_1_0_19',
-    worker_id: X9_WORKER_ID,
-    account_id: X9_ACCOUNT_ID,
+    extension_id: x9RuntimeExtensionId(),
+    worker_id: null,
+    account_id: null,
     search_keyword: keyword || null,
     current_status: currentStatus,
     raw_profile: {
@@ -2061,8 +2103,9 @@ function buildX9VideoObservation(video, keyword) {
     event_type: 'creator_observation',
     platform: 'tiktok',
     source: 'tiktok_creator_lead_browser_extension_1_0_19',
-    worker_id: X9_WORKER_ID,
-    account_id: X9_ACCOUNT_ID,
+    extension_id: x9RuntimeExtensionId(),
+    worker_id: null,
+    account_id: null,
     search_keyword: keyword || video?.search_keyword || null,
     creator: {
       handle,
@@ -2124,13 +2167,18 @@ async function postX9Observation(payload) {
     return { ok: false, reason: 'missing_handle' };
   }
   try {
+    await attachX9StableWorkerIdentity(payload);
+    const actor = await x9ResolveActorIdentity();
+    x9AttachActorIdentity(payload, actor);
     const base = await x9ResolveBackendBaseForRuntime();
     const response = await fetch(x9JoinPath(base, '/api/local/collector/observations'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      headers: await x9BuildAuthHeaders({ 'Content-Type': 'application/json', 'X-X9-Submit-Only': '1' }),
       body: JSON.stringify(payload)
     });
     const body = await response.json().catch(() => ({}));
+    const detail = x9ResponseDetail(body, response.ok ? '' : `HTTP ${response.status}`);
     if (response.ok) {
       await markX9ObservationUploaded(payload);
     }
@@ -2138,6 +2186,8 @@ async function postX9Observation(payload) {
       x9LastObservationUpload: {
         ok: response.ok,
         status: response.status,
+        detail,
+        actor_user_id: payload.actor_user_id || null,
         handle: payload.creator.handle,
         search_keyword: payload.search_keyword || '',
         action: body.action || '',
@@ -2150,6 +2200,7 @@ async function postX9Observation(payload) {
       x9LastObservationUpload: {
         ok: false,
         status: 0,
+        actor_user_id: payload.actor_user_id || null,
         handle: payload.creator.handle,
         search_keyword: payload.search_keyword || '',
         error: error instanceof Error ? error.message : String(error),
@@ -2167,19 +2218,47 @@ function startX9BackendHeartbeat() {
     return;
   }
   x9HeartbeatTimerId = window.setInterval(() => {
-    postX9BackendHeartbeat('interval').catch(() => undefined);
+    postX9BackendHeartbeat('interval')
+      .then(() => refreshX9ActorNotice())
+      .catch(() => refreshX9ActorNotice().catch(() => undefined));
   }, X9_HEARTBEAT_INTERVAL_MS);
 }
 
 async function postX9BackendHeartbeat(reason) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
   const url = tab?.url || '';
+  const identity = await ensureX9StableWorkerIdentity();
+  const state = await getState().catch(() => ({}));
+  const latestLog = Array.isArray(state.taskLogs) ? state.taskLogs[state.taskLogs.length - 1] : null;
+  const pendingProfile = Array.isArray(state.pendingProfiles)
+    ? state.pendingProfiles.find((item) => item && !item.handled)
+    : null;
+  const running = Boolean(state.runTimer?.running || autoRunActive);
+  const currentAction = latestLog?.message || latestLog?.event_type || reason || (running ? 'running' : 'idle');
+  const currentHandle = normalizeUsername(pendingProfile?.username)
+    || normalizeUsername(extractUsernameFromTikTokUrl(pendingProfile?.profile_url))
+    || null;
+  const searchKeyword = state.settings?.currentKeyword || elements.keywordInput?.value || null;
+  const actor = await x9ResolveActorIdentity();
   const payload = {
     event_type: 'extension_heartbeat',
-    extension_id: X9_EXTENSION_ID,
+    extension_id: identity.extensionId,
     extension_version: chrome.runtime.getManifest().version,
-    worker_id: X9_WORKER_ID,
-    account_id: X9_ACCOUNT_ID,
+    source: 'x9_leads',
+    status: running ? 'running' : 'idle',
+    running,
+    current_action: currentAction,
+    current_handle: currentHandle,
+    search_keyword: searchKeyword,
+    hourly_limit: null,
+    hourly_used: null,
+    hourly_remaining: null,
+    next_resume_at: null,
+    last_error: state.lastError || null,
+    worker_id: identity.workerId,
+    account_id: identity.accountId,
+    actor_user_id: actor?.id || null,
+    actor: actor || null,
     browser_profile: 'chrome_default',
     current_url: url || null,
     page_type: classifyX9TikTokPage(url),
@@ -2189,23 +2268,29 @@ async function postX9BackendHeartbeat(reason) {
     timestamp: new Date().toISOString(),
     reason
   };
+  x9AttachActorIdentity(payload, actor);
 
   try {
     const base = await x9ResolveBackendBaseForRuntime();
     const response = await fetch(x9JoinPath(base, '/api/local/extension/heartbeat'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      headers: await x9BuildAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload)
     });
+    const body = await response.json().catch(() => ({}));
+    const detail = x9ResponseDetail(body, response.ok ? '' : `HTTP ${response.status}`);
     await chrome.storage.local.set({
       x9LastHeartbeat: {
         ok: response.ok,
         status: response.status,
+        detail,
         at: now(),
-        url
+        url,
+        actor_user_id: payload.actor_user_id || null
       }
     }).catch(() => undefined);
-    return { ok: response.ok, status: response.status };
+    return { ok: response.ok, status: response.status, body };
   } catch (error) {
     await chrome.storage.local.set({
       x9LastHeartbeat: {
@@ -2216,6 +2301,395 @@ async function postX9BackendHeartbeat(reason) {
       }
     }).catch(() => undefined);
     return { ok: false, error };
+  }
+}
+
+async function attachX9StableWorkerIdentity(payload) {
+  const identity = await ensureX9StableWorkerIdentity();
+  payload.extension_id = identity.extensionId;
+  payload.worker_id = identity.workerId;
+  payload.account_id = identity.accountId;
+  return payload;
+}
+
+let x9StableWorkerIdentityPromise = null;
+
+async function ensureX9StableWorkerIdentity() {
+  if (!x9StableWorkerIdentityPromise) {
+    x9StableWorkerIdentityPromise = (async () => {
+      const extensionId = x9RuntimeExtensionId();
+      const prefix = `x9_leads_${extensionId}_`;
+      const stored = await chrome.storage.local.get([X9_STABLE_WORKER_ID_KEY]).catch(() => ({}));
+      let workerId = String(stored[X9_STABLE_WORKER_ID_KEY] || '').trim();
+      if (!workerId.startsWith(prefix)) {
+        workerId = `${prefix}${x9CreateUuid()}`;
+        await chrome.storage.local.set({ [X9_STABLE_WORKER_ID_KEY]: workerId }).catch(() => undefined);
+      }
+      return { extensionId, workerId, accountId: workerId };
+    })();
+  }
+  return x9StableWorkerIdentityPromise;
+}
+
+function x9RuntimeExtensionId() {
+  return String(chrome?.runtime?.id || X9_EXTENSION_ID).trim() || X9_EXTENSION_ID;
+}
+
+function x9CreateUuid() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+async function x9BuildAuthHeaders(headers) {
+  return Object.assign({}, headers || {});
+}
+
+function x9ActorFromUser(user) {
+  if (!user) return null;
+  const id = String(user.id || user.identity || '').trim();
+  if (!id) return null;
+  return {
+    id,
+    username: user.username || '',
+    display_name: user.display_name || user.name || '',
+    email: user.email || '',
+    role: user.role || '',
+    department_code: user.department_code || '',
+  };
+}
+
+async function x9ResolveActorIdentity() {
+  const config = await x9GetActorConfig();
+  return x9ActorFromUser(config.actor);
+}
+
+function x9AttachActorIdentity(payload, actor) {
+  if (!payload) return payload;
+  const config = x9BundledActorConfig();
+  const bundledActor = actor || x9ActorFromUser(config.actor);
+  if (bundledActor && bundledActor.id) {
+    payload.actor_user_id = bundledActor.id;
+    payload.actor = bundledActor;
+  }
+  if (config.actor_token) {
+    payload.actor_token = config.actor_token;
+    payload.actor_downloaded_at = config.downloaded_at || '';
+  }
+  return payload;
+}
+
+function x9BundledActorConfig() {
+  return x9NormalizeActorConfig(x9ActorConfigCache)
+    || x9NormalizeActorConfig(globalThis.X9_BUNDLED_ACTOR_CONFIG)
+    || {};
+}
+
+async function x9GetActorConfig() {
+  const stored = await chrome.storage.local.get([X9_ACTOR_CONFIG_OVERRIDE_KEY]).catch(() => ({}));
+  x9ActorConfigCache = x9NormalizeActorConfig(stored[X9_ACTOR_CONFIG_OVERRIDE_KEY])
+    || x9NormalizeActorConfig(globalThis.X9_BUNDLED_ACTOR_CONFIG)
+    || null;
+  return x9ActorConfigCache || {};
+}
+
+function x9NormalizeActorConfig(config) {
+  if (!config || config.ok === false) {
+    return null;
+  }
+  const actor = x9ActorFromUser(config.actor);
+  const actorToken = String(config.actor_token || '').trim();
+  const downloadedAt = String(config.downloaded_at || config.actor_downloaded_at || '').trim();
+  if (!actor || !actor.id || !actorToken || !downloadedAt) {
+    return null;
+  }
+  return Object.assign({}, config, {
+    ok: true,
+    actor_user_id: actor.id,
+    actor,
+    actor_token: actorToken,
+    downloaded_at: downloadedAt,
+  });
+}
+
+function x9ResponseDetail(body, fallback) {
+  const raw = body && (body.detail || body.error || body.message);
+  if (typeof raw === 'string') {
+    return raw;
+  }
+  if (raw) {
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return String(raw);
+    }
+  }
+  return fallback || '';
+}
+
+async function bindX9ActorFromLogin() {
+  const btn = elements.actorBindBtn;
+  if (btn) btn.disabled = true;
+  setX9ActorNoticeMessage('checking', '绑定中', '正在读取当前 usx9.us 登录账号。');
+  try {
+    const body = await x9FetchActorConfigFromPortalTab();
+    const config = x9NormalizeActorConfig(body);
+    if (!config) {
+      throw new Error('后端没有返回有效的插件身份，请重新登录后再试。');
+    }
+    x9ActorConfigCache = config;
+    await chrome.storage.local.set({
+      [X9_ACTOR_CONFIG_OVERRIDE_KEY]: config,
+      [X9_LAST_HEARTBEAT_KEY]: null,
+      [X9_LAST_OBSERVATION_UPLOAD_KEY]: null,
+    });
+    await refreshX9ActorNotice();
+    await postX9BackendHeartbeat('actor_bind');
+    await refreshX9ActorNotice();
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function x9FetchActorConfigFromPortalTab() {
+  const tab = await x9FindUsx9Tab();
+  if (!tab?.id) {
+    await chrome.tabs.create({ url: `${X9_BACKEND_BASE_URL}/login?next=/portal/dashboard` }).catch(() => undefined);
+    throw new Error('没有找到已打开的 usx9.us 页面。已打开登录页，登录后回到插件点“绑定当前登录账号”。');
+  }
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: async () => {
+      try {
+        const response = await fetch('/api/local/extension/actor-config', {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        const body = await response.json().catch(() => ({}));
+        return { ok: response.ok, status: response.status, body };
+      } catch (error) {
+        return { ok: false, status: 0, body: { detail: String(error && error.message || error) } };
+      }
+    },
+  });
+  const value = result?.result || {};
+  if (!value.ok) {
+    if (value.status === 401) {
+      await chrome.tabs.update(tab.id, { active: true, url: `${X9_BACKEND_BASE_URL}/login?next=/portal/dashboard` }).catch(() => undefined);
+      throw new Error('当前 usx9.us 页面还没有登录。请先登录，登录后回到插件点“绑定当前登录账号”。');
+    }
+    throw new Error(x9ResponseDetail(value.body, `HTTP ${value.status || 0}`));
+  }
+  return value.body;
+}
+
+async function x9FindUsx9Tab() {
+  const [activeTabs, allTabs] = await Promise.all([
+    chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []),
+    chrome.tabs.query({}).catch(() => []),
+  ]);
+  for (const tab of [...activeTabs, ...allTabs]) {
+    try {
+      const url = new URL(tab?.url || '');
+      const host = url.hostname.toLowerCase();
+      if (url.protocol === 'https:' && (host === 'usx9.us' || host.endsWith('.usx9.us'))) {
+        return tab;
+      }
+    } catch {
+      // keep looking
+    }
+  }
+  return null;
+}
+
+function setX9ActorNoticeMessage(state, pill, message) {
+  if (!elements.actorNotice) return;
+  elements.actorNotice.dataset.state = state;
+  if (elements.actorStatusPill) elements.actorStatusPill.textContent = pill;
+  if (elements.actorMessage) elements.actorMessage.textContent = message;
+}
+
+async function refreshX9ActorNotice() {
+  if (!elements.actorNotice) {
+    return;
+  }
+  const config = await x9GetActorConfig();
+  const actor = x9ActorFromUser(config.actor);
+  const stored = await chrome.storage.local.get([
+    X9_LAST_HEARTBEAT_KEY,
+    X9_LAST_OBSERVATION_UPLOAD_KEY,
+    'x9UploadSyncStatus'
+  ]).catch(() => ({}));
+  const heartbeat = x9ScopedActorEvent(stored[X9_LAST_HEARTBEAT_KEY], actor);
+  const upload = x9ScopedActorEvent(stored[X9_LAST_OBSERVATION_UPLOAD_KEY], actor);
+  const notice = buildX9ActorNotice(
+    actor,
+    config,
+    heartbeat,
+    upload
+  );
+  elements.actorNotice.dataset.state = notice.state;
+  if (elements.actorName) elements.actorName.textContent = notice.name;
+  if (elements.actorStatusPill) elements.actorStatusPill.textContent = notice.pill;
+  if (elements.actorMeta) elements.actorMeta.textContent = notice.meta;
+  if (elements.actorMessage) elements.actorMessage.textContent = notice.message;
+  setX9ActorBlocked(notice.blocked);
+}
+
+function x9ScopedActorEvent(event, actor) {
+  if (!event || !actor?.id) {
+    return null;
+  }
+  return String(event.actor_user_id || '') === String(actor.id) ? event : null;
+}
+
+function buildX9ActorNotice(actor, config, heartbeat, upload) {
+  const lang = getLanguage();
+  const name = x9ActorDisplayName(actor);
+  const meta = actor
+    ? [
+        actor.department_code ? `部门:${actor.department_code}` : '',
+        actor.id ? `ID:${actor.id}` : '',
+        config.downloaded_at ? `下载:${x9FormatActorTime(config.downloaded_at)}` : '',
+      ].filter(Boolean).join(' | ')
+    : '';
+  const details = [
+    heartbeat?.detail,
+    heartbeat?.error,
+    upload?.detail,
+    upload?.error,
+  ].map((item) => String(item || '')).filter(Boolean);
+  const matchingDetail = (needle) => details.find((item) => item.includes(needle));
+
+  if (!actor || !actor.id || !config.actor_token) {
+    return {
+      state: 'error',
+      blocked: true,
+      name: lang === 'en' ? 'Not bound' : '未绑定',
+      pill: lang === 'en' ? 'Blocked' : '已阻止',
+      meta: '',
+      message: lang === 'en'
+        ? 'This extension package does not contain a user yet. Log in to usx9.us, then click Bind current account here.'
+        : '这个插件包还没有账号信息。请先登录 usx9.us，然后在这里点击“绑定当前登录账号”。'
+    };
+  }
+
+  if (matchingDetail('extension_actor_mismatch')) {
+    return {
+      state: 'error',
+      blocked: true,
+      name,
+      pill: lang === 'en' ? 'Account mismatch' : '账号不一致',
+      meta,
+      message: lang === 'en'
+        ? 'The backend rejected this heartbeat because the browser login does not match the user built into this extension. Switch to this account or download a new extension after logging in with the correct account.'
+        : '后台已拒绝本次心跳：当前浏览器登录账号和插件内置账号不一致。请切换到这个账号，或用正确账号登录后重新下载插件。'
+    };
+  }
+
+  if (matchingDetail('extension_actor_department_mismatch')) {
+    return {
+      state: 'error',
+      blocked: true,
+      name,
+      pill: lang === 'en' ? 'Department mismatch' : '部门不一致',
+      meta,
+      message: lang === 'en'
+        ? 'The backend rejected this heartbeat because the logged-in department does not match the extension package.'
+        : '后台已拒绝本次心跳：当前登录账号部门和插件内置部门不一致。请重新登录正确账号后下载插件。'
+    };
+  }
+
+  if (matchingDetail('extension_actor_invalid') || matchingDetail('x9_login_required_download_plugin_again')) {
+    return {
+      state: 'error',
+      blocked: true,
+      name,
+      pill: lang === 'en' ? 'Invalid identity' : '身份无效',
+      meta,
+      message: lang === 'en'
+        ? 'The extension identity token is invalid. Log in to usx9.us and download the extension again.'
+        : '插件身份 token 无效。请登录 usx9.us 后重新下载插件。'
+    };
+  }
+
+  if (heartbeat?.ok) {
+    return {
+      state: 'ok',
+      blocked: false,
+      name,
+      pill: lang === 'en' ? 'Verified' : '已校验',
+      meta,
+      message: lang === 'en'
+        ? `Heartbeat accepted at ${heartbeat.at || 'just now'}. Uploads will be attributed only to this user.`
+        : `心跳已通过校验（${heartbeat.at || '刚刚'}）。后续心跳和上传只会归属到这个用户。`
+    };
+  }
+
+  if (heartbeat) {
+    return {
+      state: heartbeat.status === 409 ? 'error' : 'warn',
+      blocked: heartbeat.status === 409,
+      name,
+      pill: heartbeat.status === 409
+        ? (lang === 'en' ? 'Rejected' : '已拒绝')
+        : (lang === 'en' ? 'Not verified' : '未校验'),
+      meta,
+      message: lang === 'en'
+        ? `The last heartbeat was not accepted: ${details[0] || `HTTP ${heartbeat.status || 0}`}.`
+        : `最近一次心跳未通过：${details[0] || `HTTP ${heartbeat.status || 0}`}。`
+    };
+  }
+
+  return {
+    state: 'checking',
+    blocked: false,
+    name,
+    pill: lang === 'en' ? 'Checking' : '检查中',
+    meta,
+    message: lang === 'en'
+      ? 'Waiting for the first backend heartbeat check.'
+      : '正在等待第一次后台心跳校验。'
+  };
+}
+
+function x9ActorDisplayName(actor) {
+  if (!actor) {
+    return getLanguage() === 'en' ? 'Not bound' : '未绑定';
+  }
+  return actor.display_name || actor.username || actor.email || actor.id || (getLanguage() === 'en' ? 'Bound user' : '已绑定用户');
+}
+
+function x9FormatActorTime(value) {
+  try {
+    return new Date(value).toLocaleString(getLanguage() === 'en' ? 'en-US' : 'zh-CN');
+  } catch {
+    return String(value || '');
+  }
+}
+
+function setX9ActorBlocked(blocked) {
+  x9ActorBlocked = Boolean(blocked);
+  applyX9ActorButtonState();
+}
+
+function applyX9ActorButtonState() {
+  if (x9ControlsBusy) {
+    if (x9ActorBlocked) {
+      if (elements.startAutoBtn) elements.startAutoBtn.disabled = true;
+      const blockedShopStart = document.getElementById('shopStartBtn');
+      if (blockedShopStart) blockedShopStart.disabled = true;
+    }
+    return;
+  }
+  if (elements.startAutoBtn) {
+    elements.startAutoBtn.disabled = x9ActorBlocked || Boolean(autoRunActive);
+  }
+  const shopStart = document.getElementById('shopStartBtn');
+  if (shopStart) {
+    shopStart.disabled = x9ActorBlocked;
   }
 }
 
@@ -2286,7 +2760,9 @@ async function syncX9StoredState(reason) {
       uploaded.add(item.key);
       sent += 1;
     } else {
-      lastError = result.error instanceof Error ? result.error.message : String(result.error || result.status || 'upload_failed');
+      lastError = result.error instanceof Error
+        ? result.error.message
+        : x9ResponseDetail(result.body, String(result.error || result.status || 'upload_failed'));
       break;
     }
   }
@@ -3053,7 +3529,7 @@ async function clickVideoCloseButtonOnce(preferredTabId = null) {
 const X9_API_BASE_KEY = "x9_api_base";
 const X9_API_BASE_ACTIVE_KEY = "x9_api_base_active";
 const X9_BACKEND_CANDIDATES = [
-  "https://usx9.us",
+  X9_BACKEND_BASE_URL,
 ];
 
 function x9JoinPath(base, path) {
@@ -3105,17 +3581,20 @@ async function x9BuildBackendCandidateOrder() {
   const active = x9AllowedBackendBase(stored[X9_API_BASE_ACTIVE_KEY]);
   const ordered = [];
   if (override) ordered.push(override);
-  for (const base of await x9DashboardBaseCandidates()) {
-    if (!ordered.includes(base)) ordered.push(base);
-  }
-  if (active && !ordered.includes(active)) ordered.push(active);
+  // New uploads stay on usx9.us so the backend can resolve the logged-in
+  // portal user before attributing records.
   for (const raw of X9_BACKEND_CANDIDATES) {
     const base = x9NormalizeApiBase(raw);
     if (base && !ordered.includes(base)) ordered.push(base);
   }
+  for (const base of await x9DashboardBaseCandidates()) {
+    if (!ordered.includes(base)) ordered.push(base);
+  }
+  if (active && !ordered.includes(active)) ordered.push(active);
   return ordered;
 }
 
+// New X9 leads traffic is pinned to usx9.us for portal-session attribution.
 function x9AllowedBackendBase(base) {
   const normalized = x9NormalizeApiBase(base);
   if (!normalized) return "";

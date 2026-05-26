@@ -192,6 +192,84 @@ export const MOCKS: Record<string, any | ((qs: string) => any)> = {
       created_at: recentIso(i * 60 + 5),
     })),
   },
+  '/collector/source-stats': {
+    ok: true,
+    generated_at: recentIso(10),
+    sources: {
+      tiktok_shop: {
+        total: 1268,
+        today: 86,
+        queued_total: 18,
+        ingested_total: 742,
+        last_collected_at: recentIso(42),
+        funnel: { shop_list_seen: 1042, shop_profile_collected: 226 },
+        daily: Array.from({ length: 7 }, (_, i) => ({ date: new Date(Date.now() - (6 - i) * 86400000).toISOString().slice(0, 10), count: [112, 128, 96, 144, 171, 134, 86][i] })),
+      },
+      x9_leads: {
+        total: 392,
+        today: 31,
+        queued_total: 6,
+        ingested_total: 248,
+        last_collected_at: recentIso(96),
+        daily: Array.from({ length: 7 }, (_, i) => ({ date: new Date(Date.now() - (6 - i) * 86400000).toISOString().slice(0, 10), count: [24, 42, 38, 51, 47, 35, 31][i] })),
+      },
+      table_import: {
+        total: 518,
+        today: 22,
+        queued_total: 0,
+        ingested_total: 518,
+        last_collected_at: recentIso(3600),
+        daily: Array.from({ length: 7 }, (_, i) => ({ date: new Date(Date.now() - (6 - i) * 86400000).toISOString().slice(0, 10), count: [0, 86, 0, 142, 0, 268, 22][i] })),
+      },
+      other: { total: 0, today: 0, daily: [] },
+    },
+  },
+  '/collector/observations-feed': (qs: string) => {
+    const source = qs.includes('table_import') ? 'table_import' : qs.includes('x9_leads') ? 'x9_leads' : 'tiktok_shop';
+    return {
+      ok: true,
+      total: 24,
+      limit: 8,
+      offset: 0,
+      items: Array.from({ length: 8 }, (_, i) => ({
+        id: `${source}_${i}`,
+        source,
+        platform: source === 'tiktok_shop' ? 'tiktok_shop' : source === 'table_import' ? 'csv' : 'tiktok',
+        handle: ['jasminechiswell', 'cottoncrush', 'flowdaily', 'periodtalk', 'momlife_oasis', 'softouch_official', 'pristine_pads', 'organicmama_co'][i],
+        display_name: creators[i % creators.length]?.display_name ?? null,
+        followers_raw: `${(i + 2) * 120}K`,
+        search_keyword: ['organic cotton pads', 'period underwear', 'baby diaper', 'training pants'][i % 4],
+        collected_at: recentIso(i * 300 + 35),
+        created_at: recentIso(i * 300 + 55),
+        ingest_status: i % 3 === 0 ? 'queued' : 'ingested',
+        shop: source === 'tiktok_shop' ? {
+          lead_status: i % 2 === 0 ? 'shop_profile_collected' : 'shop_list_seen',
+          gmv_raw: i % 2 === 0 ? `$${(i + 1) * 12}K` : null,
+          gpm_raw: null,
+          avg_commission_rate_raw: null,
+          category_text: ['Beauty', 'Mother & Baby', 'Home Care'][i % 3],
+          invite_status: null,
+          save_status: null,
+          shop_profile_url: null,
+          detail_captured: i % 2 === 0,
+        } : undefined,
+        lead: source === 'x9_leads' ? {
+          email: i % 2 === 0 ? creators[i % creators.length]?.email : null,
+          external_links: i % 2 ? ['https://instagram.com/demo'] : [],
+          source_video_url: null,
+          current_status: i % 2 ? 'prospect' : 'pending_contact',
+        } : undefined,
+        import_meta: source === 'table_import' ? {
+          country: ['US', 'UK', 'CA', 'SG'][i % 4],
+          tier: ['S', 'A', 'B'][i % 3],
+          language: 'en',
+          engagement_rate: null,
+          quality_score: 80 + i,
+          email: creators[i % creators.length]?.email,
+        } : undefined,
+      })),
+    };
+  },
 };
 
 export function matchMock(path: string): any | null {

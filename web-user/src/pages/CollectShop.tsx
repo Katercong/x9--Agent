@@ -1,243 +1,185 @@
-﻿import { useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, ListChecks, Store, Users, ScanLine, DollarSign, Tag } from 'lucide-react';
+import { useMemo } from 'react';
+import { AlertTriangle, Clock3, Database, ListChecks, Radio, Store, UserRound } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
-import { ChartCard } from '@/components/charts/ChartCard';
-import { EChart } from '@/components/charts/EChart';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
-import { useSourceStats, useObservationsFeed, type ObservationItem } from '@/api/collector';
-import { ACCENTS, CHART_AXIS, CHART_GRID, CHART_TEXT, CollectHeader, Reveal, dailyAreaOption, num } from './collectShared';
-import { CreatorDetailDrawer } from './CreatorDetailDrawer';
+import { useMe } from '@/hooks/useApi';
+import { useShopCollectionSummary, type ObservationItem } from '@/api/collector';
+import { ACCENTS, CollectHeader, Reveal, num } from './collectShared';
 
 const A = ACCENTS.shop;
-const CATEGORY_LABEL_LIMIT = 28;
 
-function cleanCategoryName(value: string | null | undefined): string {
-  return String(value || '')
-    .normalize('NFKC')
-    .replace(/[\u200D\uFE0E\uFE0F]/g, '')
-    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+type UserStatus = 'collecting' | 'idle' | 'offline' | 'error';
+
+function timeValue(value: string | null | undefined): number {
+  if (!value) return 0;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function shortCategoryName(value: string): string {
-  return value.length > CATEGORY_LABEL_LIMIT ? `${value.slice(0, CATEGORY_LABEL_LIMIT)}...` : value;
+function shortTime(value: string | null | undefined): string {
+  const ts = timeValue(value);
+  if (!ts) return '暂无';
+  const diff = Date.now() - ts;
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} 天前`;
+  const date = new Date(ts);
+  return `${date.getMonth() + 1}/${date.getDate()}`;
 }
+
+function normalizeStatus(value: unknown, total: number): UserStatus {
+  if (value === 'error') return 'error';
+  if (value === 'collecting') return 'collecting';
+  if (value === 'idle') return 'idle';
+  return total > 0 ? 'offline' : 'offline';
+}
+
+function statusMeta(status: UserStatus) {
+  if (status === 'error') return { label: '异常', tone: 'bad' as const, icon: AlertTriangle };
+  if (status === 'collecting') return { label: '采集中', tone: 'good' as const, icon: Radio };
+  if (status === 'idle') return { label: '闲置', tone: 'info' as const, icon: Clock3 };
+  return { label: '不在线', tone: 'muted' as const, icon: Clock3 };
+}
+
+function rowStatus(row: ObservationItem): { label: string; tone: 'good' | 'warn' } {
+  return row.ingest_status === 'ingested'
+    ? { label: '已入库', tone: 'good' }
+    : { label: '队列中', tone: 'warn' };
+}
+
 export default function CollectShop() {
-  const stats = useSourceStats();
-  const feed = useObservationsFeed({ source: 'tiktok_shop', limit: 300 });
-  const [openHandle, setOpenHandle] = useState<string | null>(null);
-  const [rawOpen, setRawOpen] = useState(false);
+  const me = useMe();
+  const summary = useShopCollectionSummary(300);
 
-  const shop = stats.data?.sources?.tiktok_shop;
-  const items = feed.data?.items ?? [];
+  const user = me.data?.user;
+  const stats = summary.data?.stats;
+  const items = summary.data?.recent?.items ?? [];
+  const total = Number(stats?.total ?? 0);
+  const today = Number(stats?.today ?? 0);
+  const ingested = Number(stats?.ingested_total ?? 0);
+  const queued = Number(stats?.queued_total ?? today);
+  const lastCollectedAt = stats?.last_collected_at ?? items[0]?.collected_at ?? items[0]?.created_at ?? null;
+  const status = normalizeStatus(stats?.user_status, total);
+  const statusInfo = statusMeta(status);
+  const StatusIcon = statusInfo.icon;
+  const displayName = user?.display_name || user?.username || '当前用户';
 
-  const derived = useMemo(() => {
-    const handles = new Set(items.map((i) => i.handle).filter(Boolean));
-    const withGmv = items.filter((i) => i.shop?.gmv_raw).length;
-    const cat = new Map<string, number>();
-    for (const it of items) {
-      const c = cleanCategoryName(it.shop?.category_text);
-      if (c) cat.set(c, (cat.get(c) ?? 0) + 1);
-    }
-    const categories = [...cat.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
-    return { creators: handles.size, withGmv, categories, topCategory: categories[0]?.[0] ?? '—' };
-  }, [items]);
-
-  const funnel = shop?.funnel ?? { shop_list_seen: 0, shop_profile_collected: 0 };
-  const pendingItems = useMemo(
-    () => items.filter((item) => item.shop?.lead_status !== 'shop_profile_collected').slice(0, 8),
-    [items],
-  );
-  const pendingTotal = items.filter((item) => item.shop?.lead_status !== 'shop_profile_collected').length;
-
-  const funnelOption = {
-    tooltip: { trigger: 'item', formatter: (p: any) => `${p.name}: ${p.data?.count ?? p.value}` },
-    series: [
-      {
-        type: 'funnel',
-        left: '10%', right: '10%', top: 18, bottom: 18,
-        minSize: '36%', gap: 6,
-        label: {
-          show: true,
-          position: 'inside',
-          color: '#fff',
-          fontSize: 12,
-          lineHeight: 18,
-          fontWeight: 700,
-          formatter: (p: any) => `${p.name}\n${p.data?.count ?? p.value}`,
-        },
-        labelLine: { show: false },
-        data: [
-          { value: Math.max(funnel.shop_list_seen, funnel.shop_profile_collected, 1), count: funnel.shop_list_seen, name: '列表发现', itemStyle: { color: '#7a1733' } },
-          { value: Math.max(funnel.shop_profile_collected, 0.0001), count: funnel.shop_profile_collected, name: '详情采集', itemStyle: { color: A.key } },
-        ],
-      },
-    ],
-  };
-
-  const categoryOption = {
-    grid: { top: 10, right: 24, bottom: 20, left: 90, containLabel: true },
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: (params: any) => { const p = Array.isArray(params) ? params[0] : params; return String(p?.name ?? '') + ': ' + String(p?.value ?? 0); } },
-    xAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { color: CHART_GRID } }, axisLabel: { fontSize: 11, color: CHART_AXIS } },
-    yAxis: {
-      type: 'category',
-      data: derived.categories.map((c) => c[0]).reverse(),
-      axisLine: { show: false }, axisTick: { show: false },
-      axisLabel: { fontSize: 11, color: CHART_TEXT, fontWeight: 600, width: 190, overflow: 'truncate', formatter: shortCategoryName },
-    },
-    series: [
-      {
-        type: 'bar',
-        data: derived.categories.map((c) => c[1]).reverse(),
-        barWidth: 14,
-        itemStyle: { color: A.key, borderRadius: [0, 3, 3, 0] },
-        label: { show: true, position: 'right', fontSize: 11, color: CHART_TEXT, fontWeight: 600 },
-      },
-    ],
-  };
+  const rows = useMemo(() => items.slice(0, 300), [items]);
 
   const columns: Column<ObservationItem>[] = [
     {
       key: 'creator',
       header: '达人',
-      cell: (r) => (
-        <button
-          type="button"
-          onClick={() => setOpenHandle(r.handle)}
-          className="flex items-center gap-2.5 text-left group"
-        >
-          <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0" style={{ background: A.key }}>
-            {(r.handle[0] || '?').toUpperCase()}
-          </div>
-          <div className="min-w-0">
-            <div className="text-xs font-medium text-text truncate group-hover:underline" style={{ textDecorationColor: A.key }}>@{r.handle}</div>
-            <div className="text-xxs text-muted truncate">{r.display_name || '—'}</div>
-          </div>
-        </button>
-      ),
       width: '220px',
+      cell: (row) => (
+        <div className="min-w-0">
+          <div className="truncate text-xs font-semibold text-text">@{row.handle || 'unknown'}</div>
+          <div className="truncate text-xxs text-muted">{row.display_name || '—'}</div>
+        </div>
+      ),
     },
-    { key: 'followers', header: '粉丝', align: 'right', cell: (r) => <span className="text-xs num text-text">{r.followers_raw || '—'}</span> },
-    { key: 'gmv', header: 'GMV', align: 'right', cell: (r) => <span className="text-xs num font-medium" style={{ color: r.shop?.gmv_raw ? A.key : 'rgb(var(--muted))' }}>{r.shop?.gmv_raw || '—'}</span> },
-    { key: 'gpm', header: 'GPM', align: 'right', cell: (r) => <span className="text-xs num text-text">{r.shop?.gpm_raw || '—'}</span> },
-    { key: 'comm', header: '佣金', align: 'right', cell: (r) => <span className="text-xs num text-text">{r.shop?.avg_commission_rate_raw || '—'}</span> },
-    { key: 'cat', header: '类目', cell: (r) => <span className="text-xs text-text">{r.shop?.category_text || '—'}</span> },
     {
-      key: 'stage',
-      header: '阶段',
-      cell: (r) =>
-        r.shop?.lead_status === 'shop_profile_collected' ? <Pill tone="good">详情已采</Pill> : <Pill tone="muted">仅列表</Pill>,
+      key: 'status',
+      header: '状态',
+      cell: (row) => {
+        const state = rowStatus(row);
+        return <Pill tone={state.tone}>{state.label}</Pill>;
+      },
     },
+    { key: 'gmv', header: 'GMV', align: 'right', cell: (row) => <span className="num text-xs font-semibold text-text">{row.shop?.gmv_raw || '—'}</span> },
+    { key: 'category', header: '类目', cell: (row) => <span className="text-xs text-text">{row.shop?.category_text || '—'}</span> },
+    { key: 'keyword', header: '关键词', cell: (row) => <span className="text-xs text-text">{row.search_keyword || '—'}</span> },
+    { key: 'time', header: '采集时间', align: 'right', cell: (row) => <span className="text-xs text-muted">{shortTime(row.collected_at || row.created_at)}</span> },
   ];
-
-  const drawerRows = openHandle ? items.filter((i) => i.handle === openHandle) : [];
 
   return (
     <div className="space-y-4">
-      <CollectHeader accent={A} icon={Store} title="采集 · TikTok Shop" subtitle="affiliate-us 全自动达人采集 · 点击达人查看详情" />
+      <CollectHeader
+        accent={A}
+        icon={Store}
+        title="我的 TikTok Shop 采集"
+        subtitle="数据库统计 · 队列与入库记录"
+        right={<Pill tone={statusInfo.tone}>{statusInfo.label}</Pill>}
+      />
 
       <AsyncState
-        loading={stats.isLoading || feed.isLoading}
-        error={stats.error || feed.error}
-        isEmpty={!feed.isLoading && items.length === 0}
+        loading={summary.isLoading || me.isLoading}
+        error={summary.error || me.error}
+        isEmpty={false}
         emptyMessage="还没有 TikTok Shop 采集数据"
         height={420}
       >
         <Reveal i={1}>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <KpiCard label="去重达人" value={num(derived.creators)} icon={Users} iconBg={A.dim} iconColor={A.key} />
-            <KpiCard label="详情已采" value={num(funnel.shop_profile_collected)} icon={ScanLine} iconBg="rgba(6,182,212,0.14)" iconColor="#06b6d4" />
-            <KpiCard label="含 GMV" value={num(derived.withGmv)} icon={DollarSign} iconBg="rgba(16,185,129,0.14)" iconColor="#10b981" />
-            <KpiCard label="主类目" value={derived.topCategory} icon={Tag} iconBg="rgba(245,158,11,0.14)" iconColor="#f59e0b" compact />
-          </div>
+          <section className="card card-body">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-white" style={{ background: A.key }}>
+                  <UserRound size={22} />
+                </div>
+                <div className="min-w-0">
+                  <div className="truncate text-base font-bold text-text">{displayName}</div>
+                  <div className="mt-1 text-xs text-muted">最后采集：{shortTime(lastCollectedAt)}</div>
+                </div>
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-md border border-border bg-elev2 px-3 py-2 text-xs font-semibold text-text">
+                <StatusIcon size={14} />
+                {statusInfo.label}
+              </div>
+            </div>
+          </section>
         </Reveal>
 
         <Reveal i={2}>
-          <div className="card card-body mt-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-md" style={{ background: A.dim, color: A.key }}>
-                  <ListChecks size={16} />
-                </div>
-                <div>
-                  <h3 className="text-sm font-semibold text-text">待处理队列</h3>
-                  <div className="text-xxs text-muted">列表发现后，等待进入详情或补齐 GMV / 类目</div>
-                </div>
-              </div>
-              <span className="rounded-full bg-elev2 px-2.5 py-1 text-xs font-semibold text-text">{num(pendingTotal)} 条</span>
-            </div>
-            {pendingItems.length === 0 ? (
-              <div className="rounded-md border border-dashed border-border py-4 text-center text-xs text-muted">当前没有待处理达人</div>
-            ) : (
-              <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
-                {pendingItems.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setOpenHandle(item.handle)}
-                    className="rounded-md border border-border bg-elev2 px-3 py-2 text-left transition-colors hover:border-accent"
-                  >
-                    <div className="truncate text-xs font-semibold text-text">@{item.handle}</div>
-                    <div className="mt-1 truncate text-xxs text-muted">{item.display_name || item.search_keyword || '未命名达人'}</div>
-                    <div className="mt-2 flex items-center justify-between gap-2 text-xxs text-muted">
-                      <span>{item.followers_raw || '粉丝未知'}</span>
-                      <Pill tone="muted">仅列表</Pill>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
+            <KpiCard label="今日采集" value={num(today)} icon={Clock3} iconBg={A.dim} iconColor={A.key} />
+            <KpiCard label="总采集" value={num(total)} icon={Database} iconBg="rgba(99,102,241,0.16)" iconColor="#818cf8" />
+            <KpiCard label="今日队列中" value={num(queued)} icon={ListChecks} iconBg="rgba(245,158,11,0.16)" iconColor="#f59e0b" />
+            <KpiCard label="已入库" value={num(ingested)} icon={Database} iconBg="rgba(16,185,129,0.16)" iconColor="#10b981" />
+            <KpiCard label="最后采集" value={shortTime(lastCollectedAt)} icon={Clock3} iconBg="rgba(6,182,212,0.14)" iconColor="#06b6d4" compact />
           </div>
         </Reveal>
 
         <Reveal i={3}>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-4">
-            <ChartCard title="列表 → 详情 漏斗">
-              <EChart option={funnelOption} height={260} />
-            </ChartCard>
-            <ChartCard title="近 7 天 raw 回传量" className="lg:col-span-2">
-              <EChart option={dailyAreaOption(shop?.daily ?? [], A.key)} height={260} />
-            </ChartCard>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <section className="card card-body">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-text">今日队列中</div>
+                  <div className="mt-1 text-xxs text-muted">当天未形成入库结果，次日自动归零</div>
+                </div>
+                <div className="num text-2xl font-black text-text">{num(queued)}</div>
+              </div>
+            </section>
+            <section className="card card-body">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-text">已入库</div>
+                  <div className="mt-1 text-xxs text-muted">已经进入达人数据或来源归档</div>
+                </div>
+                <div className="num text-2xl font-black text-text">{num(ingested)}</div>
+              </div>
+            </section>
           </div>
         </Reveal>
 
         <Reveal i={4}>
-          <div className="mt-4">
-            <ChartCard title="类目分布 Top 8">
-              <EChart option={categoryOption} height={Math.max(220, derived.categories.length * 34 + 40)} />
-            </ChartCard>
-          </div>
-        </Reveal>
-
-        <Reveal i={5}>
-          <div className="card mt-4">
-            <button
-              type="button"
-              onClick={() => setRawOpen((value) => !value)}
-              className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
-            >
-              <div>
-                <h3 className="text-sm font-semibold text-text">raw 回传明细 · {num(items.length)} 条观测</h3>
-                <div className="text-xxs text-muted">默认折叠，展开后可查看完整回传表</div>
-              </div>
-              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-elev2 px-2.5 py-1 text-xs text-muted">
-                {rawOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                {rawOpen ? '收起' : '展开明细'}
-              </span>
-            </button>
-            {rawOpen && (
-              <div className="border-t border-border p-2">
-                <DataTable columns={columns} data={items} rowKey={(r) => r.id} emptyText="还没有 TikTok Shop 采集数据" />
-              </div>
-            )}
-          </div>
+          <section className="card mt-4">
+            <div className="border-b border-border px-4 py-3">
+              <h3 className="text-sm font-semibold text-text">我的最近采集记录</h3>
+              <div className="text-xxs text-muted">来自数据库，仅包含当前登录用户的数据</div>
+            </div>
+            <div className="p-2">
+              <DataTable columns={columns} data={rows} rowKey={(row) => row.id} emptyText="还没有 TikTok Shop 采集数据" />
+            </div>
+          </section>
         </Reveal>
       </AsyncState>
-
-      <CreatorDetailDrawer handle={openHandle} rows={drawerRows} onClose={() => setOpenHandle(null)} />
     </div>
   );
 }

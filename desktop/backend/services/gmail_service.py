@@ -20,10 +20,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import html as html_lib
 import json
 import logging
 import os
+import re
 from datetime import datetime
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -35,6 +39,7 @@ from sqlalchemy.orm import Session
 from ..config import DATA_DIR, settings
 from ..database.connection import SessionLocal
 from ..models.gmail_account import GmailAccount
+from . import product_asset_service
 from ..utils.id_utils import new_id
 
 
@@ -557,6 +562,7 @@ def send_email(
             body_format=body_format,
             from_email=sender,
             reply_to=reply_to,
+            department_code=department_code,
         )
 
         service = build("gmail", "v1", credentials=creds, cache_discovery=False)
@@ -855,11 +861,27 @@ def _build_mime_message(
     body_format: str,
     from_email: str,
     reply_to: str | None = None,
+    department_code: str | None = None,
 ) -> str:
     if body_format == "html":
-        message = MIMEMultipart("alternative")
-        message.attach(MIMEText(body, "plain", "utf-8"))
-        message.attach(MIMEText(body, "html", "utf-8"))
+        html_body, inline_images = _inline_product_asset_images(body or "", department_code)
+        plain_body = _html_to_plain_text(html_body)
+        alternative = MIMEMultipart("alternative")
+        alternative.attach(MIMEText(plain_body, "plain", "utf-8"))
+        alternative.attach(MIMEText(html_body, "html", "utf-8"))
+        if inline_images:
+            message = MIMEMultipart("related")
+            message.attach(alternative)
+            for cid, image_path, mime_type in inline_images:
+                main_type, sub_type = mime_type.split("/", 1)
+                part = MIMEBase(main_type, sub_type)
+                part.set_payload(image_path.read_bytes())
+                encoders.encode_base64(part)
+                part.add_header("Content-ID", f"<{cid}>")
+                part.add_header("Content-Disposition", "inline", filename=image_path.name)
+                message.attach(part)
+        else:
+            message = alternative
     else:
         message = MIMEText(body or "", "plain", "utf-8")
     message["To"] = to_email
@@ -868,6 +890,57 @@ def _build_mime_message(
     if reply_to:
         message["Reply-To"] = reply_to
     return base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+
+
+_HTML_IMAGE_SRC_RE = re.compile(r"(<img\b[^>]*?\bsrc=[\"'])([^\"']+)([\"'][^>]*>)", re.I)
+_PRODUCT_IMAGE_PATH_RE = re.compile(r"/api/local/outreach/product-assets/([^/?#]+)/image\b", re.I)
+
+
+def _inline_product_asset_images(
+    body: str,
+    department_code: str | None = None,
+) -> tuple[str, list[tuple[str, Path, str]]]:
+    """Turn local product-image URLs in an HTML email into Gmail inline CIDs."""
+    images_by_asset_id: dict[str, tuple[str, Path, str]] = {}
+
+    def replace_src(match: re.Match[str]) -> str:
+        prefix, src, suffix = match.groups()
+        asset_id = _product_asset_id_from_src(src)
+        if not asset_id:
+            return match.group(0)
+        if asset_id not in images_by_asset_id:
+            asset = product_asset_service.get_asset(asset_id, department_code=department_code)
+            image_path = product_asset_service.image_path(asset or {})
+            if image_path is None:
+                return match.group(0)
+            mime_type = product_asset_service.guess_mime_type(image_path)
+            if not mime_type.startswith("image/"):
+                return match.group(0)
+            cid = f"x9-product-{re.sub(r'[^a-zA-Z0-9_.-]+', '-', asset_id)}@x9.local"
+            images_by_asset_id[asset_id] = (cid, image_path, mime_type)
+        cid = images_by_asset_id[asset_id][0]
+        return f"{prefix}cid:{cid}{suffix}"
+
+    html_body = _HTML_IMAGE_SRC_RE.sub(replace_src, body or "")
+    return html_body, list(images_by_asset_id.values())
+
+
+def _product_asset_id_from_src(src: str) -> str | None:
+    match = _PRODUCT_IMAGE_PATH_RE.search(html_lib.unescape(src or ""))
+    return match.group(1) if match else None
+
+
+def _html_to_plain_text(body: str) -> str:
+    text = re.sub(r"(?i)<br\s*/?>", "\n", body or "")
+    text = re.sub(r"(?i)</(p|div|tr|h[1-6])\s*>", "\n", text)
+    text = re.sub(r"(?i)</li\s*>", "\n", text)
+    text = re.sub(r"(?s)<style\b.*?</style>", "", text)
+    text = re.sub(r"(?s)<script\b.*?</script>", "", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html_lib.unescape(text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip() or " "
 
 
 def _fetch_user_email(creds: Any) -> str | None:

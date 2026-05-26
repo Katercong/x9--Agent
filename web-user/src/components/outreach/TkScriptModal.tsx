@@ -7,12 +7,12 @@ import {
 import { useCreateTkPrompt, useDeleteTkPrompt, useGenerateTkScript, useTkPrompts } from '@/hooks/useApi';
 import type { Creator, TkStrategy } from '@/api/types';
 
-const COMMISSION_OPTIONS = [5, 10, 15, 20];
+const COMMISSION_OPTIONS = [20];
 
 const STRATEGY_META: Record<TkStrategy, { label: string; desc: string; icon: typeof Zap }> = {
-  template: { label: '模板', desc: '用达人 bio / 视频 / 关键词填充固定模板', icon: Zap },
-  hybrid:   { label: '混合', desc: '固定品牌框架 + AI 写个性化开场白', icon: Sparkles },
-  ai:       { label: 'AI 全生成', desc: 'AI 根据达人数据完整生成话术', icon: Sparkles },
+  template: { label: '最终规则', desc: '按固定顺序生成：X9品牌、四个系列、内容兴趣、合作、20%佣金、期待回复', icon: Zap },
+  hybrid:   { label: '规则生成', desc: '仍按最终规则输出，不允许改结构', icon: Sparkles },
+  ai:       { label: '规则生成', desc: '仍按最终规则输出，不允许自由发挥', icon: Sparkles },
 };
 
 const PRODUCT_KEY_LABELS: Record<string, string> = {
@@ -27,6 +27,7 @@ const AI_STATUS_LABELS: Record<string, string> = {
   template: '模板生成',
   generated: 'AI 生成',
   hybrid: '混合生成',
+  final_rules: '最终规则',
   fallback: '模板兜底',
   not_configured: '未配置 LLM',
 };

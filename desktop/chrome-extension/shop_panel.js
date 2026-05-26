@@ -10,11 +10,14 @@
     SHOP_SET_SETTINGS: "TSCLB_SHOP_SET_SETTINGS",
   };
 
-  const DEFAULT_ENDPOINT = "https://usx9.us/api/local/collector/observations";
+  // New upload traffic is pinned to usx9.us so the backend can use the
+  // logged-in portal session for attribution.
+  const USX9_API_BASE = "https://usx9.us";
+  const DEFAULT_ENDPOINT = USX9_API_BASE + "/api/local/collector/observations";
   const SHOP_API_BASE_KEY = "x9_api_base";
   const SHOP_API_BASE_ACTIVE_KEY = "x9_api_base_active";
   const SHOP_BACKEND_CANDIDATES = [
-    "https://usx9.us",
+    USX9_API_BASE,
   ];
   let pollTimer = null;
 
@@ -83,7 +86,7 @@
   async function resolveShopEndpoint() {
     const input = document.getElementById("shopEndpointInput");
     const current = (input?.value || "").trim();
-    if (current && current !== DEFAULT_ENDPOINT && isUsx9ShopBase(endpointBase(current))) {
+    if (current && current !== DEFAULT_ENDPOINT && isAllowedShopBase(endpointBase(current))) {
       return current;
     }
 
@@ -162,15 +165,17 @@
     const override = normalizeShopApiBase(stored[SHOP_API_BASE_KEY]);
     const active = normalizeShopApiBase(stored[SHOP_API_BASE_ACTIVE_KEY]);
     const ordered = [];
-    if (override && isUsx9ShopBase(override) && !ordered.includes(override)) ordered.push(override);
-    for (const base of await shopDashboardBaseCandidates()) {
-      if (!ordered.includes(base)) ordered.push(base);
-    }
-    if (active && isUsx9ShopBase(active) && !ordered.includes(active)) ordered.push(active);
+    if (override && isAllowedShopBase(override) && !ordered.includes(override)) ordered.push(override);
+    // New uploads stay on usx9.us so the backend can resolve the logged-in
+    // portal user before attributing records.
     for (const raw of SHOP_BACKEND_CANDIDATES) {
       const base = normalizeShopApiBase(raw);
       if (base && !ordered.includes(base)) ordered.push(base);
     }
+    for (const base of await shopDashboardBaseCandidates()) {
+      if (!ordered.includes(base)) ordered.push(base);
+    }
+    if (active && isAllowedShopBase(active) && !ordered.includes(active)) ordered.push(active);
     return ordered;
   }
 
@@ -182,11 +187,14 @@
     }
   }
 
-  function isUsx9ShopBase(base) {
+  function isAllowedShopBase(base) {
     try {
       const parsed = new URL(base);
       const host = parsed.hostname.toLowerCase();
-      return parsed.protocol === "https:" && (host === "usx9.us" || host.endsWith(".usx9.us"));
+      if (parsed.protocol === "https:" && (host === "usx9.us" || host.endsWith(".usx9.us"))) {
+        return true;
+      }
+      return false;
     } catch {
       return false;
     }
@@ -208,7 +216,7 @@
       chrome.storage?.local?.get?.(["shopAutoRun"], (got) => {
         const s = got?.shopAutoRun;
         const rawEp = (s && s.settings && s.settings.endpoint) || DEFAULT_ENDPOINT;
-        const ep = isUsx9ShopBase(endpointBase(rawEp)) ? rawEp : DEFAULT_ENDPOINT;
+        const ep = isAllowedShopBase(endpointBase(rawEp)) ? rawEp : DEFAULT_ENDPOINT;
         const inp = document.getElementById("shopEndpointInput");
         if (inp && !inp.value) inp.value = ep;
         // Task count: only seed from storage if user hasn't touched the field.
@@ -225,7 +233,7 @@
     const inp = document.getElementById("shopEndpointInput");
     if (inp && !inp.value) {
       const rawEp = (state.settings && state.settings.endpoint) || DEFAULT_ENDPOINT;
-      inp.value = isUsx9ShopBase(endpointBase(rawEp)) ? rawEp : DEFAULT_ENDPOINT;
+      inp.value = isAllowedShopBase(endpointBase(rawEp)) ? rawEp : DEFAULT_ENDPOINT;
     }
 
     const pillMap = {

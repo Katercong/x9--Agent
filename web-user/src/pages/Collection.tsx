@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Chrome,
   Clock,
+  FileSpreadsheet,
   Link2,
   Mail,
   Radar,
@@ -61,6 +62,7 @@ export default function Collection() {
   const statsQ = useSourceStats();
   const shopFeedQ = useObservationsFeed({ source: 'tiktok_shop', limit: 8 });
   const leadsFeedQ = useObservationsFeed({ source: 'x9_leads', limit: 8 });
+  const importFeedQ = useObservationsFeed({ source: 'table_import', limit: 8 });
   const obsQ = useRecentObservations(30);
   const cancelCmd = usePostExtensionCommand();
   const qc = useQueryClient();
@@ -122,15 +124,15 @@ export default function Collection() {
 
         <section>
           <div className="flex items-center justify-between gap-3 mb-3">
-            <h3 className="sec-title !mb-0">采集渠道监控</h3>
-            <span className="text-xxs text-muted">只统计插件回传 raw，不混入业务达人表，10 秒自动刷新</span>
+            <h3 className="sec-title !mb-0">达人数据采集总览</h3>
+            <span className="text-xxs text-muted">插件状态、任务进度与三类采集渠道统一管理，10 秒自动刷新</span>
           </div>
           <AsyncState
-            loading={statsQ.isLoading || shopFeedQ.isLoading || leadsFeedQ.isLoading}
-            error={statsQ.error || shopFeedQ.error || leadsFeedQ.error}
+            loading={statsQ.isLoading || shopFeedQ.isLoading || leadsFeedQ.isLoading || importFeedQ.isLoading}
+            error={statsQ.error || shopFeedQ.error || leadsFeedQ.error || importFeedQ.error}
             height={360}
           >
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
               <ChannelMonitor
                 icon={Store}
                 accent={ACCENTS.shop}
@@ -150,6 +152,16 @@ export default function Collection() {
                 bucket={statsQ.data?.sources?.x9_leads}
                 items={leadsFeedQ.data?.items ?? []}
                 metrics={leadsMetrics(leadsFeedQ.data?.items ?? [])}
+              />
+              <ChannelMonitor
+                icon={FileSpreadsheet}
+                accent={ACCENTS.import}
+                title="表格导入"
+                subtitle="CSV / XLSX 批量导入与结构化入库"
+                to="/collect-import"
+                bucket={statsQ.data?.sources?.table_import}
+                items={importFeedQ.data?.items ?? []}
+                metrics={importMetrics(importFeedQ.data?.items ?? [])}
               />
             </div>
           </AsyncState>
@@ -375,7 +387,10 @@ function ChannelMetricTile({
 
 function ChannelObservationRow({ item, accent }: { item: ObservationItem; accent: Accent }) {
   const isShop = item.source === 'tiktok_shop';
-  const status = isShop
+  const isImport = item.source === 'table_import';
+  const status = isImport
+    ? '表格导入'
+    : isShop
     ? item.shop?.lead_status === 'shop_profile_collected'
       ? '详情已采'
       : '列表发现'
@@ -384,7 +399,9 @@ function ChannelObservationRow({ item, accent }: { item: ObservationItem; accent
       : (item.lead?.external_links?.length ?? 0) > 0
         ? '有外链'
         : '待补充';
-  const detail = isShop
+  const detail = isImport
+    ? [item.import_meta?.country, item.import_meta?.tier, item.import_meta?.email].filter(Boolean).join(' · ') || item.search_keyword || '表格导入'
+    : isShop
     ? item.shop?.gmv_raw || item.shop?.category_text || item.search_keyword || 'TikTok Shop'
     : item.lead?.email || item.search_keyword || item.lead?.source_video_url || 'X9 线索';
 
@@ -433,5 +450,14 @@ function leadsMetrics(items: ObservationItem[]): ChannelMetric[] {
   return [
     { label: '有邮箱', value: num(withEmail), icon: Mail, detail: '最近缓存样本' },
     { label: '有外链', value: num(withLinks), icon: Link2, detail: 'Instagram / Linktree 等' },
+  ];
+}
+
+function importMetrics(items: ObservationItem[]): ChannelMetric[] {
+  const withEmail = items.filter((item) => item.import_meta?.email).length;
+  const countries = new Set(items.map((item) => item.import_meta?.country).filter(Boolean));
+  return [
+    { label: '有邮箱', value: num(withEmail), icon: Mail, detail: '最近缓存样本' },
+    { label: '国家数', value: num(countries.size), icon: FileSpreadsheet, detail: '最近导入样本' },
   ];
 }

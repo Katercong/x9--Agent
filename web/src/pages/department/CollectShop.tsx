@@ -1,214 +1,327 @@
-import { useMemo } from 'react';
-import { Store, Users, ScanLine, DollarSign, Tag, Radio } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { AlertTriangle, Clock3, Database, ListChecks, Store, Users, Radar, Wifi, WifiOff } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
-import { ChartCard } from '@/components/charts/ChartCard';
-import { EChart } from '@/components/charts/EChart';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
-import { useSourceStats, useObservationsFeed, useRunProgress, type ObservationItem } from '@/api/collector';
-import { ACCENTS, CollectHeader, Reveal, dailyAreaOption, num } from './collectShared';
+import {
+  useCollectionActors,
+  useObservationsFeed,
+  type CollectionActor,
+  type ObservationItem,
+  type SourceKey,
+} from '@/api/collector';
+import { ACCENTS, CollectHeader, Reveal, num } from './collectShared';
 
-const A = ACCENTS.shop;
+type MonitorSource = Extract<SourceKey, 'tiktok_shop' | 'x9_leads'>;
 
-function pickRunRow(rp: unknown): Record<string, unknown> | null {
-  if (!rp || typeof rp !== 'object') return null;
-  const obj = rp as Record<string, unknown>;
-  if (Array.isArray(obj.items) && obj.items.length) return obj.items[0] as Record<string, unknown>;
-  if (obj.progress && typeof obj.progress === 'object') return obj.progress as Record<string, unknown>;
-  if ('step' in obj || 'running' in obj || 'current_handle' in obj) return obj;
-  return null;
+interface CollectShopProps {
+  previewDemo?: boolean;
 }
 
-export default function CollectShop() {
-  const stats = useSourceStats();
-  const feed = useObservationsFeed({ source: 'tiktok_shop', limit: 300 });
-  const run = useRunProgress();
+interface CollectionMonitorBoardProps {
+  previewDemo?: boolean;
+  sourceKey: MonitorSource;
+}
 
-  const shop = stats.data?.sources?.tiktok_shop;
-  const items = feed.data?.items ?? [];
+interface UserCard {
+  id: string;
+  displayName: string;
+  today: number;
+  total: number;
+  detail: number;
+  gmv: number;
+  lastCollectedAt: string | null;
+  status: 'online' | 'offline';
+}
 
-  const derived = useMemo(() => {
-    const handles = new Set(items.map((i) => i.handle).filter(Boolean));
-    const withGmv = items.filter((i) => i.shop?.gmv_raw).length;
-    const cat = new Map<string, number>();
-    for (const it of items) {
-      const c = it.shop?.category_text;
-      if (c) cat.set(c, (cat.get(c) ?? 0) + 1);
-    }
-    const categories = [...cat.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
-    // Prefer the contacts block from /source-stats (counts from `creators`
-    // table, accurate even when raw_json was wiped).
-    const fromContacts = shop?.contacts
-      ? { creators: shop.contacts.today_total, withGmv: shop.contacts.today_total }
-      : null;
+const SOURCE_META = {
+  tiktok_shop: {
+    accent: ACCENTS.shop,
+    icon: Store,
+    title: 'TikTok Shop 采集用户',
+    subtitle: '数据库统计 · 队列与入库明细',
+    empty: '还没有 TikTok Shop 采集数据',
+  },
+  x9_leads: {
+    accent: ACCENTS.leads,
+    icon: Radar,
+    title: 'X9 线索采集用户',
+    subtitle: '数据库统计 · 队列与入库明细',
+    empty: '还没有 X9 线索采集数据',
+  },
+} as const;
+
+function displayName(actor: CollectionActor): string {
+  return actor.display_name || actor.username || actor.email || actor.id;
+}
+
+function timeValue(value: string | null | undefined): number {
+  if (!value) return 0;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function shortTime(value: string | null | undefined): string {
+  const ts = timeValue(value);
+  if (!ts) return '暂无';
+  const diff = Date.now() - ts;
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} 天前`;
+  const date = new Date(ts);
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function shortWorkerId(value: string | null | undefined): string {
+  if (!value) return '暂无 worker';
+  const text = String(value);
+  return text.length > 28 ? `${text.slice(0, 18)}...${text.slice(-6)}` : text;
+}
+
+function statusMeta(status: UserCard['status']) {
+  if (status === 'online') return { label: '在线', tone: 'good' as const, className: 'border-emerald-200 bg-emerald-50 text-emerald-700' };
+  return { label: '不在线', tone: 'muted' as const, className: 'border-stone-200 bg-stone-50 text-stone-600' };
+}
+
+function normalizeStatus(actorStatus: unknown): UserCard['status'] {
+  const status = String(actorStatus || '').toLowerCase();
+  return status === 'online' || status === 'collecting' || status === 'idle' ? 'online' : 'offline';
+}
+
+function sourceStats(actor: CollectionActor, sourceKey: MonitorSource) {
+  const collection = actor.collection || { total: 0, today: 0 };
+  const bucket = collection.sources?.[sourceKey];
+  if (sourceKey === 'tiktok_shop') {
     return {
-      creators: fromContacts ? fromContacts.creators : handles.size,
-      withGmv: fromContacts ? fromContacts.withGmv : withGmv,
-      categories,
-      topCategory: categories[0]?.[0] ?? '—',
+      today: collection.shop_today ?? bucket?.today ?? 0,
+      total: collection.shop_total ?? bucket?.total ?? 0,
+      detail: collection.shop_detail_total ?? bucket?.funnel?.shop_profile_collected ?? 0,
+      gmv: collection.with_gmv ?? bucket?.contacts?.with_gmv ?? 0,
+      lastCollectedAt: bucket?.last_collected_at ?? collection.last_collected_at ?? null,
+      status: normalizeStatus(collection.user_status),
     };
-  }, [items, shop]);
-
-  const funnel = shop?.funnel ?? { shop_list_seen: 0, shop_profile_collected: 0 };
-
-  const funnelOption = {
-    tooltip: { trigger: 'item', formatter: '{b}: {c}' },
-    series: [
-      {
-        type: 'funnel',
-        left: '6%',
-        right: '6%',
-        top: 10,
-        bottom: 10,
-        minSize: '28%',
-        gap: 4,
-        label: { show: true, position: 'inside', color: '#fff', fontSize: 12, fontWeight: 600 },
-        data: [
-          { value: Math.max(funnel.shop_list_seen, funnel.shop_profile_collected, 1), name: `列表发现 ${funnel.shop_list_seen}`, itemStyle: { color: A.ink } },
-          { value: Math.max(funnel.shop_profile_collected, 0.0001), name: `详情采集 ${funnel.shop_profile_collected}`, itemStyle: { color: A.key } },
-        ],
-      },
-    ],
+  }
+  return {
+    today: bucket?.today ?? collection.today ?? 0,
+    total: bucket?.total ?? collection.total ?? 0,
+    detail: bucket?.contacts?.with_email ?? 0,
+    gmv: bucket?.contacts?.with_links ?? 0,
+    lastCollectedAt: bucket?.last_collected_at ?? collection.last_collected_at ?? null,
+    status: normalizeStatus(collection.user_status),
   };
+}
 
-  const categoryOption = {
-    grid: { top: 10, right: 24, bottom: 20, left: 90, containLabel: true },
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    xAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { color: '#f0f1f5', type: 'dashed' } }, axisLabel: { fontSize: 11, color: '#86909c' } },
-    yAxis: {
-      type: 'category',
-      data: derived.categories.map((c) => c[0]).reverse(),
-      axisLine: { show: false },
-      axisTick: { show: false },
-      axisLabel: { fontSize: 11, color: '#4e5969' },
-    },
-    series: [
-      {
-        type: 'bar',
-        data: derived.categories.map((c) => c[1]).reverse(),
-        barWidth: 14,
-        itemStyle: { color: A.key, borderRadius: [0, 3, 3, 0] },
-        label: { show: true, position: 'right', fontSize: 11, color: '#4e5969' },
-      },
-    ],
-  };
+function rowStatus(row: ObservationItem): { label: string; tone: 'good' | 'warn' } {
+  return row.ingest_status === 'ingested'
+    ? { label: '已入库', tone: 'good' }
+    : { label: '队列中', tone: 'warn' };
+}
 
-  const runRow = pickRunRow(run.data);
-  const running = !!(runRow && (runRow.running === true || runRow.running === 1));
-  const runPanel = (
-    <div className="flex items-center gap-2 text-xs">
-      <span
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-medium"
-        style={{ background: running ? '#dcfce7' : '#f3f4f6', color: running ? '#15803d' : '#6b7280' }}
-      >
-        <Radio size={12} className={running ? 'animate-pulse' : ''} />
-        {running ? '采集运行中' : '空闲'}
-      </span>
-      {runRow?.current_handle ? <span className="text-muted">@{String(runRow.current_handle)}</span> : null}
-    </div>
-  );
+function rowGmv(row: ObservationItem): string {
+  return row.shop?.gmv_raw || '—';
+}
+
+function rowCategory(row: ObservationItem): string {
+  return row.shop?.category_text || row.lead?.current_status || '—';
+}
+
+export function CollectionMonitorBoard({ sourceKey }: CollectionMonitorBoardProps) {
+  const meta = SOURCE_META[sourceKey];
+  const A = meta.accent;
+  const actors = useCollectionActors(true);
+  const rawActors = actors.data?.items ?? [];
+  const [selectedActorId, setSelectedActorId] = useState<string | null>(null);
+
+  const cards = useMemo<UserCard[]>(() => {
+    return rawActors
+      .map((actor) => {
+        const stats = sourceStats(actor, sourceKey);
+        return {
+          id: actor.id,
+          displayName: displayName(actor),
+          today: stats.today,
+          total: stats.total,
+          detail: stats.detail,
+          gmv: stats.gmv,
+          lastCollectedAt: stats.lastCollectedAt,
+          status: stats.status,
+        };
+      })
+      .sort((a, b) => {
+        const rank = { online: 2, offline: 1 };
+        return rank[b.status] - rank[a.status] || b.today - a.today || b.total - a.total;
+      });
+  }, [rawActors, sourceKey]);
+
+  const activeCard = cards.find((card) => card.id === selectedActorId) || (cards.length === 1 ? cards[0] : null);
+  const detailActorId = activeCard?.id || '__none__';
+  const detailFeed = useObservationsFeed({ source: sourceKey, limit: 300, actor_user_id: detailActorId });
+  const detailItems = activeCard ? (detailFeed.data?.items ?? []) : [];
+
+  const totals = useMemo(() => {
+    return {
+      today: cards.reduce((sum, card) => sum + card.today, 0),
+      total: cards.reduce((sum, card) => sum + card.total, 0),
+      online: cards.filter((card) => card.status === 'online').length,
+      offline: cards.filter((card) => card.status === 'offline').length,
+    };
+  }, [cards]);
+  const unassignedStats = actors.data?.unassigned;
+  const unassignedSource = unassignedStats?.sources?.[sourceKey];
+  const unassignedTotal = unassignedSource?.total ?? (sourceKey === 'tiktok_shop' ? unassignedStats?.total ?? 0 : 0);
+  const unassignedToday = unassignedSource?.today ?? (sourceKey === 'tiktok_shop' ? unassignedStats?.today ?? 0 : 0);
+  const latestUnassignedWorker =
+    unassignedStats?.recent_workers?.find((worker) => {
+      if (!worker) return false;
+      if (sourceKey === 'tiktok_shop') return worker.source === 'tiktok_shop' || worker.platform === 'tiktok_shop';
+      return worker.source === sourceKey;
+    }) || unassignedStats?.recent_workers?.[0] || null;
 
   const columns: Column<ObservationItem>[] = [
     {
       key: 'creator',
       header: '达人',
-      cell: (r) => (
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0" style={{ background: A.ink }}>
-            {(r.handle[0] || '?').toUpperCase()}
-          </div>
-          <div className="min-w-0">
-            <div className="text-xs font-medium text-gray-800 truncate">@{r.handle}</div>
-            <div className="text-xxs text-muted truncate">{r.display_name || '—'}</div>
-          </div>
-        </div>
-      ),
-      width: '220px',
-    },
-    { key: 'followers', header: '粉丝', align: 'right', cell: (r) => <span className="text-xs num">{r.followers_raw || '—'}</span> },
-    { key: 'gmv', header: 'GMV', align: 'right', cell: (r) => <span className="text-xs num font-medium" style={{ color: r.shop?.gmv_raw ? A.key : '#86909c' }}>{r.shop?.gmv_raw || '—'}</span> },
-    { key: 'gpm', header: 'GPM', align: 'right', cell: (r) => <span className="text-xs num">{r.shop?.gpm_raw || '—'}</span> },
-    { key: 'comm', header: '佣金', align: 'right', cell: (r) => <span className="text-xs num">{r.shop?.avg_commission_rate_raw || '—'}</span> },
-    { key: 'cat', header: '类目', cell: (r) => <span className="text-xs">{r.shop?.category_text || '—'}</span> },
-    {
-      key: 'invite',
-      header: '邀约 / 收藏',
-      cell: (r) => (
-        <div className="flex items-center gap-1">
-          {r.shop?.invite_status ? <Pill tone="info">{r.shop.invite_status}</Pill> : null}
-          {r.shop?.save_status ? <Pill tone="muted">{r.shop.save_status}</Pill> : null}
-          {!r.shop?.invite_status && !r.shop?.save_status ? <span className="text-xxs text-muted">—</span> : null}
+      width: '210px',
+      cell: (row) => (
+        <div className="min-w-0">
+          <div className="truncate text-xs font-semibold text-gray-900">@{row.handle || 'unknown'}</div>
+          <div className="truncate text-xxs text-muted">{row.display_name || '—'}</div>
         </div>
       ),
     },
     {
-      key: 'stage',
-      header: '阶段',
-      cell: (r) =>
-        r.shop?.lead_status === 'shop_profile_collected' ? (
-          <Pill tone="good">详情已采</Pill>
-        ) : (
-          <Pill tone="muted">仅列表</Pill>
-        ),
+      key: 'status',
+      header: '状态',
+      cell: (row) => {
+        const status = rowStatus(row);
+        return <Pill tone={status.tone}>{status.label}</Pill>;
+      },
     },
+    { key: 'gmv', header: 'GMV', align: 'right', cell: (row) => <span className="num text-xs font-semibold">{rowGmv(row)}</span> },
+    { key: 'category', header: '类目', cell: (row) => <span className="text-xs text-gray-700">{rowCategory(row)}</span> },
+    { key: 'keyword', header: '关键词', cell: (row) => <span className="text-xs text-gray-700">{row.search_keyword || '—'}</span> },
+    { key: 'collected', header: '采集时间', align: 'right', cell: (row) => <span className="text-xs text-muted">{shortTime(row.collected_at || row.created_at)}</span> },
+    { key: 'ingested', header: '入库/更新', align: 'right', cell: (row) => <span className="text-xs text-muted">{shortTime(row.ingested_at || row.collected_at || row.created_at)}</span> },
   ];
 
   return (
     <div className="space-y-4">
-      <CollectHeader
-        accent={A}
-        icon={Store}
-        title="采集 · TikTok Shop"
-        subtitle="affiliate-us 全自动达人采集 · 列表与详情两阶段"
-        right={runPanel}
-      />
+      <CollectHeader accent={A} icon={meta.icon} title={meta.title} subtitle={meta.subtitle} />
 
       <AsyncState
-        loading={stats.isLoading || feed.isLoading}
-        error={stats.error || feed.error}
-        isEmpty={!feed.isLoading && items.length === 0}
-        emptyMessage="还没有 TikTok Shop 采集数据"
+        loading={actors.isLoading}
+        error={actors.error}
+        isEmpty={!actors.isLoading && cards.length === 0}
+        emptyMessage={meta.empty}
         height={420}
       >
         <Reveal i={1}>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <KpiCard label="采集达人" value={num(derived.creators)} icon={Users} iconBg={A.soft} iconColor={A.key} />
-            <KpiCard label="详情已采" value={num(funnel.shop_profile_collected)} icon={ScanLine} iconBg="#e0e7ff" iconColor="#4f46e5" />
-            <KpiCard label="含 GMV" value={num(derived.withGmv)} icon={DollarSign} iconBg="#dcfce7" iconColor="#16a34a" />
-            <KpiCard label="主类目" value={derived.topCategory} icon={Tag} iconBg="#fef3c7" iconColor="#ca8a04" />
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
+            <KpiCard label="今日采集" value={num(totals.today)} icon={Clock3} iconBg={A.soft} iconColor={A.key} />
+            <KpiCard label="总采集" value={num(totals.total)} icon={Database} iconBg="#e0e7ff" iconColor="#4f46e5" />
+            <KpiCard label="在线用户" value={num(totals.online)} icon={Wifi} iconBg="#dcfce7" iconColor="#16a34a" />
+            <KpiCard label="不在线用户" value={num(totals.offline)} icon={WifiOff} iconBg="#f3f4f6" iconColor="#6b7280" />
+            <KpiCard
+              label="未归属采集"
+              value={num(unassignedTotal)}
+              subLabel={`今日 ${num(unassignedToday)} · ${shortWorkerId(latestUnassignedWorker?.worker_id)}`}
+              icon={AlertTriangle}
+              iconBg="#fff7ed"
+              iconColor="#ea580c"
+            />
           </div>
         </Reveal>
 
         <Reveal i={2}>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-4">
-            <ChartCard title="列表 → 详情 漏斗">
-              <EChart option={funnelOption} height={260} />
-            </ChartCard>
-            <ChartCard title="近 7 天采集量" className="lg:col-span-2">
-              <EChart option={dailyAreaOption(shop?.daily ?? [], A.key)} height={260} />
-            </ChartCard>
-          </div>
+          <section className="mt-4 rounded-lg border border-line bg-white shadow-card">
+            <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Users size={16} style={{ color: A.key }} />
+                <h3 className="text-sm font-semibold text-gray-900">采集用户</h3>
+              </div>
+              <span className="text-xxs text-muted">{num(cards.length)} 个用户</span>
+            </div>
+            <div className="grid grid-cols-1 gap-3 p-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+              {cards.map((card) => {
+                const status = statusMeta(card.status);
+                const active = activeCard?.id === card.id;
+                return (
+                  <button
+                    key={card.id}
+                    type="button"
+                    onClick={() => setSelectedActorId(card.id)}
+                    className={`rounded-lg border bg-white p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-soft ${
+                      active ? 'border-gray-900 ring-2 ring-gray-900/10' : 'border-line'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-black text-gray-900">{card.displayName}</div>
+                      </div>
+                      <span className={`shrink-0 rounded-md border px-2 py-1 text-xxs font-bold ${status.className}`}>{status.label}</span>
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 gap-3">
+                      <div>
+                        <div className="text-xxs text-muted">今日采集</div>
+                        <div className="num mt-1 text-lg font-black text-gray-900">{num(card.today)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xxs text-muted">总采集</div>
+                        <div className="num mt-1 text-lg font-black text-gray-900">{num(card.total)}</div>
+                      </div>
+                    </div>
+                    <div className="mt-4 flex items-center justify-between gap-2 text-xxs text-muted">
+                      <span>最后采集</span>
+                      <span>{shortTime(card.lastCollectedAt)}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
         </Reveal>
 
         <Reveal i={3}>
-          <div className="mt-4">
-            <ChartCard title="类目分布 Top 8">
-              <EChart option={categoryOption} height={Math.max(220, derived.categories.length * 34 + 40)} />
-            </ChartCard>
-          </div>
-        </Reveal>
-
-        <Reveal i={4}>
-          <div className="card mt-4">
-            <div className="px-4 py-3 border-b border-line flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-gray-800">采集明细 · {num(items.length)} 条观测</h3>
-              <span className="text-xxs text-muted">实时来自 /observations-feed</span>
+          <section className="mt-4 rounded-lg border border-line bg-white shadow-card">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+              <div className="flex items-center gap-2">
+                <ListChecks size={16} style={{ color: A.key }} />
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-900">
+                    {activeCard ? `${activeCard.displayName} 的采集详情` : '选择一个用户查看详情'}
+                  </h3>
+                  <div className="text-xxs text-muted">只展示该用户上传的数据库记录</div>
+                </div>
+              </div>
+              {activeCard ? <Pill tone={statusMeta(activeCard.status).tone}>{statusMeta(activeCard.status).label}</Pill> : null}
             </div>
-            <DataTable columns={columns} data={items} rowKey={(r) => r.id} emptyText="还没有 TikTok Shop 采集数据" />
-          </div>
+            {activeCard ? (
+              <div className="p-2">
+                <AsyncState
+                  loading={detailFeed.isLoading}
+                  error={detailFeed.error}
+                  isEmpty={!detailFeed.isLoading && detailItems.length === 0}
+                  emptyMessage="该用户还没有 TikTok Shop 采集记录"
+                  height={240}
+                >
+                  <DataTable columns={columns} data={detailItems} rowKey={(row) => row.id} emptyText="该用户还没有采集记录" />
+                </AsyncState>
+              </div>
+            ) : (
+              <div className="px-4 py-10 text-center text-sm text-muted">点击上方用户卡片查看上传明细</div>
+            )}
+          </section>
         </Reveal>
       </AsyncState>
     </div>
   );
+}
+
+export default function CollectShop({ previewDemo = false }: CollectShopProps) {
+  return <CollectionMonitorBoard sourceKey="tiktok_shop" previewDemo={previewDemo} />;
 }
