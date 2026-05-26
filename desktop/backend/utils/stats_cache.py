@@ -35,9 +35,10 @@ def get_or_compute(
                 return copy.deepcopy(value)
             _CACHE.pop(cache_key, None)
 
-    value = compute()
-    stored_value = copy.deepcopy(value)
-    with _LOCK:
+        # Keep the compute inside the cache lock so concurrent dashboard polls
+        # cannot stampede into the same expensive statistics query.
+        value = compute()
+        stored_value = copy.deepcopy(value)
         if len(_CACHE) >= _MAX_ENTRIES:
             stale = [item_key for item_key, (expires_at, _) in _CACHE.items() if expires_at < now]
             for item_key in stale:
@@ -47,7 +48,7 @@ def get_or_compute(
                 for item_key, _ in oldest:
                     _CACHE.pop(item_key, None)
         _CACHE[cache_key] = (time.monotonic() + ttl_seconds, stored_value)
-    return copy.deepcopy(stored_value)
+        return copy.deepcopy(stored_value)
 
 
 def refresh(

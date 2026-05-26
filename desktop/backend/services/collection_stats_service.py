@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
@@ -12,7 +11,6 @@ from ..models.creator_source import CreatorSource
 from ..models.raw_observation import RawObservation
 from ..services.departments import department_where
 from ..utils import stats_cache
-from ..utils.json_utils import loads_json_list
 from ..utils.source_classify import (
     SOURCE_OTHER as SRC_OTHER,
     SOURCE_SHOP as SRC_SHOP,
@@ -188,32 +186,31 @@ def _source_bucket_from_creator_source(source_type: str | None, platform: str | 
     return classify_source(platform, source)
 
 
-def _load_shop_metrics(creator: Creator) -> dict[str, Any]:
-    if not creator.tiktok_shop_json:
-        return {}
-    try:
-        parsed = json.loads(creator.tiktok_shop_json)
-        return parsed if isinstance(parsed, dict) else {}
-    except (TypeError, ValueError):
-        return {}
-
-
-def _has_gmv(creator: Creator) -> bool:
-    metrics = _load_shop_metrics(creator)
-    return bool(str(metrics.get("gmv_raw") or "").strip())
-
-
-def _has_detail_capture(creator: Creator) -> bool:
-    metrics = _load_shop_metrics(creator)
-    return bool(
-        creator.lead_status == "shop_profile_collected"
-        or metrics.get("detail_captured")
-        or str(metrics.get("detail_captured_at") or "").strip()
-    )
-
-
-def _has_links(creator: Creator) -> bool:
-    return bool(loads_json_list(creator.external_links_json))
+def _creator_contact_signal_columns():
+    links_text = func.trim(func.coalesce(Creator.external_links_json, ""))
+    shop_text = func.coalesce(Creator.tiktok_shop_json, "")
+    has_email = (func.length(func.trim(func.coalesce(Creator.email, ""))) > 0).label("has_email")
+    has_links = (~links_text.in_(["", "[]", "null", "None"])).label("has_links")
+    has_gmv = (
+        shop_text.like('%"gmv_raw"%')
+        & ~shop_text.like('%"gmv_raw": ""%')
+        & ~shop_text.like('%"gmv_raw":""%')
+        & ~shop_text.like('%"gmv_raw": null%')
+        & ~shop_text.like('%"gmv_raw":null%')
+    ).label("has_gmv")
+    has_detail_capture = (
+        (Creator.lead_status == "shop_profile_collected")
+        | shop_text.like('%"detail_captured": true%')
+        | shop_text.like('%"detail_captured":true%')
+        | (
+            shop_text.like('%"detail_captured_at"%')
+            & ~shop_text.like('%"detail_captured_at": ""%')
+            & ~shop_text.like('%"detail_captured_at":""%')
+            & ~shop_text.like('%"detail_captured_at": null%')
+            & ~shop_text.like('%"detail_captured_at":null%')
+        )
+    ).label("has_detail_capture")
+    return has_email, has_links, has_gmv, has_detail_capture
 
 
 def _source_contacts_from_creators(
@@ -225,14 +222,51 @@ def _source_contacts_from_creators(
     contacts: dict[str, dict[str, int]] = {}
     seen: set[tuple[str, str, str]] = set()
 
+    has_email_col, has_links_col, has_gmv_col, has_detail_col = _creator_contact_signal_columns()
+
     if actor_filter is None:
-        q = select(Creator, Creator.source)
+        q = select(
+            Creator.id,
+            Creator.platform,
+            Creator.source,
+            Creator.collected_at,
+            Creator.created_at,
+            has_email_col,
+            has_links_col,
+            has_gmv_col,
+            has_detail_col,
+        )
         where_department = department_where(Creator, department_code)
         if where_department is not None:
             q = q.where(where_department)
-        rows = ((creator, None, source) for creator, source in db.execute(q).all())
+        rows = (
+            {
+                "id": row.id,
+                "platform": row.platform,
+                "source_type": None,
+                "source": row.source,
+                "collected_at": row.collected_at,
+                "created_at": row.created_at,
+                "has_email": bool(row.has_email),
+                "has_links": bool(row.has_links),
+                "has_gmv": bool(row.has_gmv),
+                "has_detail_capture": bool(row.has_detail_capture),
+            }
+            for row in db.execute(q).all()
+        )
     else:
-        q = select(Creator, CreatorSource.source_type, Creator.source).join(
+        q = select(
+            Creator.id,
+            Creator.platform,
+            Creator.source,
+            Creator.collected_at,
+            Creator.created_at,
+            CreatorSource.source_type,
+            has_email_col,
+            has_links_col,
+            has_gmv_col,
+            has_detail_col,
+        ).join(
             CreatorSource,
             CreatorSource.creator_id == Creator.id,
         )
@@ -240,13 +274,27 @@ def _source_contacts_from_creators(
         if where_department is not None:
             q = q.where(where_department)
         q = _apply_actor_filter(q, CreatorSource, actor_filter)
-        rows = db.execute(q).all()
+        rows = (
+            {
+                "id": row.id,
+                "platform": row.platform,
+                "source_type": row.source_type,
+                "source": row.source,
+                "collected_at": row.collected_at,
+                "created_at": row.created_at,
+                "has_email": bool(row.has_email),
+                "has_links": bool(row.has_links),
+                "has_gmv": bool(row.has_gmv),
+                "has_detail_capture": bool(row.has_detail_capture),
+            }
+            for row in db.execute(q).all()
+        )
 
     today = datetime.now().date()
-    for creator, source_type, fallback_source in rows:
-        bucket = _source_bucket_from_creator_source(source_type, creator.platform, fallback_source)
+    for row in rows:
+        bucket = _source_bucket_from_creator_source(row["source_type"], row["platform"], row["source"])
         actor_key = actor_filter or "all"
-        key = (actor_key, bucket, creator.id)
+        key = (actor_key, bucket, row["id"])
         if key in seen:
             continue
         seen.add(key)
@@ -261,11 +309,11 @@ def _source_contacts_from_creators(
             "today_with_links": 0,
             "today_with_gmv": 0,
         })
-        has_email = bool(str(creator.email or "").strip())
-        has_links = _has_links(creator)
-        has_gmv = _has_gmv(creator)
-        has_valid_detail = bucket == SRC_SHOP and _has_detail_capture(creator) and (has_email or has_links or has_gmv)
-        is_today = _as_date(creator.collected_at) or _as_date(creator.created_at)
+        has_email = bool(row["has_email"])
+        has_links = bool(row["has_links"])
+        has_gmv = bool(row["has_gmv"])
+        has_valid_detail = bucket == SRC_SHOP and bool(row["has_detail_capture"]) and (has_email or has_links or has_gmv)
+        is_today = _as_date(row["collected_at"]) or _as_date(row["created_at"])
         is_today = is_today == today
         stat["total"] += 1
         if has_email:
@@ -535,11 +583,18 @@ def _compute_actor_collection_stats_map(
             if lead_status == "shop_profile_collected":
                 stats["shop_detail_total"] += 1
 
+    has_email_col, has_links_col, has_gmv_col, has_detail_col = _creator_contact_signal_columns()
     q = select(
         CreatorSource.actor_user_id,
         CreatorSource.source_type,
         CreatorSource.raw_observation_id,
-        Creator,
+        Creator.id,
+        Creator.platform,
+        Creator.source,
+        has_email_col,
+        has_links_col,
+        has_gmv_col,
+        has_detail_col,
     ).join(
         Creator,
         Creator.id == CreatorSource.creator_id,
@@ -551,11 +606,14 @@ def _compute_actor_collection_stats_map(
     seen: set[tuple[str, str, str]] = set()
     seen_raw: set[tuple[str, str, str]] = set()
     today_ingested_by_source: dict[tuple[str, str], int] = {}
-    for actor_user_id, source_type, raw_observation_id, creator in db.execute(q).all():
+    for row in db.execute(q).all():
+        actor_user_id = row.actor_user_id
+        source_type = row.source_type
+        raw_observation_id = row.raw_observation_id
         actor_key = str(actor_user_id or "").strip()
         if actor_key not in out:
             continue
-        bucket = _source_bucket_from_creator_source(source_type, creator.platform, creator.source)
+        bucket = _source_bucket_from_creator_source(source_type, row.platform, row.source)
         if bucket != SRC_SHOP:
             continue
 
@@ -569,20 +627,20 @@ def _compute_actor_collection_stats_map(
                 if raw_key in today_raw_ids.get((actor_key, bucket), set()):
                     today_ingested_by_source[(actor_key, bucket)] = today_ingested_by_source.get((actor_key, bucket), 0) + 1
 
-        dedupe = (actor_key, bucket, creator.id)
+        dedupe = (actor_key, bucket, row.id)
         if dedupe in seen:
             continue
         seen.add(dedupe)
-        has_email = bool(str(creator.email or "").strip())
-        has_links = _has_links(creator)
-        has_gmv = _has_gmv(creator)
+        has_email = bool(row.has_email)
+        has_links = bool(row.has_links)
+        has_gmv = bool(row.has_gmv)
         if has_email:
             out[actor_key]["with_email"] += 1
         if has_links:
             out[actor_key]["with_links"] += 1
         if has_gmv:
             out[actor_key]["with_gmv"] += 1
-        if _has_detail_capture(creator) and (has_email or has_links or has_gmv):
+        if bool(row.has_detail_capture) and (has_email or has_links or has_gmv):
             out[actor_key]["valid_detail_total"] += 1
 
     for actor_key, stats in out.items():

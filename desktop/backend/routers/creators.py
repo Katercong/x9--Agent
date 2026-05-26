@@ -46,6 +46,60 @@ class AssignmentIn(BaseModel):
     force: bool = False
 
 
+_LOCAL_LIST_COLUMNS = (
+    Creator.id,
+    Creator.department_code,
+    Creator.platform,
+    Creator.handle,
+    Creator.display_name,
+    Creator.profile_url,
+    Creator.bio,
+    Creator.followers_raw,
+    Creator.followers_count,
+    Creator.source,
+    Creator.avatar_url,
+    Creator.shop_profile_url,
+    Creator.lead_status,
+    Creator.email,
+    Creator.has_email,
+    Creator.external_links_json,
+    Creator.search_keyword,
+    Creator.collected_at,
+    Creator.last_seen_at,
+    Creator.created_at,
+    Creator.updated_at,
+    Creator.primary_product_category,
+    Creator.primary_product_fit_score,
+    Creator.feminine_care_fit,
+    Creator.commercial_value_score,
+    Creator.data_quality_score,
+    Creator.contactability_score,
+    Creator.content_format_score,
+    Creator.content_format_status,
+    Creator.fit_level,
+    Creator.priority_score,
+    Creator.recommendation_score,
+    Creator.recommendation_status,
+    Creator.current_status,
+    Creator.store_assigned,
+    Creator.owner_bd,
+    Creator.recommended_product_type,
+    Creator.recommended_collab_type,
+    Creator.outreach_priority,
+    Creator.queue_type,
+    Creator.review_required,
+    Creator.review_status,
+    Creator.recommendation_reason,
+    Creator.next_action,
+    Creator.risk_summary,
+    Creator.risk_tags_json,
+    Creator.positive_tags_json,
+    Creator.evidence_strength,
+    Creator.fit_evidence_source_json,
+    Creator.matched_keywords_json,
+)
+
+
 # ---------------------------------------------------------------------------
 # Date / time helpers (unchanged)
 # ---------------------------------------------------------------------------
@@ -642,6 +696,18 @@ def _local_creator_row(c: Creator) -> dict[str, Any]:
     }
 
 
+def _local_creator_list_row(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    for key in ("collected_at", "last_seen_at", "created_at", "updated_at"):
+        value = out.get(key)
+        if hasattr(value, "isoformat"):
+            out[key] = value.isoformat()
+    # List pages must not materialize large snapshots; details load one creator.
+    out["profile_snapshot_json"] = None
+    out["tiktok_shop_json"] = None
+    return out
+
+
 def _all_creator_rows(department_code: str | None) -> list[dict]:
     rows: list[dict] = []
     if not settings.db_url.startswith("sqlite"):
@@ -655,14 +721,17 @@ def _all_creator_rows(department_code: str | None) -> list[dict]:
         if row.get("handle")
     }
     with SessionLocal() as db:
-        local_rows = list(db.scalars(select(Creator)).all())
-    for creator in local_rows:
-        if not row_in_department(creator, department_code):
-            continue
-        key = ((creator.platform or "tiktok").lower(), (creator.handle or "").lower())
+        stmt = select(*_LOCAL_LIST_COLUMNS)
+        where_clause = department_where(Creator, department_code)
+        if where_clause is not None:
+            stmt = stmt.where(where_clause)
+        local_rows = list(db.execute(stmt).mappings())
+    for row in local_rows:
+        creator = _local_creator_list_row(row)
+        key = ((creator.get("platform") or "tiktok").lower(), (creator.get("handle") or "").lower())
         if key in seen:
             continue
-        rows.append(_local_creator_row(creator))
+        rows.append(creator)
         seen.add(key)
     return rows
 

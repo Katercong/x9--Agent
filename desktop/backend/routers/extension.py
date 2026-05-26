@@ -954,7 +954,7 @@ def _x9_links(item: dict):
 
 @router.post("/x9-compat/ingest-creators")
 def x9_compat_ingest(body: dict, request: Request, db: Session = Depends(get_db)) -> dict:
-    from ..services.collector_service import ingest_observation
+    from ..services.collector_service import queue_observation
     items = body.get("items") or []
     department_code = _department_from_request(request, body.get("department_code"))
     results: list[dict] = []
@@ -1042,7 +1042,7 @@ def x9_compat_ingest(body: dict, request: Request, db: Session = Depends(get_db)
             "collected_at": collected_at,
         }
         try:
-            r = ingest_observation(db, observation)
+            r = queue_observation(db, observation)
             r["dropped_by_extension"] = current_status == "dropped"
             r["filter_reason"] = notes_meta.get("filter")
             results.append(r)

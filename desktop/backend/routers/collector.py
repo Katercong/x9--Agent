@@ -16,7 +16,7 @@ from ..models.creator_source import CreatorSource
 from ..models.extension_run_progress import ExtensionRunProgress
 from ..models.extension_session import ExtensionSession
 from ..models.raw_observation import RawObservation
-from ..services.collector_service import ingest_observation, reprocess_raw_observations
+from ..services.collector_service import queue_observation, reprocess_raw_observations
 from ..services.collection_stats_service import (
     SHOP_QUEUE_CLEARED_STATUS,
     get_actor_collection_stats_map,
@@ -236,7 +236,7 @@ def post_observation(request: Request, payload: Any = Body(...), db: Session = D
         payload = _coerce_observation_payload(payload)
         _apply_worker_binding_attribution(db, payload, request)
         _require_bound_shop_actor(payload)
-        return ingest_observation(db, payload)
+        return queue_observation(db, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -255,6 +255,7 @@ def reprocess_raw(
         department_code=current_department_code(request),
         skip_invalid_handle_repairs=body.get("skip_invalid_handle_repairs", True) is not False,
         auto_process=body.get("auto_process", True) is not False,
+        queued_only=body.get("queued_only", False) is True,
     )
 
 

@@ -13,7 +13,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -203,6 +203,61 @@ def ingest_observation(
     return result
 
 
+def queue_observation(
+    db: Session,
+    payload: dict[str, Any],
+    *,
+    observation_id: str | None = None,
+) -> dict[str, Any]:
+    """Persist the raw capture only; processors replay it later."""
+    if not isinstance(payload, dict):
+        raise ValueError("observation payload must be a dict")
+    if payload.get("event_type") != "creator_observation":
+        raise ValueError("event_type must be 'creator_observation'")
+    if _is_source_video_seed_only(payload):
+        return {
+            "ok": True,
+            "creator_id": None,
+            "handle": ((payload.get("creator") or {}).get("handle") or None),
+            "action": "skipped",
+            "reason": "source_video_seed_only",
+            "observation_id": observation_id,
+        }
+
+    creator_data = payload.get("creator") or {}
+    handle = (creator_data.get("handle") or "").strip() or None
+    platform = (payload.get("platform") or "tiktok").lower()
+    department_code = normalize_department_code(payload.get("department_code"), default=DEFAULT_DEPARTMENT)
+    actor_user_id = str(payload.get("actor_user_id") or "").strip() or None
+    collected_at = _parse_dt(payload.get("collected_at")) or datetime.now()
+    raw_blob = dumps_json(payload)
+    obs = RawObservation(
+        id=observation_id or new_id("obs"),
+        platform=platform,
+        department_code=department_code,
+        source=payload.get("source") or "chrome_extension",
+        actor_user_id=actor_user_id,
+        worker_id=payload.get("worker_id"),
+        account_id=payload.get("account_id"),
+        search_keyword=payload.get("search_keyword"),
+        lead_status=payload.get("lead_status"),
+        process_status="queued",
+        raw_json=raw_blob,
+        content_hash=content_hash(raw_blob),
+        collected_at=collected_at,
+    )
+    db.add(obs)
+    db.commit()
+    return {
+        "ok": True,
+        "creator_id": None,
+        "handle": handle,
+        "action": "queued",
+        "observation_id": obs.id,
+        "auto_process": False,
+    }
+
+
 def reprocess_raw_observations(
     db: Session,
     *,
@@ -211,6 +266,7 @@ def reprocess_raw_observations(
     department_code: str | None = None,
     skip_invalid_handle_repairs: bool = True,
     auto_process: bool = True,
+    queued_only: bool = False,
 ) -> dict[str, Any]:
     """Replay stored raw observations through current server-side processors.
 
@@ -220,15 +276,6 @@ def reprocess_raw_observations(
     historical handle cleanup the user explicitly excluded.
     """
     limit = max(1, min(int(limit or 1000), 20000))
-    q = select(RawObservation)
-    if platform and platform != "all":
-        q = q.where(RawObservation.platform == platform)
-    if department_code:
-        q = q.where(RawObservation.department_code == department_code)
-    q = q.order_by(
-        func.coalesce(RawObservation.collected_at, RawObservation.created_at).asc(),
-        RawObservation.id.asc(),
-    ).limit(limit)
     # CRITICAL: see pipeline.py:_repeat_discovery_for_creators for full
     # rationale. tldr: raw_json is ~142 KB/row, so a 20 000-row reprocess
     # would peak at ~2.8 GB of DOM text in Python. We stream + parse +
@@ -246,13 +293,14 @@ def reprocess_raw_observations(
         light_q = light_q.where(RawObservation.platform == platform)
     if department_code:
         light_q = light_q.where(RawObservation.department_code == department_code)
+    if queued_only:
+        light_q = light_q.where(RawObservation.process_status == "queued")
     light_q = light_q.order_by(
         func.coalesce(RawObservation.collected_at, RawObservation.created_at).asc(),
         RawObservation.id.asc(),
     ).limit(limit)
     stream = db.execute(light_q.execution_options(yield_per=200))
 
-    prepared: list[tuple[str, dict[str, Any], bool]] = []
     scanned = 0
     counts = {
         "scanned": 0,
@@ -275,34 +323,46 @@ def reprocess_raw_observations(
         if not payload:
             counts["skipped"] += 1
             counts["skipped_missing_payload"] += 1
+            _mark_raw_processed(db, obs_id, "skipped", "missing_payload")
             continue
         payload.setdefault("event_type", "creator_observation")
         if skip_invalid_handle_repairs and not _raw_payload_has_clean_handle(payload):
             counts["skipped"] += 1
             counts["skipped_invalid_handle_source"] += 1
+            _mark_raw_processed(db, obs_id, "skipped", "invalid_handle_source")
             continue
-        enriched = enrich_observation_payload(payload)
-        has_contact = _has_ingestable_contact(enriched.get("creator") or {})
-        prepared.append((obs_id, payload, has_contact))
-    counts["scanned"] = scanned
-
-    replay_order = [item for item in prepared if item[2]] + [item for item in prepared if not item[2]]
-    for obs_id, payload, _has_contact in replay_order:
         try:
             result = ingest_observation(db, payload, auto_process=auto_process, persist_raw=False, observation_id=obs_id)
         except Exception as exc:
             counts["errors"] += 1
             errors.append({"observation_id": obs_id, "error": str(exc)})
+            _mark_raw_processed(db, obs_id, "error", str(exc))
             continue
         action = result.get("action")
         if action in {"inserted", "updated"}:
             counts["processed"] += 1
             counts[action] += 1
+            _mark_raw_processed(db, obs_id, "processed")
         elif action == "skipped":
             counts["skipped"] += 1
             if result.get("reason") == "missing_contact":
                 counts["skipped_missing_contact"] += 1
+            _mark_raw_processed(db, obs_id, "skipped", str(result.get("reason") or "skipped"))
+    counts["scanned"] = scanned
     return {"ok": True, **counts, "error_samples": errors[:20]}
+
+
+def _mark_raw_processed(db: Session, obs_id: str, status: str, error: str | None = None) -> None:
+    db.execute(
+        update(RawObservation)
+        .where(RawObservation.id == obs_id)
+        .values(
+            process_status=status,
+            processed_at=datetime.now(timezone.utc),
+            process_error=(error[:1000] if error else None),
+        )
+    )
+    db.commit()
 
 
 def _auto_process_creator(db: Session, creator_id: str) -> dict[str, Any]:
