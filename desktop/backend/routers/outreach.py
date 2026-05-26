@@ -31,7 +31,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -41,6 +41,7 @@ from ..models.creator import Creator
 from ..models.outreach_email import OutreachEmail
 from ..models.outreach_template import OutreachTemplate
 from ..services import gmail_service
+from ..services import product_asset_service
 from ..services import remote_creators
 from ..services.departments import current_department_code, department_where, row_in_department
 from ..services.remote_creators import RemoteRepoError
@@ -51,6 +52,16 @@ from ..services.outreach_service import (
     generate_x9_care_keyword_script,
     pick_template,
     render_template,
+)
+from ..services.tk_script_service import (
+    build_tk_context,
+    build_tk_email_subject,
+    delete_prompt as _delete_tk_prompt,
+    generate_strategy_ai,
+    generate_strategy_hybrid,
+    generate_strategy_template,
+    list_prompts as _list_tk_prompts,
+    save_prompt as _save_tk_prompt,
 )
 from ..utils.id_utils import new_id
 
@@ -144,6 +155,40 @@ class RollbackIn(BaseModel):
     """Restore the subject/body of one historical email into the current draft."""
 
     target_email_id: str
+
+
+class TkScriptIn(BaseModel):
+    commission: int = Field(default=20, ge=5, le=20)
+    strategy: str = Field(default="template", pattern="^(template|ai|hybrid)$")
+    custom_prompt: str | None = Field(default=None, max_length=4000)
+    prompt_id: str | None = None
+    product_asset_id: str | None = None
+
+
+class TkPromptIn(BaseModel):
+    name: str = Field(max_length=100)
+    prompt: str = Field(max_length=4000)
+    strategy: str = Field(default="ai", pattern="^(ai|hybrid)$")
+
+
+class ProductAssetIn(BaseModel):
+    name: str = Field(max_length=120)
+    sku_code: str | None = Field(default=None, max_length=80)
+    product_key: str = Field(default="all", max_length=80)
+    selling_points: list[str] = Field(default_factory=list)
+    target_creator_types: list[str] = Field(default_factory=list)
+    image_data_url: str | None = Field(default=None, max_length=12_000_000)
+    is_active: bool = True
+
+
+class ProductAssetPatch(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    sku_code: str | None = Field(default=None, max_length=80)
+    product_key: str | None = Field(default=None, max_length=80)
+    selling_points: list[str] | None = None
+    target_creator_types: list[str] | None = None
+    image_data_url: str | None = Field(default=None, max_length=12_000_000)
+    is_active: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -428,6 +473,180 @@ def preview_email(creator_id: str, body: PreviewIn, request: Request, db: Sessio
         "tone": rendered.tone,
         "language": rendered.language,
         "variants": rendered.variants or [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# TK script prompt template management
+# ---------------------------------------------------------------------------
+
+
+@router.get("/tk-prompts")
+def list_tk_prompts() -> dict:
+    """List saved TK script prompt templates."""
+    items = _list_tk_prompts()
+    return {"items": items, "total": len(items)}
+
+
+@router.post("/tk-prompts")
+def create_tk_prompt(body: TkPromptIn) -> dict:
+    """Save a custom TK script prompt template."""
+    entry = _save_tk_prompt(name=body.name, prompt=body.prompt, strategy=body.strategy)
+    return {"ok": True, "prompt": entry}
+
+
+@router.delete("/tk-prompts/{prompt_id}")
+def remove_tk_prompt(prompt_id: str) -> dict:
+    """Delete a saved TK script prompt template."""
+    ok = _delete_tk_prompt(prompt_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="prompt not found")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Product/SKU asset library
+# ---------------------------------------------------------------------------
+
+
+@router.get("/product-assets")
+def list_product_assets(
+    request: Request,
+    creator_id: str | None = Query(default=None),
+    include_inactive: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> dict:
+    """List local outreach product assets and optionally return a creator match."""
+    department_code = current_department_code(request)
+    items = product_asset_service.list_assets(
+        department_code,
+        include_inactive=include_inactive,
+    )
+    matched = None
+    if creator_id:
+        creator = _resolve_creator(db, creator_id, department_code)
+        matched = product_asset_service.match_asset_for_creator(creator, items)
+    return {"ok": True, "items": items, "total": len(items), "matched": matched}
+
+
+@router.post("/product-assets")
+def create_product_asset(body: ProductAssetIn, request: Request) -> dict:
+    """Save a local product/SKU asset, including an optional base64 image."""
+    try:
+        asset = product_asset_service.save_asset(
+            body.model_dump(),
+            department_code=current_department_code(request),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "asset": asset}
+
+
+@router.patch("/product-assets/{asset_id}")
+def update_product_asset(asset_id: str, body: ProductAssetPatch, request: Request) -> dict:
+    try:
+        asset = product_asset_service.update_asset(
+            asset_id,
+            body.model_dump(exclude_unset=True),
+            department_code=current_department_code(request),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if asset is None:
+        raise HTTPException(status_code=404, detail="product asset not found")
+    return {"ok": True, "asset": asset}
+
+
+@router.delete("/product-assets/{asset_id}")
+def delete_product_asset(asset_id: str, request: Request) -> dict:
+    ok = product_asset_service.delete_asset(asset_id, department_code=current_department_code(request))
+    if not ok:
+        raise HTTPException(status_code=404, detail="product asset not found")
+    return {"ok": True}
+
+
+@router.get("/product-assets/{asset_id}/image")
+def get_product_asset_image(asset_id: str, request: Request):
+    asset = product_asset_service.get_asset(asset_id, department_code=current_department_code(request))
+    if not asset:
+        raise HTTPException(status_code=404, detail="product asset not found")
+    path = product_asset_service.image_path(asset)
+    if not path:
+        raise HTTPException(status_code=404, detail="product image not found")
+    return FileResponse(path, media_type=product_asset_service.guess_mime_type(path))
+
+
+# ---------------------------------------------------------------------------
+# TK DM script generation
+# ---------------------------------------------------------------------------
+
+
+@router.post("/tk-script/{creator_id}")
+def generate_tk_dm_script(
+    creator_id: str,
+    body: TkScriptIn,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Generate a personalized TikTok DM outreach script.
+
+    Three strategies:
+    - template: ${var} substitution with creator context (bio, video, keywords)
+    - ai:       LLM generates the entire script given creator context + system prompt
+    - hybrid:   Fixed X9 brand frame + LLM writes personalized opener only
+    """
+    department_code = current_department_code(request)
+    creator = _resolve_creator(db, creator_id, department_code)
+    product_asset = None
+    if body.product_asset_id:
+        product_asset = product_asset_service.get_asset(body.product_asset_id, department_code=department_code)
+        if product_asset is None:
+            raise HTTPException(status_code=404, detail="product asset not found")
+    else:
+        product_asset = product_asset_service.match_asset_for_creator(
+            creator,
+            product_asset_service.list_assets(department_code),
+        )
+    ctx = build_tk_context(creator, commission=body.commission, product_asset=product_asset)
+
+    custom_prompt = (body.custom_prompt or "").strip() or None
+    if body.prompt_id and not custom_prompt:
+        for prompt in _list_tk_prompts():
+            if prompt.get("id") == body.prompt_id:
+                custom_prompt = prompt.get("prompt")
+                break
+
+    if body.strategy == "ai":
+        script, ai_status = generate_strategy_ai(ctx, custom_prompt=custom_prompt)
+    elif body.strategy == "hybrid":
+        script, ai_status = generate_strategy_hybrid(ctx, custom_prompt=custom_prompt)
+    else:
+        script = generate_strategy_template(ctx)
+        ai_status = "template"
+
+    return {
+        "ok": True,
+        "subject": build_tk_email_subject(ctx),
+        "body": script,
+        "script": script,
+        "handle": ctx.get("handle", ""),
+        "product_key": ctx.get("product_key", "all"),
+        "product_asset": product_asset,
+        "commission": int(ctx.get("commission") or 20),
+        "strategy": body.strategy,
+        "ai_status": ai_status,
+        "context_used": {
+            "bio_excerpt": ctx.get("bio_excerpt", ""),
+            "video_title": ctx.get("video_title", ""),
+            "matched_keywords": ctx.get("matched_keywords", ""),
+            "recommendation_reason": ctx.get("recommendation_reason", ""),
+            "product_label": ctx.get("product_label", ""),
+            "product_asset_name": ctx.get("product_asset_name", ""),
+            "product_sku_code": ctx.get("product_sku_code", ""),
+            "product_selling_points": ctx.get("product_selling_points", ""),
+            "followers_count": ctx.get("followers_count", ""),
+            "personalized_interest": ctx.get("personalized_interest", ""),
+        },
     }
 
 

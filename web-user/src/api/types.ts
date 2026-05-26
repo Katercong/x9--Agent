@@ -249,6 +249,18 @@ export interface ExtensionSession {
   session_id: string;
   worker_id?: string | null;
   account_id?: string | null;
+  source?: string | null;
+  status?: string | null;
+  session_status?: string | null;
+  running?: boolean | null;
+  current_action?: string | null;
+  current_handle?: string | null;
+  search_keyword?: string | null;
+  hourly_limit?: number | null;
+  hourly_used?: number | null;
+  hourly_remaining?: number | null;
+  next_resume_at?: string | null;
+  last_error?: string | null;
   online: boolean;
   last_heartbeat_at?: string | null;
   current_url?: string | null;
@@ -295,6 +307,55 @@ export interface PreviewResult {
   context?: Record<string, any>;
 }
 
+export interface TkPrompt {
+  id: string;
+  name: string;
+  prompt: string;
+  strategy: string;
+  created_at: string;
+}
+
+export interface TkScriptResult {
+  ok: boolean;
+  subject?: string;
+  body?: string;
+  script: string;
+  handle: string;
+  product_key: string;
+  product_asset?: ProductAsset | null;
+  commission: number;
+  strategy: string;
+  ai_status: string;
+  context_used: {
+    bio_excerpt: string;
+    video_title: string;
+    matched_keywords: string;
+    recommendation_reason: string;
+    product_label: string;
+    product_asset_name?: string;
+    product_sku_code?: string;
+    product_selling_points?: string;
+    followers_count: string;
+  };
+}
+
+export type TkStrategy = 'template' | 'ai' | 'hybrid';
+
+export interface ProductAsset {
+  id: string;
+  department_code?: string | null;
+  name: string;
+  sku_code?: string | null;
+  product_key: string;
+  product_label?: string;
+  selling_points?: string[];
+  target_creator_types?: string[];
+  image_url?: string | null;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface OutreachDraft {
   id: string;
   creator_id: string;
@@ -323,10 +384,33 @@ export interface GmailAccount {
   email: string;
   display_name?: string | null;
   label?: string | null;
-  is_default?: number;
-  is_active?: number;
+  is_default?: number | boolean;
+  is_active?: number | boolean;
   expires_at?: string | null;
   created_at?: string;
+}
+
+export interface GmailDiagnostic {
+  level: 'info' | 'warn' | 'error' | string;
+  code?: string;
+  message?: string;
+  action?: string;
+}
+
+export interface GmailStatus {
+  ok?: boolean;
+  configured?: boolean;
+  authorized?: boolean;
+  configured_source?: string;
+  redirect_uri?: string;
+  public_base_url?: string | null;
+  current_origin?: string | null;
+  origin_match?: boolean;
+  javascript_origins?: string[];
+  diagnostics?: GmailDiagnostic[];
+  accounts?: GmailAccount[];
+  email?: string | null;
+  [k: string]: any;
 }
 
 export interface OutreachHistoryItem {

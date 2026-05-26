@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import UI_DIR, settings
 from .database import SessionLocal, init_db
 from .models.request_log import RequestLog
-from .utils import log_scheduler, session_cache, stats_scheduler
+from .utils import collector_queue_scheduler, log_scheduler, session_cache, stats_scheduler
 from .routers import (
     admin,
     analytics,
@@ -87,6 +87,10 @@ def startup() -> None:
     # Daily background prune of request_logs (was inline on every request,
     # which serialized writes behind a DELETE under load).
     log_scheduler.start_log_cleanup()
+    # Stale TikTok Shop list rows are operational queue markers. Clear the
+    # previous-day queue state once per day while preserving detail rows and
+    # creator facts.
+    collector_queue_scheduler.start_collector_queue_cleanup()
     # Dashboard/API statistics are read much more often than they need to be
     # recomputed. Keep hot snapshots fresh once per minute in the background.
     stats_scheduler.start_stats_refresh()

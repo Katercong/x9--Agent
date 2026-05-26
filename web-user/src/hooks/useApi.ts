@@ -153,7 +153,43 @@ export function useOutreachHistory(creator_id?: string | number) {
   });
 }
 
+export function useGenerateTkScript() {
+  return useMutation({
+    mutationFn: ({ creator_id, ...body }: { creator_id: string | number; commission: number; strategy?: string; custom_prompt?: string; prompt_id?: string; product_asset_id?: string }) =>
+      endpoints.generateTkScript(creator_id, body),
+  });
+}
+
+export function useProductAssets(creator_id?: string | number) {
+  return useQuery({
+    queryKey: ['outreach', 'product-assets', creator_id],
+    queryFn: () => endpoints.listProductAssets(creator_id),
+    enabled: creator_id !== undefined && creator_id !== null && String(creator_id).length > 0,
+  });
+}
+
+export function useCreateProductAsset() {
+  return useMutation({ mutationFn: (body: Parameters<typeof endpoints.createProductAsset>[0]) => endpoints.createProductAsset(body) });
+}
+
+export function useDeleteProductAsset() {
+  return useMutation({ mutationFn: (id: string) => endpoints.deleteProductAsset(id) });
+}
+
+export function useTkPrompts() {
+  return useQuery({ queryKey: ['tk-prompts'], queryFn: () => endpoints.listTkPrompts() });
+}
+export function useCreateTkPrompt() {
+  return useMutation({ mutationFn: (body: { name: string; prompt: string; strategy: string }) => endpoints.createTkPrompt(body) });
+}
+export function useDeleteTkPrompt() {
+  return useMutation({ mutationFn: (id: string) => endpoints.deleteTkPrompt(id) });
+}
+
 // Gmail
+export function useGmailStatus() {
+  return useQuery({ queryKey: ['gmail', 'status'], queryFn: () => endpoints.gmailStatus() });
+}
 export function useGmailAccounts() {
   return useQuery({ queryKey: ['gmail', 'accounts'], queryFn: () => endpoints.gmailAccounts() });
 }

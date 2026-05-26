@@ -2,11 +2,12 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  AlertTriangle, ArrowLeft, ExternalLink, Link2, Mail, RefreshCw, Send,
-  ShieldCheck, UserCheck, UserMinus,
+  AlertTriangle, ArrowLeft, ExternalLink, Link2, Mail, MessageSquare,
+  RefreshCw, Send, ShieldCheck, UserCheck, UserMinus,
 } from 'lucide-react';
 import { AsyncState } from '@/components/states/States';
 import { OutreachDrawer } from '@/components/outreach/OutreachDrawer';
+import { TkScriptModal } from '@/components/outreach/TkScriptModal';
 import { useClaimCreator, useCreator, useReleaseCreator } from '@/hooks/useApi';
 import { formatCompact, maskEmail, shortRelative } from '@/lib/format';
 import type { Creator } from '@/api/types';
@@ -127,6 +128,7 @@ export default function RecommendationDetail() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>('overview');
   const [mailOpen, setMailOpen] = useState(false);
+  const [scriptOpen, setScriptOpen] = useState(false);
 
   const creatorQ = useCreator(creatorId);
   const claim = useClaimCreator();
@@ -397,6 +399,13 @@ export default function RecommendationDetail() {
                 <button type="button" onClick={() => setMailOpen(true)} className="btn btn-primary mt-4 w-full justify-center">
                   <Mail size={14} /> 邮件建联
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setScriptOpen(true)}
+                  className="btn mt-2 w-full justify-center text-xs"
+                >
+                  <MessageSquare size={14} /> 生成 TK 邀约话术
+                </button>
               </Section>
 
               <Section title="跟进信息">
@@ -446,6 +455,7 @@ export default function RecommendationDetail() {
           </main>
 
           <OutreachDrawer creator={creator} open={mailOpen} onClose={() => setMailOpen(false)} />
+          {scriptOpen && <TkScriptModal creator={creator} onClose={() => setScriptOpen(false)} />}
         </div>
       )}
     </AsyncState>

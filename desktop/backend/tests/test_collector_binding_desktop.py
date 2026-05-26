@@ -9,10 +9,17 @@ from desktop.backend.database import SessionLocal, init_db
 from desktop.backend.main import app
 from desktop.backend.models.creator import Creator
 from desktop.backend.models.creator_source import CreatorSource
+from desktop.backend.models.extension_run_progress import ExtensionRunProgress
 from desktop.backend.models.extension_session import ExtensionSession
 from desktop.backend.models.raw_observation import RawObservation
-from desktop.backend.services.collection_stats_service import get_actor_collection_stats_map, get_source_stats
+from desktop.backend.services.collection_stats_service import (
+    SHOP_QUEUE_CLEARED_STATUS,
+    clear_stale_shop_queue_rows,
+    get_actor_collection_stats_map,
+    get_source_stats,
+)
 from desktop.backend.services import auth_service
+from desktop.backend.utils import stats_cache
 
 
 def _make_user_client(username: str) -> tuple[TestClient, str]:
@@ -214,6 +221,67 @@ def test_collection_actors_lists_collection_users_only():
     assert {item["role"] for item in items} <= {"department_user"}
 
 
+def test_collection_actor_status_is_online_or_offline_only():
+    admin_client, _ = _make_admin_client("admin_binary_presence")
+    _, online_id = _make_user_client("collector_binary_online")
+    _, stale_id = _make_user_client("collector_binary_stale")
+    now = datetime.utcnow()
+
+    with SessionLocal() as db:
+        db.add(
+            ExtensionSession(
+                id="ext_binary_online",
+                extension_id="test_extension",
+                department_code="cross_border",
+                actor_user_id=online_id,
+                worker_id="tiktok_shop_binary_online",
+                account_id="tiktok_shop_binary_online",
+                status="online",
+                last_heartbeat_at=now,
+            )
+        )
+        db.add(
+            ExtensionRunProgress(
+                id="rp_binary_online",
+                department_code="cross_border",
+                worker_id="tiktok_shop_binary_online",
+                running=1,
+                last_error="recent worker error should not create a third monitor state",
+                settings_json=json.dumps({"source": "tiktok_shop"}),
+            )
+        )
+        db.add(
+            ExtensionSession(
+                id="ext_binary_stale",
+                extension_id="test_extension",
+                department_code="cross_border",
+                actor_user_id=stale_id,
+                worker_id="tiktok_shop_binary_stale",
+                account_id="tiktok_shop_binary_stale",
+                status="online",
+                last_heartbeat_at=now - timedelta(minutes=10),
+            )
+        )
+        db.add(
+            ExtensionRunProgress(
+                id="rp_binary_stale",
+                department_code="cross_border",
+                worker_id="tiktok_shop_binary_stale",
+                running=1,
+                last_error="stale worker error should still be offline",
+                settings_json=json.dumps({"source": "tiktok_shop"}),
+            )
+        )
+        db.commit()
+
+    response = admin_client.get("/api/local/collector/actors")
+
+    assert response.status_code == 200
+    by_id = {item["id"]: item for item in response.json()["items"]}
+    assert by_id[online_id]["collection"]["user_status"] == "online"
+    assert by_id[stale_id]["collection"]["user_status"] == "offline"
+
+
 def test_queued_total_is_today_only_and_clears_historical_backlog():
     _, actor_id = _make_user_client("queue_today_user")
     now = datetime.utcnow()
@@ -250,6 +318,7 @@ def test_queued_total_is_today_only_and_clears_historical_backlog():
             )
         )
         db.commit()
+        stats_cache.clear()
 
         actor_stats = get_actor_collection_stats_map(db, [actor_id], department_code="cross_border")[actor_id]
         source_stats = get_source_stats(db, department_code="cross_border", actor_filter=actor_id)["sources"]["tiktok_shop"]
@@ -281,8 +350,94 @@ def test_queued_total_is_today_only_and_clears_historical_backlog():
             )
         )
         db.commit()
+        stats_cache.clear()
 
         actor_stats = get_actor_collection_stats_map(db, [actor_id], department_code="cross_border")[actor_id]
         source_stats = get_source_stats(db, department_code="cross_border", actor_filter=actor_id)["sources"]["tiktok_shop"]
         assert actor_stats["sources"]["tiktok_shop"]["queued_total"] == 0
         assert source_stats["queued_total"] == 0
+
+
+def test_stale_shop_queue_cleanup_clears_only_unreferenced_old_queue_rows():
+    _, actor_id = _make_user_client("queue_cleanup_user")
+    now = datetime.utcnow()
+    yesterday = now - timedelta(days=1)
+    cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    with SessionLocal() as db:
+        db.add(
+            RawObservation(
+                id="raw_queue_cleanup_old",
+                platform="tiktok_shop",
+                department_code="cross_border",
+                source="tiktok_shop",
+                actor_user_id=actor_id,
+                worker_id="worker_queue_cleanup",
+                account_id="worker_queue_cleanup",
+                lead_status="shop_list_seen",
+                raw_json=json.dumps(_shop_payload("queue_cleanup_old", "worker_queue_cleanup")),
+                content_hash="hash_queue_cleanup_old",
+                collected_at=yesterday,
+            )
+        )
+        db.add(
+            RawObservation(
+                id="raw_queue_cleanup_today",
+                platform="tiktok_shop",
+                department_code="cross_border",
+                source="tiktok_shop",
+                actor_user_id=actor_id,
+                worker_id="worker_queue_cleanup",
+                account_id="worker_queue_cleanup",
+                lead_status="shop_list_seen",
+                raw_json=json.dumps(_shop_payload("queue_cleanup_today", "worker_queue_cleanup")),
+                content_hash="hash_queue_cleanup_today",
+                collected_at=now,
+            )
+        )
+        db.add(
+            RawObservation(
+                id="raw_queue_cleanup_ingested",
+                platform="tiktok_shop",
+                department_code="cross_border",
+                source="tiktok_shop",
+                actor_user_id=actor_id,
+                worker_id="worker_queue_cleanup",
+                account_id="worker_queue_cleanup",
+                lead_status="shop_list_seen",
+                raw_json=json.dumps(_shop_payload("queue_cleanup_ingested", "worker_queue_cleanup")),
+                content_hash="hash_queue_cleanup_ingested",
+                collected_at=yesterday,
+            )
+        )
+        creator = Creator(
+            id="creator_queue_cleanup_ingested",
+            platform="tiktok_shop",
+            department_code="cross_border",
+            handle="queue_cleanup_ingested",
+            display_name="queue_cleanup_ingested",
+        )
+        db.add(creator)
+        db.add(
+            CreatorSource(
+                id="source_queue_cleanup_ingested",
+                creator_id=creator.id,
+                department_code="cross_border",
+                source_type="tiktok_shop",
+                platform="tiktok_shop",
+                handle="queue_cleanup_ingested",
+                actor_user_id=actor_id,
+                raw_observation_id="raw_queue_cleanup_ingested",
+                worker_id="worker_queue_cleanup",
+                account_id="worker_queue_cleanup",
+                first_seen_at=yesterday,
+                last_seen_at=yesterday,
+            )
+        )
+        db.commit()
+
+        result = clear_stale_shop_queue_rows(db, cutoff=cutoff)
+
+        assert result["cleared"] >= 1
+        assert db.get(RawObservation, "raw_queue_cleanup_old").lead_status == SHOP_QUEUE_CLEARED_STATUS
+        assert db.get(RawObservation, "raw_queue_cleanup_today").lead_status == "shop_list_seen"
+        assert db.get(RawObservation, "raw_queue_cleanup_ingested").lead_status == "shop_list_seen"

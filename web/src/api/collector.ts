@@ -31,7 +31,7 @@ export interface SourceBucket {
   queued_total?: number;
   ingested_total?: number;
   last_collected_at?: string | null;
-  user_status?: 'collecting' | 'idle' | 'offline' | 'error' | string;
+  user_status?: 'online' | 'offline' | 'collecting' | 'idle' | 'error' | string;
   funnel?: { shop_list_seen: number; shop_profile_collected: number };
   // Per-source contact-coverage counts from the `creators` table —
   // accurate even when raw_json is missing. Use these for KPI cards.
@@ -65,7 +65,7 @@ export interface CollectionActor {
     queued_total?: number;
     ingested_total?: number;
     last_collected_at?: string | null;
-    user_status?: 'collecting' | 'idle' | 'offline' | 'error' | string;
+    user_status?: 'online' | 'offline' | 'collecting' | 'idle' | 'error' | string;
     sources?: Record<SourceKey, SourceBucket>;
   };
 }

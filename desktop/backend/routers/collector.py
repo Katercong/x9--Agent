@@ -18,6 +18,7 @@ from ..models.extension_session import ExtensionSession
 from ..models.raw_observation import RawObservation
 from ..services.collector_service import ingest_observation, reprocess_raw_observations
 from ..services.collection_stats_service import (
+    SHOP_QUEUE_CLEARED_STATUS,
     get_actor_collection_stats_map,
     get_source_stats as get_db_source_stats,
 )
@@ -396,7 +397,12 @@ def _date_bounds(date_from: str | None, date_to: str | None):
 
 
 def _exclude_source_video_seed_rows(q):
-    return q.where(or_(RawObservation.lead_status.is_(None), RawObservation.lead_status != "source_video_seen"))
+    return q.where(
+        or_(
+            RawObservation.lead_status.is_(None),
+            ~RawObservation.lead_status.in_(["source_video_seen", SHOP_QUEUE_CLEARED_STATUS]),
+        )
+    )
 
 
 def _handle_lookup_key(value: Any) -> str:
@@ -698,7 +704,6 @@ def _shop_user_status_map(db: Session, request: Request, actor_ids: list[str]) -
         for row in db.scalars(select(ExtensionRunProgress).where(ExtensionRunProgress.worker_id.in_(worker_ids))).all()
     } if worker_ids else {}
     statuses = {actor_id: "offline" for actor_id in ids}
-    rank = {"offline": 0, "idle": 1, "collecting": 2, "error": 3}
     for session in sessions:
         actor_id = str(session.actor_user_id or "").strip()
         if actor_id not in statuses:
@@ -708,16 +713,8 @@ def _shop_user_status_map(db: Session, request: Request, actor_ids: list[str]) -
             continue
         last = _as_aware_utc(session.last_heartbeat_at)
         online = bool(last and last >= threshold)
-        if progress and progress.last_error:
-            status = "error"
-        elif progress and bool(progress.running):
-            status = "collecting"
-        elif online:
-            status = "idle"
-        else:
-            status = "offline"
-        if rank[status] > rank[statuses[actor_id]]:
-            statuses[actor_id] = status
+        if online:
+            statuses[actor_id] = "online"
     return statuses
 
 

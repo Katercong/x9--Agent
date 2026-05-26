@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { AlertTriangle, Clock3, Database, ListChecks, Radio, Search, Store, Users, Radar } from 'lucide-react';
+import { AlertTriangle, Clock3, Database, ListChecks, Store, Users, Radar, Wifi, WifiOff } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
@@ -32,7 +32,7 @@ interface UserCard {
   detail: number;
   gmv: number;
   lastCollectedAt: string | null;
-  status: 'collecting' | 'idle' | 'offline' | 'error';
+  status: 'online' | 'offline';
 }
 
 const SOURCE_META = {
@@ -84,17 +84,13 @@ function shortWorkerId(value: string | null | undefined): string {
 }
 
 function statusMeta(status: UserCard['status']) {
-  if (status === 'error') return { label: '异常', tone: 'bad' as const, className: 'border-red-200 bg-red-50 text-red-700' };
-  if (status === 'collecting') return { label: '采集中', tone: 'good' as const, className: 'border-emerald-200 bg-emerald-50 text-emerald-700' };
-  if (status === 'idle') return { label: '闲置', tone: 'info' as const, className: 'border-sky-200 bg-sky-50 text-sky-700' };
+  if (status === 'online') return { label: '在线', tone: 'good' as const, className: 'border-emerald-200 bg-emerald-50 text-emerald-700' };
   return { label: '不在线', tone: 'muted' as const, className: 'border-stone-200 bg-stone-50 text-stone-600' };
 }
 
-function normalizeStatus(actorStatus: unknown, total: number): UserCard['status'] {
-  if (actorStatus === 'error') return 'error';
-  if (actorStatus === 'collecting') return 'collecting';
-  if (actorStatus === 'idle') return 'idle';
-  return total > 0 ? 'offline' : 'offline';
+function normalizeStatus(actorStatus: unknown): UserCard['status'] {
+  const status = String(actorStatus || '').toLowerCase();
+  return status === 'online' || status === 'collecting' || status === 'idle' ? 'online' : 'offline';
 }
 
 function sourceStats(actor: CollectionActor, sourceKey: MonitorSource) {
@@ -107,7 +103,7 @@ function sourceStats(actor: CollectionActor, sourceKey: MonitorSource) {
       detail: collection.shop_detail_total ?? bucket?.funnel?.shop_profile_collected ?? 0,
       gmv: collection.with_gmv ?? bucket?.contacts?.with_gmv ?? 0,
       lastCollectedAt: bucket?.last_collected_at ?? collection.last_collected_at ?? null,
-      status: normalizeStatus(collection.user_status, collection.shop_total ?? bucket?.total ?? 0),
+      status: normalizeStatus(collection.user_status),
     };
   }
   return {
@@ -116,7 +112,7 @@ function sourceStats(actor: CollectionActor, sourceKey: MonitorSource) {
     detail: bucket?.contacts?.with_email ?? 0,
     gmv: bucket?.contacts?.with_links ?? 0,
     lastCollectedAt: bucket?.last_collected_at ?? collection.last_collected_at ?? null,
-    status: normalizeStatus(collection.user_status, bucket?.total ?? collection.total ?? 0),
+    status: normalizeStatus(collection.user_status),
   };
 }
 
@@ -157,7 +153,7 @@ export function CollectionMonitorBoard({ sourceKey }: CollectionMonitorBoardProp
         };
       })
       .sort((a, b) => {
-        const rank = { error: 4, collecting: 3, idle: 2, offline: 1 };
+        const rank = { online: 2, offline: 1 };
         return rank[b.status] - rank[a.status] || b.today - a.today || b.total - a.total;
       });
   }, [rawActors, sourceKey]);
@@ -171,8 +167,8 @@ export function CollectionMonitorBoard({ sourceKey }: CollectionMonitorBoardProp
     return {
       today: cards.reduce((sum, card) => sum + card.today, 0),
       total: cards.reduce((sum, card) => sum + card.total, 0),
-      collecting: cards.filter((card) => card.status === 'collecting').length,
-      errors: cards.filter((card) => card.status === 'error').length,
+      online: cards.filter((card) => card.status === 'online').length,
+      offline: cards.filter((card) => card.status === 'offline').length,
     };
   }, [cards]);
   const unassignedStats = actors.data?.unassigned;
@@ -228,8 +224,8 @@ export function CollectionMonitorBoard({ sourceKey }: CollectionMonitorBoardProp
           <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
             <KpiCard label="今日采集" value={num(totals.today)} icon={Clock3} iconBg={A.soft} iconColor={A.key} />
             <KpiCard label="总采集" value={num(totals.total)} icon={Database} iconBg="#e0e7ff" iconColor="#4f46e5" />
-            <KpiCard label="采集中用户" value={num(totals.collecting)} icon={Radio} iconBg="#dcfce7" iconColor="#16a34a" />
-            <KpiCard label="异常用户" value={num(totals.errors)} icon={AlertTriangle} iconBg="#fee2e2" iconColor="#dc2626" />
+            <KpiCard label="在线用户" value={num(totals.online)} icon={Wifi} iconBg="#dcfce7" iconColor="#16a34a" />
+            <KpiCard label="不在线用户" value={num(totals.offline)} icon={WifiOff} iconBg="#f3f4f6" iconColor="#6b7280" />
             <KpiCard
               label="未归属采集"
               value={num(unassignedTotal)}

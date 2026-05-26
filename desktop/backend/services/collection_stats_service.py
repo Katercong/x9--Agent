@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import String, case, cast, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from ..models.creator import Creator
@@ -23,6 +23,8 @@ from ..utils.source_classify import (
 
 UNASSIGNED_ACTOR = "__unassigned__"
 SOURCE_KEYS = (SRC_SHOP, SRC_X9_LEADS, SRC_TABLE_IMPORT, SRC_OTHER)
+SHOP_QUEUE_LEAD_STATUS = "shop_list_seen"
+SHOP_QUEUE_CLEARED_STATUS = "shop_queue_cleared"
 SOURCE_VIDEO_SEED_PATTERN = '%"lead_status":"source_video_seen"%'
 STATS_CACHE_TTL_SECONDS = 60.0
 
@@ -107,7 +109,73 @@ def _apply_actor_filter(q, model, actor_filter: str | None):
 
 
 def _exclude_source_video_seed_rows(q):
-    return q.where(or_(RawObservation.lead_status.is_(None), RawObservation.lead_status != "source_video_seen"))
+    return q.where(
+        or_(
+            RawObservation.lead_status.is_(None),
+            ~RawObservation.lead_status.in_(["source_video_seen", SHOP_QUEUE_CLEARED_STATUS]),
+        )
+    )
+
+
+def clear_stale_shop_queue_rows(
+    db: Session,
+    *,
+    cutoff: datetime | None = None,
+    batch_size: int = 1000,
+    safety_cap: int = 100_000,
+) -> dict[str, Any]:
+    """Clear stale TikTok Shop list-queue rows without deleting raw audit blobs.
+
+    `shop_list_seen` rows are operational queue markers. Detail/profile rows and
+    rows already tied to `creator_sources` are left untouched.
+    """
+    cutoff = cutoff or datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    batch_size = max(1, min(int(batch_size or 1000), 5000))
+    safety_cap = max(batch_size, int(safety_cap or 100_000))
+    ts = func.coalesce(RawObservation.collected_at, RawObservation.created_at)
+    ts_text = func.coalesce(cast(RawObservation.collected_at, String), cast(RawObservation.created_at, String))
+    cutoff_key = cutoff.strftime("%Y-%m-%d")
+    referenced_raw_ids = select(CreatorSource.raw_observation_id).where(
+        CreatorSource.raw_observation_id.is_not(None),
+        CreatorSource.raw_observation_id != "",
+    )
+    cleared = 0
+    batches = 0
+    while cleared < safety_cap:
+        victim_q = (
+            select(RawObservation.id)
+            .where(
+                RawObservation.platform == "tiktok_shop",
+                RawObservation.lead_status == SHOP_QUEUE_LEAD_STATUS,
+                ts_text < cutoff_key,
+                ~RawObservation.id.in_(referenced_raw_ids),
+            )
+            .order_by(ts.asc(), RawObservation.id.asc())
+            .limit(min(batch_size, safety_cap - cleared))
+        )
+        victim_ids = [row[0] for row in db.execute(victim_q).all()]
+        if not victim_ids:
+            break
+        result = db.execute(
+            update(RawObservation)
+            .where(RawObservation.id.in_(victim_ids))
+            .values(lead_status=SHOP_QUEUE_CLEARED_STATUS)
+        )
+        db.commit()
+        rows = int(result.rowcount or len(victim_ids))
+        cleared += rows
+        batches += 1
+        if rows < len(victim_ids):
+            break
+    if cleared:
+        stats_cache.clear()
+    return {
+        "ok": True,
+        "cleared": cleared,
+        "batches": batches,
+        "cutoff": cutoff.isoformat(),
+        "lead_status": SHOP_QUEUE_CLEARED_STATUS,
+    }
 
 
 def _source_bucket_from_creator_source(source_type: str | None, platform: str | None, source: str | None) -> str:
