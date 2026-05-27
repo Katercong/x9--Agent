@@ -70,6 +70,7 @@ export interface Creator {
   department_code?: string | null;
   recommendation_score?: number | null;
   recommendation_status?: string | null;
+  outreach_lock?: CreatorOutreachLock | null;
   recommendation_reason?: string | null;
   collected_at?: string | null;
   created_at?: string | null;
@@ -379,6 +380,48 @@ export interface OutreachDraft {
   updated_at?: string;
 }
 
+export interface CreatorOutreachLock {
+  id: string;
+  department_code?: string | null;
+  creator_id: string;
+  owner_user_id: string;
+  owner_label?: string | null;
+  owner_email?: string | null;
+  expires_at: string;
+  released_at?: string | null;
+  heartbeat_count?: number;
+  is_mine?: boolean;
+  can_release?: boolean;
+}
+
+export interface OutreachArchiveItem {
+  id: string;
+  department_code?: string | null;
+  creator_id: string;
+  creator_handle?: string | null;
+  creator_display_name?: string | null;
+  creator_profile_url?: string | null;
+  creator_platform?: string | null;
+  to_email: string;
+  from_email?: string | null;
+  subject: string;
+  body_preview?: string | null;
+  body_format?: 'plain' | 'html' | string;
+  status: string;
+  sent_at?: string | null;
+  created_at?: string | null;
+  created_by?: string | null;
+  gmail_thread_id?: string | null;
+  parent_email_id?: string | null;
+}
+
+export interface OutreachArchiveDetail extends OutreachArchiveItem {
+  body: string;
+  gmail_message_id?: string | null;
+  error_message?: string | null;
+  updated_at?: string | null;
+}
+
 export interface GmailAccount {
   id: string;
   email: string;
@@ -418,6 +461,9 @@ export interface OutreachHistoryItem {
   subject: string;
   to_email: string;
   status: string;
+  body?: string | null;
+  body_format?: 'plain' | 'html' | string;
+  created_at?: string | null;
   sent_at?: string | null;
   from_email?: string | null;
 }

@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { CheckCircle2, AlertTriangle, Info, AlertOctagon } from 'lucide-react';
 import { Pill } from '@/components/Pill';
+import { PaginationControls } from '@/components/PaginationControls';
 import { AsyncState, Empty } from '@/components/states/States';
 import { useOutreach } from '@/hooks/useApi';
 import { formatDate } from '@/lib/format';
@@ -19,8 +21,11 @@ function levelOf(status: string | null): 'good' | 'info' | 'warn' | 'bad' {
   return 'info';
 }
 
+const PAGE_SIZE = 10;
+
 export default function Events() {
-  const { data, isLoading, error } = useOutreach({ limit: 100, order_by: 'created_at:desc' });
+  const [page, setPage] = useState(0);
+  const { data, isLoading, error } = useOutreach({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, order_by: 'created_at:desc' });
   const events = (data?.items ?? []).map((o) => ({
     id: o.id,
     date: formatDate(o.event_date || o.created_at),
@@ -80,6 +85,14 @@ export default function Events() {
             </div>
           )}
         </div>
+        <PaginationControls
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={data?.total ?? 0}
+          currentCount={events.length}
+          loading={isLoading}
+          onPageChange={setPage}
+        />
       </div>
     </AsyncState>
   );

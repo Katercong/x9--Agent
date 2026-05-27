@@ -1,15 +1,17 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { FileSpreadsheet, Upload, CalendarDays, Globe, Gauge } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
+import { PaginationControls } from '@/components/PaginationControls';
 import { AsyncState } from '@/components/states/States';
 import { useSourceStats, useObservationsFeed, type ObservationItem } from '@/api/collector';
 import { ACCENTS, CollectHeader, Reveal, dailyAreaOption, num } from './collectShared';
 
 const A = ACCENTS.import;
+const PAGE_SIZE = 10;
 
 function tally(items: ObservationItem[], pick: (i: ObservationItem) => string | null | undefined) {
   const m = new Map<string, number>();
@@ -22,7 +24,8 @@ function tally(items: ObservationItem[], pick: (i: ObservationItem) => string | 
 
 export default function CollectImport() {
   const stats = useSourceStats();
-  const feed = useObservationsFeed({ source: 'table_import', limit: 300 });
+  const [page, setPage] = useState(0);
+  const feed = useObservationsFeed({ source: 'table_import', limit: PAGE_SIZE, offset: page * PAGE_SIZE });
 
   const bucket = stats.data?.sources?.table_import;
   const items = feed.data?.items ?? [];
@@ -152,10 +155,18 @@ export default function CollectImport() {
         <Reveal i={4}>
           <div className="card mt-4">
             <div className="px-4 py-3 border-b border-line flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-gray-800">导入明细 · {num(items.length)} 条</h3>
+              <h3 className="text-sm font-semibold text-gray-800">导入明细 · {num(feed.data?.total ?? items.length)} 条</h3>
               <span className="text-xxs text-muted">实时来自 /observations-feed</span>
             </div>
             <DataTable columns={columns} data={items} rowKey={(r) => r.id} emptyText="还没有表格导入数据" />
+            <PaginationControls
+              page={page}
+              pageSize={PAGE_SIZE}
+              total={feed.data?.total ?? 0}
+              currentCount={items.length}
+              loading={feed.isFetching}
+              onPageChange={setPage}
+            />
           </div>
         </Reveal>
       </AsyncState>

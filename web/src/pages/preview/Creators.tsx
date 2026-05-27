@@ -8,6 +8,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Search, Filter, ChevronRight, Mail, MailX, Users, Activity, Target } from 'lucide-react';
 import { v2Api, type UnifiedCreatorRow, type HealthColor } from '@/api/v2';
 import { Pill } from '@/components/Pill';
+import { PaginationControls } from '@/components/PaginationControls';
 
 const fmt = (n: number | null | undefined) => new Intl.NumberFormat('zh-CN').format(Number(n || 0));
 
@@ -27,16 +28,21 @@ const HEALTH_BG: Record<HealthColor, string> = {
   grey: 'bg-gray-300',
 };
 
+const PAGE_SIZE = 10;
+
 export default function Creators() {
   const [tab, setTab] = useState<string>('all');
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
+  const [page, setPage] = useState(0);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['v2', 'creators', tab, q, status],
-    queryFn: () => v2Api.creators({ tab, q: q || undefined, status: status || undefined, limit: 200 }),
+    queryKey: ['v2', 'creators', tab, q, status, page],
+    queryFn: () => v2Api.creators({ tab, q: q || undefined, status: status || undefined, limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
     staleTime: 30_000,
   });
+
+  const resetPage = () => setPage(0);
 
   return (
     <div className="space-y-3">
@@ -47,7 +53,7 @@ export default function Creators() {
         {TABS.map((t) => (
           <button
             key={t.key}
-            onClick={() => setTab(t.key)}
+            onClick={() => { setTab(t.key); resetPage(); }}
             className={
               'px-3 py-2 text-xs whitespace-nowrap border-b-2 -mb-px transition-colors ' +
               (tab === t.key ? 'border-brand-500 text-brand-700 font-semibold' : 'border-transparent text-muted hover:text-gray-700')
@@ -67,14 +73,14 @@ export default function Creators() {
           <Search size={12} className="text-muted" />
           <input
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => { setQ(e.target.value); resetPage(); }}
             placeholder="搜索 handle / 名字 / 邮箱"
             className="text-xs flex-1 outline-none"
           />
         </div>
         <select
           value={status}
-          onChange={(e) => setStatus(e.target.value)}
+          onChange={(e) => { setStatus(e.target.value); resetPage(); }}
           className="text-xs border border-line rounded px-2 py-1 bg-white"
         >
           <option value="">全部阶段</option>
@@ -132,6 +138,16 @@ export default function Creators() {
               <div className="p-6 text-center text-muted text-sm">当前筛选下没有达人</div>
             )}
           </div>
+        )}
+        {data && (
+          <PaginationControls
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={data.total}
+            currentCount={data.items.length}
+            loading={isLoading}
+            onPageChange={setPage}
+          />
         )}
       </div>
     </div>

@@ -1,14 +1,16 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { AlertTriangle, Clock3, Database, ListChecks, Radio, Store, UserRound } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
+import { PaginationControls } from '@/components/PaginationControls';
 import { AsyncState } from '@/components/states/States';
 import { useMe } from '@/hooks/useApi';
-import { useShopCollectionSummary, type ObservationItem } from '@/api/collector';
+import { useObservationsFeed, useShopCollectionSummary, type ObservationItem } from '@/api/collector';
 import { ACCENTS, CollectHeader, Reveal, num } from './collectShared';
 
 const A = ACCENTS.shop;
+const PAGE_SIZE = 10;
 
 type UserStatus = 'collecting' | 'idle' | 'offline' | 'error';
 
@@ -55,11 +57,13 @@ function rowStatus(row: ObservationItem): { label: string; tone: 'good' | 'warn'
 
 export default function CollectShop() {
   const me = useMe();
-  const summary = useShopCollectionSummary(300);
+  const [page, setPage] = useState(0);
+  const summary = useShopCollectionSummary(PAGE_SIZE);
+  const feed = useObservationsFeed({ source: 'tiktok_shop', limit: PAGE_SIZE, offset: page * PAGE_SIZE });
 
   const user = me.data?.user;
   const stats = summary.data?.stats;
-  const items = summary.data?.recent?.items ?? [];
+  const items = feed.data?.items ?? summary.data?.recent?.items ?? [];
   const total = Number(stats?.total ?? 0);
   const today = Number(stats?.today ?? 0);
   const ingested = Number(stats?.ingested_total ?? 0);
@@ -70,7 +74,7 @@ export default function CollectShop() {
   const StatusIcon = statusInfo.icon;
   const displayName = user?.display_name || user?.username || '当前用户';
 
-  const rows = useMemo(() => items.slice(0, 300), [items]);
+  const rows = useMemo(() => items, [items]);
 
   const columns: Column<ObservationItem>[] = [
     {
@@ -109,8 +113,8 @@ export default function CollectShop() {
       />
 
       <AsyncState
-        loading={summary.isLoading || me.isLoading}
-        error={summary.error || me.error}
+        loading={summary.isLoading || feed.isLoading || me.isLoading}
+        error={summary.error || feed.error || me.error}
         isEmpty={false}
         emptyMessage="还没有 TikTok Shop 采集数据"
         height={420}
@@ -176,6 +180,14 @@ export default function CollectShop() {
             </div>
             <div className="p-2">
               <DataTable columns={columns} data={rows} rowKey={(row) => row.id} emptyText="还没有 TikTok Shop 采集数据" />
+              <PaginationControls
+                page={page}
+                pageSize={PAGE_SIZE}
+                total={feed.data?.total ?? summary.data?.recent?.total ?? 0}
+                currentCount={rows.length}
+                loading={feed.isFetching}
+                onPageChange={setPage}
+              />
             </div>
           </section>
         </Reveal>

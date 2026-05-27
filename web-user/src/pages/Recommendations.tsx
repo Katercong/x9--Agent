@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -7,9 +7,10 @@ import {
 } from 'lucide-react';
 import { AsyncState } from '@/components/states/States';
 import { OutreachDrawer } from '@/components/outreach/OutreachDrawer';
-import { useBusinessDashboard, useClaimCreator, useCreators, useRecommended } from '@/hooks/useApi';
+import { PaginationControls } from '@/components/PaginationControls';
+import { useAcquireOutreachLock, useBusinessDashboard, useCreators, useRecommended } from '@/hooks/useApi';
 import { formatCompact, maskEmail } from '@/lib/format';
-import { pickItems, type Creator } from '@/api/types';
+import { pickItems, type Creator, type CreatorOutreachLock } from '@/api/types';
 
 
 type SourceFilter = 'all' | 'tiktok_shop' | 'x9_leads' | 'table_import' | 'other';
@@ -24,6 +25,8 @@ type SortFilter = 'recommended' | 'score' | 'followers' | 'fit' | 'priority' | '
 
 type SelectOption = { value: string; label: string };
 type ActiveFilterBadge = { key: string; label: string; onClear: () => void };
+
+const PAGE_SIZE = 10;
 
 const SOURCE_META: Record<Exclude<SourceFilter, 'all'>, { label: string; color: string }> = {
   tiktok_shop: { label: 'TikTok Shop', color: '#ff3b63' },
@@ -432,8 +435,10 @@ export default function Recommendations() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [sort, setSort] = useState<SortFilter>('recommended');
   const [drawerCreator, setDrawerCreator] = useState<Creator | null>(null);
+  const [drawerLock, setDrawerLock] = useState<CreatorOutreachLock | null>(null);
   const [lockingCreatorId, setLockingCreatorId] = useState<string | null>(null);
-  const claimCreator = useClaimCreator();
+  const [page, setPage] = useState(0);
+  const acquireOutreachLock = useAcquireOutreachLock();
 
   const sourceParams = source === 'all' ? {} : { source };
   const dateParams = dateRange === 'all' ? {} : { collected_range: dateRange };
@@ -452,9 +457,10 @@ export default function Recommendations() {
               : sort === 'micro'
                 ? 'micro'
                 : 'recommended';
-  const queryParams = { limit: 1000, ...sourceParams, ...dateParams };
+  const offset = page * PAGE_SIZE;
+  const queryParams = { limit: PAGE_SIZE, ...sourceParams, ...dateParams };
   const recommendedQ = useRecommended(queryParams);
-  const creatorsQ = useCreators({ ...queryParams, sort_by: backendSortBy });
+  const creatorsQ = useCreators({ ...queryParams, offset, sort_by: backendSortBy });
   const businessQ = useBusinessDashboard();
   const activeQ = creatorsQ;
   const items = pickItems<Creator>(activeQ.data as any);
@@ -485,6 +491,10 @@ export default function Recommendations() {
     () => uniqueOptions(optionItems, (creator) => [creator.current_status, creator.recommendation_status]),
     [optionItems],
   );
+
+  useEffect(() => {
+    setPage(0);
+  }, [collabFilter, contact, dateRange, maxFollowers, minFollowers, ownerFilter, priority, productFilter, q, reviewFilter, scoreFilter, sort, source, statusFilter]);
 
   const filtered = useMemo(() => {
     const text = q.trim().toLowerCase();
@@ -608,7 +618,8 @@ export default function Recommendations() {
     const creatorId = String(creator.id);
     setLockingCreatorId(creatorId);
     try {
-      await claimCreator.mutateAsync({ id: creator.id, body: {} });
+      const result = await acquireOutreachLock.mutateAsync({ creator_id: creator.id });
+      setDrawerLock(result.lock);
       setDrawerCreator(creator);
     } catch (error: any) {
       const detail = error?.response?.data?.detail || error?.message || '达人已被其他用户占用，请刷新后再试';
@@ -825,6 +836,15 @@ export default function Recommendations() {
         </div>
       </div>
 
+      <PaginationControls
+        page={page}
+        pageSize={PAGE_SIZE}
+        total={endpointAllTotal}
+        currentCount={items.length}
+        loading={activeQ.isFetching}
+        onPageChange={setPage}
+      />
+
       <AsyncState loading={activeQ.isLoading} error={activeQ.error} isEmpty={filtered.length === 0} emptyMessage="暂无符合条件的达人" height={320}>
         <div className="grid gap-3">
           {filtered.map((creator) => (
@@ -839,7 +859,16 @@ export default function Recommendations() {
         </div>
       </AsyncState>
 
-      <OutreachDrawer creator={drawerCreator} open={!!drawerCreator} onClose={() => setDrawerCreator(null)} />
+      <OutreachDrawer
+        creator={drawerCreator}
+        open={!!drawerCreator}
+        initialLock={drawerLock}
+        onClose={() => {
+          setDrawerCreator(null);
+          setDrawerLock(null);
+          activeQ.refetch();
+        }}
+      />
     </div>
   );
 }

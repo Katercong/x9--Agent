@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ShoppingBag, Star, BarChart3, Plus } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { DataTable, type Column } from '@/components/table/DataTable';
+import { PaginationControls } from '@/components/PaginationControls';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
 import { useProducts, useCategories } from '@/hooks/useApi';
@@ -9,21 +10,32 @@ import { categoryNameMap } from '@/lib/derive';
 import { cn } from '@/lib/cn';
 import type { Product } from '@/api/types';
 
+const PAGE_SIZE = 10;
+
 export default function Products() {
   const [categoryFilter, setCategoryFilter] = useState<number | null>(null);
+  const [page, setPage] = useState(0);
 
-  const products = useProducts({ limit: 200 });
+  const products = useProducts({
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
+    ...(categoryFilter === null ? {} : { category_id: categoryFilter }),
+  });
   const categories = useCategories({ limit: 50 });
 
   const items = products.data?.items ?? [];
   const cats = categories.data?.items ?? [];
   const catMap = useMemo(() => categoryNameMap(cats), [cats]);
 
-  const filtered = categoryFilter === null ? items : items.filter((p) => p.category_id === categoryFilter);
+  const filtered = items;
   const mainPush = items.filter((p) => p.is_main_push === 1).length;
   const avgPrice = items.length > 0
     ? items.reduce((s, p) => s + (p.price_tiktok || 0), 0) / items.length
     : 0;
+
+  useEffect(() => {
+    setPage(0);
+  }, [categoryFilter]);
 
   const columns: Column<Product>[] = [
     {
@@ -72,7 +84,7 @@ export default function Products() {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiCard label="部门 SKU" value={items.length} icon={ShoppingBag} iconBg="#dbeafe" iconColor="#2563eb" />
+        <KpiCard label="部门 SKU" value={products.data?.total ?? 0} icon={ShoppingBag} iconBg="#dbeafe" iconColor="#2563eb" />
         <KpiCard label="主推数" value={mainPush} icon={Star} iconBg="#fee2e2" iconColor="#dc2626" />
         <KpiCard label="平均 TikTok 价" value={`$${avgPrice.toFixed(2)}`} icon={BarChart3} iconBg="#d1fae5" iconColor="#16a34a" />
         <KpiCard label="类目数" value={cats.length} icon={Star} iconBg="#fef3c7" iconColor="#ca8a04" />
@@ -91,7 +103,7 @@ export default function Products() {
                 categoryFilter === null ? 'bg-brand-50 text-brand-700 font-medium' : 'text-gray-700 hover:bg-soft',
               )}
             >
-              全部 ({items.length})
+              全部 ({products.data?.total ?? 0})
             </button>
             {cats.map((c) => {
               const count = items.filter((p) => p.category_id === c.id).length;
@@ -121,6 +133,14 @@ export default function Products() {
           <AsyncState loading={products.isLoading} error={products.error} isEmpty={filtered.length === 0} height={300}>
             <DataTable columns={columns} data={filtered} rowKey={(r) => r.id} />
           </AsyncState>
+          <PaginationControls
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={products.data?.total ?? 0}
+            currentCount={items.length}
+            loading={products.isLoading}
+            onPageChange={setPage}
+          />
         </div>
       </div>
     </div>

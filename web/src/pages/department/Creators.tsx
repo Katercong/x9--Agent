@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Users, Activity, Clock, UserPlus, Search, Plus, Download } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { DataTable, type Column } from '@/components/table/DataTable';
+import { PaginationControls } from '@/components/PaginationControls';
 import { TierPill, StatusPill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
 import { useCreators } from '@/hooks/useApi';
@@ -43,12 +44,15 @@ const columns: Column<Creator>[] = [
   },
 ];
 
+const PAGE_SIZE = 10;
+
 export default function Creators() {
   const [q, setQ] = useState('');
   const [tier, setTier] = useState('');
   const [status, setStatus] = useState('');
+  const [page, setPage] = useState(0);
 
-  const params: Record<string, unknown> = { limit: 200 };
+  const params: Record<string, unknown> = { limit: PAGE_SIZE, offset: page * PAGE_SIZE };
   if (q) params.q = q;
   if (tier) params.tier = tier;
   if (status) params.current_status = status;
@@ -56,6 +60,10 @@ export default function Creators() {
   const { data, isLoading, error } = useCreators(params);
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+
+  useEffect(() => {
+    setPage(0);
+  }, [q, tier, status]);
 
   // local KPI calcs
   const active = items.filter((c) => c.current_status && !['prospect', 'dropped'].includes(c.current_status)).length;
@@ -106,6 +114,14 @@ export default function Creators() {
         <AsyncState loading={isLoading} error={error} isEmpty={items.length === 0} height={300}>
           <DataTable columns={columns} data={items} rowKey={(r) => r.id} />
         </AsyncState>
+        <PaginationControls
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={total}
+          currentCount={items.length}
+          loading={isLoading}
+          onPageChange={setPage}
+        />
       </div>
     </div>
   );

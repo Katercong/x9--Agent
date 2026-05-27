@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { Search, Inbox, Sparkles, CheckCircle2, ArrowRightCircle } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { DataTable, type Column } from '@/components/table/DataTable';
+import { PaginationControls } from '@/components/PaginationControls';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
 import { useNamedQuery } from '@/hooks/useApi';
@@ -65,9 +67,11 @@ const columns: Column<Lead>[] = [
   },
 ];
 
+const PAGE_SIZE = 10;
+
 export default function Leads() {
-  // creators_to_contact = prospect 状态的待联系达人池
-  const { data, isLoading, error } = useNamedQuery<Lead>('creators_to_contact', { limit: 200 });
+  const [page, setPage] = useState(0);
+  const { data, isLoading, error } = useNamedQuery<Lead>('creators_to_contact', { limit: PAGE_SIZE, offset: page * PAGE_SIZE });
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
 
@@ -96,6 +100,14 @@ export default function Leads() {
         <AsyncState loading={isLoading} error={error} isEmpty={items.length === 0} height={300}>
           <DataTable columns={columns} data={items} rowKey={(r) => r.id} />
         </AsyncState>
+        <PaginationControls
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={total}
+          currentCount={items.length}
+          loading={isLoading}
+          onPageChange={setPage}
+        />
       </div>
     </div>
   );

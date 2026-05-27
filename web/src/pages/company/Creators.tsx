@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { Users, Trophy, Activity, Globe } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
 import { DataTable, type Column } from '@/components/table/DataTable';
+import { PaginationControls } from '@/components/PaginationControls';
 import { TierPill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
 import { useCreators } from '@/hooks/useApi';
@@ -10,8 +12,11 @@ import { groupByTier, groupByCountry } from '@/lib/derive';
 import { formatCompact } from '@/lib/format';
 import type { Creator } from '@/api/types';
 
+const PAGE_SIZE = 10;
+
 export default function Creators() {
-  const { data, isLoading, error } = useCreators({ limit: 1000 });
+  const [page, setPage] = useState(0);
+  const { data, isLoading, error } = useCreators({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, order_by: 'followers', desc: true });
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
 
@@ -23,7 +28,7 @@ export default function Creators() {
   const topCreators = [...items]
     .filter((c) => c.followers !== null)
     .sort((a, b) => (b.followers || 0) - (a.followers || 0))
-    .slice(0, 20);
+    .slice(0, PAGE_SIZE);
 
   const creatorColumns: Column<Creator>[] = [
     {
@@ -89,19 +94,27 @@ export default function Creators() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-          <ChartCard title="Tier 分布">
+          <ChartCard title="当前页 Tier 分布">
             <EChart option={tierOption} height={280} />
           </ChartCard>
-          <ChartCard title="国家分布 Top 9" className="lg:col-span-2">
+          <ChartCard title="当前页国家分布 Top 9" className="lg:col-span-2">
             <EChart option={countryOption} height={280} />
           </ChartCard>
         </div>
 
         <div className="card">
           <div className="px-4 py-3 border-b border-line">
-            <h3 className="text-sm font-semibold text-gray-800">头部达人 Top 20(按粉丝)</h3>
+            <h3 className="text-sm font-semibold text-gray-800">头部达人 Top 10(按粉丝)</h3>
           </div>
           <DataTable columns={creatorColumns} data={topCreators} rowKey={(r) => r.id} />
+          <PaginationControls
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={total}
+            currentCount={items.length}
+            loading={isLoading}
+            onPageChange={setPage}
+          />
         </div>
       </div>
     </AsyncState>

@@ -27,10 +27,10 @@ const eventColumns: Column<RecentEvent>[] = [
 ];
 
 export default function Overview() {
-  const creators = useCreators({ limit: 1000 });
-  const outreach = useOutreach({ limit: 1000, order_by: 'created_at:desc' });
-  const products = useProducts({ limit: 200 });
-  const staff = useStaff({ limit: 100 });
+  const creators = useCreators({ limit: 10 });
+  const outreach = useOutreach({ limit: 10, order_by: 'created_at:desc' });
+  const products = useProducts({ limit: 1 });
+  const staff = useStaff({ limit: 10 });
   const dashboard = useDepartmentDashboardSummary();
   const companyAnalytics = useAnalyticsCompany(30);
 

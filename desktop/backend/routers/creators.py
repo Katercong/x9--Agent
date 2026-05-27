@@ -28,6 +28,7 @@ from ..models.creator import Creator
 from ..models.outreach_email import OutreachEmail
 from ..services import remote_creators
 from ..services.departments import current_department_code, department_where, filter_rows_for_department, row_in_department
+from ..services.outreach_lock_service import active_lock_summaries, filter_rows_visible_by_lock, is_admin_user
 from ..services.post_processing import create_outreach_event
 from ..services.remote_creators import RemoteRepoError
 from ..services.tag_engine import find_creators_by_tags
@@ -748,11 +749,44 @@ def _wrap_remote(call):
         raise HTTPException(status_code=502, detail=f"remote API unavailable: {e}")
 
 
-def _serialize_with_signals(rows: list[dict]) -> list[dict]:
+def _apply_outreach_lock_visibility(rows: list[dict], user: dict[str, Any] | None) -> tuple[list[dict], dict[str, dict[str, Any]]]:
+    with SessionLocal() as db:
+        return filter_rows_visible_by_lock(db, rows, user)
+
+
+def _serialize_with_signals(
+    rows: list[dict],
+    user: dict[str, Any] | None = None,
+    lock_summaries: dict[str, dict[str, Any]] | None = None,
+) -> list[dict]:
     """Serialize a list of remote creator dicts and merge in their outreach
     signals from local SQLite in a single batch."""
     signals = _fetch_outreach_signals([r.get("id") for r in rows])
-    return [_serialize(r, signals.get(_creator_id_key(r.get("id")))) for r in rows]
+    if lock_summaries is None:
+        with SessionLocal() as db:
+            lock_summaries = active_lock_summaries(db, [r.get("id") for r in rows], user)
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        key = _creator_id_key(row.get("id"))
+        item = _serialize(row, signals.get(key))
+        if key and (lock := lock_summaries.get(key)):
+            item["outreach_lock"] = lock
+        items.append(item)
+    return items
+
+
+def _attach_lock_or_hide(item: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
+    creator_id = _creator_id_key(item.get("id"))
+    if not creator_id:
+        return item
+    with SessionLocal() as db:
+        locks = active_lock_summaries(db, [creator_id], user)
+    lock = locks.get(creator_id)
+    if lock and not lock.get("is_mine") and not is_admin_user(user):
+        raise HTTPException(status_code=404, detail="creator not found")
+    if lock:
+        item["outreach_lock"] = lock
+    return item
 
 
 # ---------------------------------------------------------------------------
@@ -796,6 +830,7 @@ def list_all(
 ) -> dict:
     if source and source not in {"all", *ALL_SOURCES}:
         raise HTTPException(status_code=400, detail="source must be all, tiktok_shop, x9_leads, table_import or other")
+    current_user = getattr(request.state, "current_user", None) or {}
     collected_start, collected_end = _collected_bounds(
         collected_range, collected_date, collected_from, collected_to
     )
@@ -830,8 +865,9 @@ def list_all(
         collected_end=collected_end,
     )
     rows = _apply_sort(rows, sort_by)
+    rows, lock_summaries = _apply_outreach_lock_visibility(rows, current_user)
     page = rows[offset:offset + limit]
-    return {"ok": True, "total": len(rows), "items": _serialize_with_signals(page)}
+    return {"ok": True, "total": len(rows), "items": _serialize_with_signals(page, current_user, lock_summaries)}
 
 
 @router.get("/recommended")
@@ -846,6 +882,7 @@ def list_recommended(
 ) -> dict:
     if source and source not in {"all", *ALL_SOURCES}:
         raise HTTPException(status_code=400, detail="source must be all, tiktok_shop, x9_leads, table_import or other")
+    current_user = getattr(request.state, "current_user", None) or {}
     collected_start, collected_end = _collected_bounds(
         collected_range, collected_date, collected_from, collected_to
     )
@@ -873,8 +910,9 @@ def list_recommended(
     rows = sorted(rows, key=lambda r: -_i(r, "recommendation_score"))
     rows = sorted(rows, key=_priority_rank_value)
     rows = sorted(rows, key=lambda r: -_date_seconds(r.get("collected_at")))
+    rows, lock_summaries = _apply_outreach_lock_visibility(rows, current_user)
     rows = rows[:limit]
-    return {"ok": True, "total": len(rows), "items": _serialize_with_signals(rows)}
+    return {"ok": True, "total": len(rows), "items": _serialize_with_signals(rows, current_user, lock_summaries)}
 
 
 @router.get("/by-tag/{tag_code}")
@@ -890,34 +928,48 @@ def list_by_tag(
     rows = find_creators_by_tags(db, [tag_code], require_all=False, limit=limit, offset=offset)
     department_code = current_department_code(request)
     rows = [row for row in rows if row_in_department(row, department_code)]
-    return {"ok": True, "total": len(rows), "items": [_serialize_local_creator(c) for c in rows]}
+    current_user = getattr(request.state, "current_user", None) or {}
+    items = []
+    for creator in rows:
+        try:
+            items.append(_attach_lock_or_hide(_serialize_local_creator(creator), current_user))
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+    return {"ok": True, "total": len(items), "items": items}
 
 
 @router.get("/by-queue/{queue_code}")
 def list_by_queue(request: Request, queue_code: str, limit: int = 200, offset: int = 0) -> dict:
+    current_user = getattr(request.state, "current_user", None) or {}
     rows = _all_creator_rows(current_department_code(request))
     rows = [r for r in rows if r.get("queue_type") == queue_code]
     rows = sorted(rows, key=lambda r: -_i(r, "recommendation_score"))
+    rows, lock_summaries = _apply_outreach_lock_visibility(rows, current_user)
     page = rows[offset:offset + limit]
-    return {"ok": True, "total": len(rows), "items": _serialize_with_signals(page)}
+    return {"ok": True, "total": len(rows), "items": _serialize_with_signals(page, current_user, lock_summaries)}
 
 
 @router.get("/by-product/{product_type}")
 def list_by_product(request: Request, product_type: str, limit: int = 200, offset: int = 0) -> dict:
+    current_user = getattr(request.state, "current_user", None) or {}
     rows = _all_creator_rows(current_department_code(request))
     rows = [r for r in rows if r.get("recommended_product_type") == product_type]
     rows = sorted(rows, key=lambda r: -_i(r, "recommendation_score"))
+    rows, lock_summaries = _apply_outreach_lock_visibility(rows, current_user)
     page = rows[offset:offset + limit]
-    return {"ok": True, "total": len(rows), "items": _serialize_with_signals(page)}
+    return {"ok": True, "total": len(rows), "items": _serialize_with_signals(page, current_user, lock_summaries)}
 
 
 @router.get("/by-collab/{collab_type}")
 def list_by_collab(request: Request, collab_type: str, limit: int = 200, offset: int = 0) -> dict:
+    current_user = getattr(request.state, "current_user", None) or {}
     rows = _all_creator_rows(current_department_code(request))
     rows = [r for r in rows if r.get("recommended_collab_type") == collab_type]
     rows = sorted(rows, key=lambda r: -_i(r, "recommendation_score"))
+    rows, lock_summaries = _apply_outreach_lock_visibility(rows, current_user)
     page = rows[offset:offset + limit]
-    return {"ok": True, "total": len(rows), "items": _serialize_with_signals(page)}
+    return {"ok": True, "total": len(rows), "items": _serialize_with_signals(page, current_user, lock_summaries)}
 
 
 def _clean_text(value: str | None) -> str | None:
@@ -1088,6 +1140,7 @@ def get_one(creator_id: str, request: Request) -> dict:
     lookup, with platform inferred from the prefix)."""
     # Try remote integer id first
     department_code = current_department_code(request)
+    current_user = getattr(request.state, "current_user", None) or {}
     if creator_id.isdigit():
         row = _wrap_remote(lambda: remote_creators.get_by_id(int(creator_id)))
         if row is None:
@@ -1095,7 +1148,7 @@ def get_one(creator_id: str, request: Request) -> dict:
         if not row_in_department(row, department_code):
             raise HTTPException(status_code=404, detail="creator not found")
         signals = _fetch_outreach_signals([row.get("id")])
-        return _serialize(row, signals.get(row.get("id")))
+        return _attach_lock_or_hide(_serialize(row, signals.get(row.get("id"))), current_user)
 
     # Legacy local id like "tt_<handle>" — try mapping to (platform, handle)
     if "_" in creator_id:
@@ -1108,13 +1161,13 @@ def get_one(creator_id: str, request: Request) -> dict:
                 if not row_in_department(row, department_code):
                     raise HTTPException(status_code=404, detail="creator not found")
                 signals = _fetch_outreach_signals([row.get("id")])
-                return _serialize(row, signals.get(row.get("id")))
+                return _attach_lock_or_hide(_serialize(row, signals.get(row.get("id"))), current_user)
 
     with SessionLocal() as db:
         local = db.get(Creator, creator_id)
         if local is not None:
             if not row_in_department(local, department_code):
                 raise HTTPException(status_code=404, detail="creator not found")
-            return _serialize_local_creator(local)
+            return _attach_lock_or_hide(_serialize_local_creator(local), current_user)
 
     raise HTTPException(status_code=404, detail="creator not found")

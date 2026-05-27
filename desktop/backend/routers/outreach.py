@@ -27,25 +27,38 @@ Endpoints
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models.creator import Creator
+from ..models.creator_outreach_lock import CreatorOutreachLock
 from ..models.outreach_email import OutreachEmail
 from ..models.outreach_template import OutreachTemplate
 from ..services import gmail_service
 from ..services import product_asset_service
 from ..services import remote_creators
-from ..services.departments import current_department_code, department_where, row_in_department
+from ..services.departments import current_department_code, department_where, effective_row_department, row_in_department
 from ..services.remote_creators import RemoteRepoError
 from ..services.post_processing import create_outreach_event
+from ..services.outreach_lock_service import (
+    acquire_creator_lock,
+    actor_id,
+    heartbeat_lock,
+    is_admin_user,
+    release_creator_lock_if_owned,
+    release_lock,
+    require_creator_lock,
+    serialize_lock,
+    utcnow,
+)
 from ..services.outreach_service import (
     context_to_json,
     generate_with_ai,
@@ -157,6 +170,20 @@ class RollbackIn(BaseModel):
     target_email_id: str
 
 
+class LockAcquireIn(BaseModel):
+    ttl_seconds: int | None = Field(default=None, ge=60, le=3600)
+    force: bool = False
+
+
+class LockHeartbeatIn(BaseModel):
+    ttl_seconds: int | None = Field(default=None, ge=60, le=3600)
+
+
+class LockReleaseIn(BaseModel):
+    force: bool = False
+    reason: str | None = Field(default=None, max_length=200)
+
+
 class TkScriptIn(BaseModel):
     commission: int = Field(default=20, ge=5, le=20)
     strategy: str = Field(default="template", pattern="^(template|ai|hybrid)$")
@@ -251,6 +278,96 @@ def _email_to_dict(email: OutreachEmail) -> dict[str, Any]:
         "created_at": _iso(email.created_at),
         "updated_at": _iso(email.updated_at),
     }
+
+
+def _body_preview(value: str | None, body_format: str | None = None, limit: int = 180) -> str:
+    text = value or ""
+    if (body_format or "").lower() == "html":
+        text = re.sub(r"<(br|/p|/div|/li)\b[^>]*>", "\n", text, flags=re.IGNORECASE)
+        text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit] + ("..." if len(text) > limit else "")
+
+
+def _creator_summary(creator: Creator | dict[str, Any] | None) -> dict[str, Any]:
+    if creator is None:
+        return {}
+    if isinstance(creator, dict):
+        return {
+            "creator_handle": creator.get("handle"),
+            "creator_display_name": creator.get("display_name"),
+            "creator_profile_url": creator.get("profile_url"),
+            "creator_platform": creator.get("platform"),
+        }
+    return {
+        "creator_handle": creator.handle,
+        "creator_display_name": creator.display_name,
+        "creator_profile_url": creator.profile_url,
+        "creator_platform": creator.platform,
+    }
+
+
+def _creator_summary_map(db: Session, creator_ids: list[str], department_code: str | None) -> dict[str, dict[str, Any]]:
+    ids = [str(cid) for cid in dict.fromkeys(creator_ids) if str(cid or "").strip()]
+    if not ids:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    local_rows = list(db.scalars(select(Creator).where(Creator.id.in_(ids))).all())
+    for creator in local_rows:
+        if row_in_department(creator, department_code):
+            out[str(creator.id)] = _creator_summary(creator)
+    for creator_id in ids:
+        if creator_id in out or not creator_id.isdigit():
+            continue
+        try:
+            row = remote_creators.get_by_id(creator_id)
+        except RemoteRepoError:
+            row = None
+        if row is not None and row_in_department(row, department_code):
+            out[creator_id] = _creator_summary(row)
+    return out
+
+
+def _archive_item_to_dict(email: OutreachEmail, creator_summary: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "id": email.id,
+        "department_code": email.department_code,
+        "creator_id": email.creator_id,
+        **(creator_summary or {}),
+        "to_email": email.to_email,
+        "from_email": email.from_email,
+        "subject": email.subject,
+        "body_preview": _body_preview(email.body, email.body_format),
+        "body_format": email.body_format,
+        "status": email.status,
+        "sent_at": _iso(email.sent_at),
+        "created_at": _iso(email.created_at),
+        "created_by": getattr(email, "created_by", None),
+        "gmail_thread_id": email.gmail_thread_id,
+        "parent_email_id": getattr(email, "parent_email_id", None),
+    }
+
+
+def _archive_detail_to_dict(email: OutreachEmail, creator_summary: dict[str, Any] | None = None) -> dict[str, Any]:
+    item = _archive_item_to_dict(email, creator_summary)
+    item.update(
+        {
+            "body": email.body,
+            "gmail_message_id": email.gmail_message_id,
+            "error_message": email.error_message,
+            "updated_at": _iso(email.updated_at),
+        }
+    )
+    return item
+
+
+def _parse_archive_datetime(value: str | None, field_name: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be ISO datetime or YYYY-MM-DD") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +594,92 @@ def preview_email(creator_id: str, body: PreviewIn, request: Request, db: Sessio
 
 
 # ---------------------------------------------------------------------------
+# Short-lived creator outreach locks
+# ---------------------------------------------------------------------------
+
+
+@router.get("/locks/mine")
+def list_my_outreach_locks(request: Request, db: Session = Depends(get_db)) -> dict:
+    current_user = getattr(request.state, "current_user", None) or {}
+    owner = actor_id(current_user)
+    if not owner:
+        raise HTTPException(status_code=401, detail="login required")
+    rows = list(
+        db.scalars(
+            select(CreatorOutreachLock)
+            .where(CreatorOutreachLock.owner_user_id == owner)
+            .where(CreatorOutreachLock.released_at.is_(None))
+            .where(CreatorOutreachLock.expires_at > utcnow())
+            .order_by(CreatorOutreachLock.expires_at.desc())
+        ).all()
+    )
+    return {"ok": True, "total": len(rows), "items": [serialize_lock(row, current_user) for row in rows]}
+
+
+@router.get("/locks/active")
+def list_active_outreach_locks(request: Request, db: Session = Depends(get_db)) -> dict:
+    current_user = getattr(request.state, "current_user", None) or {}
+    if not is_admin_user(current_user):
+        raise HTTPException(status_code=403, detail="admin only")
+    q = (
+        select(CreatorOutreachLock)
+        .where(CreatorOutreachLock.released_at.is_(None))
+        .where(CreatorOutreachLock.expires_at > utcnow())
+        .order_by(CreatorOutreachLock.expires_at.desc())
+    )
+    where_department = department_where(CreatorOutreachLock, current_department_code(request))
+    if where_department is not None:
+        q = q.where(where_department)
+    rows = list(db.scalars(q).all())
+    return {"ok": True, "total": len(rows), "items": [serialize_lock(row, current_user) for row in rows]}
+
+
+@router.post("/locks/{creator_id}")
+def acquire_outreach_lock(
+    creator_id: str,
+    body: LockAcquireIn,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    department_code = current_department_code(request)
+    creator = _resolve_creator(db, creator_id, department_code)
+    current_user = getattr(request.state, "current_user", None) or {}
+    lock = acquire_creator_lock(
+        db,
+        creator_id=str(creator.id),
+        department_code=effective_row_department(creator),
+        user=current_user,
+        ttl_seconds=body.ttl_seconds,
+        force=body.force,
+    )
+    return {"ok": True, "lock": serialize_lock(lock, current_user)}
+
+
+@router.post("/locks/{lock_id}/heartbeat")
+def heartbeat_outreach_lock(
+    lock_id: str,
+    body: LockHeartbeatIn,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    current_user = getattr(request.state, "current_user", None) or {}
+    lock = heartbeat_lock(db, lock_id=lock_id, user=current_user, ttl_seconds=body.ttl_seconds)
+    return {"ok": True, "lock": serialize_lock(lock, current_user)}
+
+
+@router.post("/locks/{lock_id}/release")
+def release_outreach_lock(
+    lock_id: str,
+    body: LockReleaseIn,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    current_user = getattr(request.state, "current_user", None) or {}
+    lock = release_lock(db, lock_id=lock_id, user=current_user, force=body.force, reason=body.reason)
+    return {"ok": True, "lock": serialize_lock(lock, current_user)}
+
+
+# ---------------------------------------------------------------------------
 # TK script prompt template management
 # ---------------------------------------------------------------------------
 
@@ -655,6 +858,7 @@ def create_draft(body: DraftIn, request: Request, db: Session = Depends(get_db))
     department_code = current_department_code(request)
     current_user = getattr(request.state, "current_user", None) or {}
     creator = _resolve_creator(db, body.creator_id, department_code)
+    require_creator_lock(db, creator_id=str(creator.id), user=current_user)
     template = None
     rendered_subject = body.subject
     rendered_body = body.body
@@ -708,6 +912,7 @@ def create_draft(body: DraftIn, request: Request, db: Session = Depends(get_db))
 
 @router.patch("/draft/{draft_id}")
 def patch_draft(draft_id: str, body: DraftPatch, request: Request, db: Session = Depends(get_db)) -> dict:
+    current_user = getattr(request.state, "current_user", None) or {}
     draft = db.get(OutreachEmail, draft_id)
     if draft is None:
         raise HTTPException(status_code=404, detail="draft not found")
@@ -715,6 +920,7 @@ def patch_draft(draft_id: str, body: DraftPatch, request: Request, db: Session =
         raise HTTPException(status_code=404, detail="draft not found")
     if draft.status not in {"draft", "failed"}:
         raise HTTPException(status_code=400, detail=f"draft is {draft.status}, cannot edit")
+    require_creator_lock(db, creator_id=str(draft.creator_id), user=current_user)
     payload = body.model_dump(exclude_unset=True)
     for key, value in payload.items():
         if key == "to_email" and value is not None:
@@ -730,6 +936,7 @@ def patch_draft(draft_id: str, body: DraftPatch, request: Request, db: Session =
 
 @router.delete("/draft/{draft_id}")
 def delete_draft(draft_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
+    current_user = getattr(request.state, "current_user", None) or {}
     draft = db.get(OutreachEmail, draft_id)
     if draft is None:
         raise HTTPException(status_code=404, detail="draft not found")
@@ -738,6 +945,7 @@ def delete_draft(draft_id: str, request: Request, db: Session = Depends(get_db))
     if draft.status == "sent":
         raise HTTPException(status_code=400, detail="cannot delete a sent email; archive instead")
     draft.status = "cancelled"
+    release_creator_lock_if_owned(db, creator_id=str(draft.creator_id), user=current_user, reason="draft_cancelled")
     db.commit()
     return {"ok": True}
 
@@ -752,6 +960,7 @@ def rollback_draft(
     """Copy the subject/body from a historical email (same creator) into the
     current draft. Links the two rows via ``parent_email_id`` so the history
     sidebar can render a lineage."""
+    current_user = getattr(request.state, "current_user", None) or {}
     draft = db.get(OutreachEmail, draft_id)
     if draft is None:
         raise HTTPException(status_code=404, detail="draft not found")
@@ -759,6 +968,7 @@ def rollback_draft(
         raise HTTPException(status_code=404, detail="draft not found")
     if draft.status not in {"draft", "failed"}:
         raise HTTPException(status_code=400, detail=f"draft is {draft.status}, cannot edit")
+    require_creator_lock(db, creator_id=str(draft.creator_id), user=current_user)
 
     source = db.get(OutreachEmail, body.target_email_id)
     if source is None or source.creator_id != draft.creator_id:
@@ -779,6 +989,7 @@ def rollback_draft(
 def send_draft(draft_id: str, body: SendIn, request: Request, db: Session = Depends(get_db)) -> dict:
     if not body.confirm:
         raise HTTPException(status_code=400, detail="confirm must be true to send")
+    current_user = getattr(request.state, "current_user", None) or {}
     draft = db.get(OutreachEmail, draft_id)
     if draft is None:
         raise HTTPException(status_code=404, detail="draft not found")
@@ -789,7 +1000,7 @@ def send_draft(draft_id: str, body: SendIn, request: Request, db: Session = Depe
     if not draft.to_email or "@" not in draft.to_email:
         raise HTTPException(status_code=400, detail=f"invalid recipient: {draft.to_email!r}")
 
-    current_user = getattr(request.state, "current_user", None) or {}
+    require_creator_lock(db, creator_id=str(draft.creator_id), user=current_user)
     if not draft.created_by:
         draft.created_by = current_user.get("id") or current_user.get("identity")
     draft.status = "queued"
@@ -840,15 +1051,89 @@ def send_draft(draft_id: str, body: SendIn, request: Request, db: Session = Depe
             )
         elif str(draft.creator_id).isdigit():
             try:
-                remote_creators.patch(draft.creator_id, current_status="已建联")
+                remote_creators.patch(draft.creator_id, current_status="\u5f85\u56de\u590d")
             except RemoteRepoError:
                 # The email has already been accepted by Gmail. Do not fail the
                 # send response only because the optional status sync failed.
                 pass
 
+    release_creator_lock_if_owned(db, creator_id=str(draft.creator_id), user=current_user, reason="sent")
     db.commit()
     db.refresh(draft)
     return _email_to_dict(draft)
+
+
+@router.get("/archive")
+def list_outreach_archive(
+    request: Request,
+    creator_id: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    from_email: str | None = Query(default=None),
+    to_email: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> dict:
+    department_code = current_department_code(request)
+    filters = [OutreachEmail.status == "sent"]
+    where_department = department_where(OutreachEmail, department_code)
+    if where_department is not None:
+        filters.append(where_department)
+    if creator_id:
+        filters.append(OutreachEmail.creator_id == creator_id)
+    if from_email:
+        filters.append(OutreachEmail.from_email.ilike(f"%{from_email.strip()}%"))
+    if to_email:
+        filters.append(OutreachEmail.to_email.ilike(f"%{to_email.strip()}%"))
+    if q and q.strip():
+        needle = f"%{q.strip()}%"
+        filters.append(
+            or_(
+                OutreachEmail.subject.ilike(needle),
+                OutreachEmail.body.ilike(needle),
+                OutreachEmail.to_email.ilike(needle),
+                OutreachEmail.from_email.ilike(needle),
+                OutreachEmail.creator_id.ilike(needle),
+            )
+        )
+    sent_at = func.coalesce(OutreachEmail.sent_at, OutreachEmail.created_at)
+    start = _parse_archive_datetime(date_from, "date_from")
+    end = _parse_archive_datetime(date_to, "date_to")
+    if start is not None:
+        filters.append(sent_at >= start)
+    if end is not None:
+        filters.append(sent_at <= end)
+
+    total = int(db.scalar(select(func.count()).select_from(OutreachEmail).where(*filters)) or 0)
+    rows = list(
+        db.scalars(
+            select(OutreachEmail)
+            .where(*filters)
+            .order_by(sent_at.desc(), OutreachEmail.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        ).all()
+    )
+    creators = _creator_summary_map(db, [str(row.creator_id) for row in rows], department_code)
+    return {
+        "ok": True,
+        "total": total,
+        "items": [_archive_item_to_dict(row, creators.get(str(row.creator_id))) for row in rows],
+    }
+
+
+@router.get("/archive/{email_id}")
+def get_outreach_archive_email(email_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
+    department_code = current_department_code(request)
+    email = db.get(OutreachEmail, email_id)
+    if email is None or email.status != "sent":
+        raise HTTPException(status_code=404, detail="archived email not found")
+    if not row_in_department(email, department_code):
+        raise HTTPException(status_code=404, detail="archived email not found")
+    creators = _creator_summary_map(db, [str(email.creator_id)], department_code)
+    return {"ok": True, "item": _archive_detail_to_dict(email, creators.get(str(email.creator_id)))}
 
 
 @router.get("/drafts")

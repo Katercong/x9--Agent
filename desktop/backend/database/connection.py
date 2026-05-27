@@ -92,6 +92,7 @@ def _ensure_schema_columns() -> None:
         "creator_recommendations",
         "review_tasks",
         "outreach_emails",
+        "creator_outreach_locks",
         "outreach_templates",
         "extension_sessions",
         "extension_commands",
@@ -219,6 +220,10 @@ def _ensure_schema_columns() -> None:
         _ensure_column(conn, "outreach_emails", "ai_tone", "VARCHAR(20)")
         _ensure_column(conn, "outreach_emails", "ai_language", "VARCHAR(10)")
         _ensure_index(conn, "ix_outreach_emails_parent_email_id", "outreach_emails", "parent_email_id")
+        _ensure_index(conn, "ix_creator_outreach_locks_creator_id", "creator_outreach_locks", "creator_id")
+        _ensure_index(conn, "ix_creator_outreach_locks_owner_user_id", "creator_outreach_locks", "owner_user_id")
+        _ensure_index(conn, "ix_creator_outreach_locks_expires_at", "creator_outreach_locks", "expires_at")
+        _ensure_index(conn, "ix_creator_outreach_locks_released_at", "creator_outreach_locks", "released_at")
 
         _ensure_column(conn, "creator_recommendations", "source_type", "VARCHAR(40)")
         _ensure_column(conn, "creator_recommendations", "rule_version", "VARCHAR(40)")

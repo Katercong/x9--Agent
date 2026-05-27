@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { Building, Users, KeyRound, Sliders } from 'lucide-react';
 import { DataTable, type Column } from '@/components/table/DataTable';
+import { PaginationControls } from '@/components/PaginationControls';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
 import { useStaff, useCreators, useProducts } from '@/hooks/useApi';
@@ -27,8 +29,11 @@ const memberColumns: Column<StaffRow>[] = [
   { key: 'month', header: '统计月份', cell: (r) => <span className="text-xs text-muted">{r.month || '—'}</span> },
 ];
 
+const PAGE_SIZE = 10;
+
 export default function Settings() {
-  const staff = useStaff({ limit: 100 });
+  const [page, setPage] = useState(0);
+  const staff = useStaff({ limit: PAGE_SIZE, offset: page * PAGE_SIZE });
   const creators = useCreators({ limit: 1 });
   const products = useProducts({ limit: 1 });
 
@@ -80,6 +85,14 @@ export default function Settings() {
         <AsyncState loading={staff.isLoading} error={staff.error} isEmpty={rows.length === 0} height={200}>
           <DataTable columns={memberColumns} data={rows} rowKey={(r) => r.name} />
         </AsyncState>
+        <PaginationControls
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={staff.data?.total ?? 0}
+          currentCount={rows.length}
+          loading={staff.isLoading}
+          onPageChange={setPage}
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">

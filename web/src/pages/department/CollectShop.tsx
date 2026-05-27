@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Clock3, Database, ListChecks, Store, Users, Radar, Wifi, WifiOff } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
+import { PaginationControls } from '@/components/PaginationControls';
 import { AsyncState } from '@/components/states/States';
 import {
   useCollectionActors,
@@ -14,6 +15,8 @@ import {
 import { ACCENTS, CollectHeader, Reveal, num } from './collectShared';
 
 type MonitorSource = Extract<SourceKey, 'tiktok_shop' | 'x9_leads'>;
+
+const PAGE_SIZE = 10;
 
 interface CollectShopProps {
   previewDemo?: boolean;
@@ -136,6 +139,7 @@ export function CollectionMonitorBoard({ sourceKey }: CollectionMonitorBoardProp
   const actors = useCollectionActors(true);
   const rawActors = actors.data?.items ?? [];
   const [selectedActorId, setSelectedActorId] = useState<string | null>(null);
+  const [detailPage, setDetailPage] = useState(0);
 
   const cards = useMemo<UserCard[]>(() => {
     return rawActors
@@ -160,8 +164,13 @@ export function CollectionMonitorBoard({ sourceKey }: CollectionMonitorBoardProp
 
   const activeCard = cards.find((card) => card.id === selectedActorId) || (cards.length === 1 ? cards[0] : null);
   const detailActorId = activeCard?.id || '__none__';
-  const detailFeed = useObservationsFeed({ source: sourceKey, limit: 300, actor_user_id: detailActorId });
+  const detailFeed = useObservationsFeed({ source: sourceKey, limit: PAGE_SIZE, offset: detailPage * PAGE_SIZE, actor_user_id: detailActorId });
   const detailItems = activeCard ? (detailFeed.data?.items ?? []) : [];
+  const detailTotal = activeCard ? (detailFeed.data?.total ?? 0) : 0;
+
+  useEffect(() => {
+    setDetailPage(0);
+  }, [detailActorId, sourceKey]);
 
   const totals = useMemo(() => {
     return {
@@ -254,7 +263,10 @@ export function CollectionMonitorBoard({ sourceKey }: CollectionMonitorBoardProp
                   <button
                     key={card.id}
                     type="button"
-                    onClick={() => setSelectedActorId(card.id)}
+                    onClick={() => {
+                      setSelectedActorId(card.id);
+                      setDetailPage(0);
+                    }}
                     className={`rounded-lg border bg-white p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-soft ${
                       active ? 'border-gray-900 ring-2 ring-gray-900/10' : 'border-line'
                     }`}
@@ -310,6 +322,14 @@ export function CollectionMonitorBoard({ sourceKey }: CollectionMonitorBoardProp
                   height={240}
                 >
                   <DataTable columns={columns} data={detailItems} rowKey={(row) => row.id} emptyText="该用户还没有采集记录" />
+                  <PaginationControls
+                    page={detailPage}
+                    pageSize={PAGE_SIZE}
+                    total={detailTotal}
+                    currentCount={detailItems.length}
+                    loading={detailFeed.isFetching}
+                    onPageChange={setDetailPage}
+                  />
                 </AsyncState>
               </div>
             ) : (

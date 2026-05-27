@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { Plus, Webhook, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { DataTable, type Column } from '@/components/table/DataTable';
+import { PaginationControls } from '@/components/PaginationControls';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
 import { useWebhooks } from '@/hooks/useApi';
@@ -53,8 +55,11 @@ const columns: Column<WebhookT>[] = [
   },
 ];
 
+const PAGE_SIZE = 10;
+
 export default function Webhooks() {
-  const { data, isLoading, error } = useWebhooks({ limit: 100 });
+  const [page, setPage] = useState(0);
+  const { data, isLoading, error } = useWebhooks({ limit: PAGE_SIZE, offset: page * PAGE_SIZE });
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
   const active = items.filter((w) => w.active === 1).length;
@@ -88,6 +93,14 @@ export default function Webhooks() {
         <AsyncState loading={isLoading} error={error} isEmpty={items.length === 0} emptyMessage="还没配置 webhook,点击右上「新增 Webhook」创建" height={280}>
           <DataTable columns={columns} data={items} rowKey={(r) => r.id} />
         </AsyncState>
+        <PaginationControls
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={total}
+          currentCount={items.length}
+          loading={isLoading}
+          onPageChange={setPage}
+        />
       </div>
 
       <div className="card card-body">

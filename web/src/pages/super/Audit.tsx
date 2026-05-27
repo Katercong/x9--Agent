@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import { DataTable, type Column } from '@/components/table/DataTable';
+import { PaginationControls } from '@/components/PaginationControls';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
 import { useAuditLog } from '@/hooks/useApi';
@@ -12,9 +13,12 @@ const actionTone: Record<string, 'good' | 'info' | 'bad'> = {
   DELETE: 'bad',
 };
 
+const PAGE_SIZE = 10;
+
 export default function Audit() {
   const [expanded, setExpanded] = useState<number | null>(null);
-  const { data, isLoading, error } = useAuditLog({ limit: 100, order_by: 'ts:desc' });
+  const [page, setPage] = useState(0);
+  const { data, isLoading, error } = useAuditLog({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, order_by: 'ts:desc' });
   const items = data?.items ?? [];
 
   const columns: Column<AuditLog>[] = [
@@ -76,6 +80,14 @@ export default function Audit() {
             )}
           </div>
         </AsyncState>
+        <PaginationControls
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={data?.total ?? 0}
+          currentCount={items.length}
+          loading={isLoading}
+          onPageChange={setPage}
+        />
       </div>
     </div>
   );

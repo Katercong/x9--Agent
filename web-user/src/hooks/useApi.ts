@@ -153,6 +153,42 @@ export function useOutreachHistory(creator_id?: string | number) {
   });
 }
 
+export function useAcquireOutreachLock() {
+  return useMutation({
+    mutationFn: ({ creator_id, body }: { creator_id: string | number; body?: Parameters<typeof endpoints.acquireOutreachLock>[1] }) =>
+      endpoints.acquireOutreachLock(creator_id, body),
+  });
+}
+
+export function useHeartbeatOutreachLock() {
+  return useMutation({
+    mutationFn: ({ lock_id, body }: { lock_id: string; body?: Parameters<typeof endpoints.heartbeatOutreachLock>[1] }) =>
+      endpoints.heartbeatOutreachLock(lock_id, body),
+  });
+}
+
+export function useReleaseOutreachLock() {
+  return useMutation({
+    mutationFn: ({ lock_id, body }: { lock_id: string; body?: Parameters<typeof endpoints.releaseOutreachLock>[1] }) =>
+      endpoints.releaseOutreachLock(lock_id, body),
+  });
+}
+
+export function useOutreachArchive(params?: Params) {
+  return useQuery({
+    queryKey: ['outreach', 'archive', params],
+    queryFn: () => endpoints.outreachArchive(params),
+  });
+}
+
+export function useOutreachArchiveDetail(id?: string | null) {
+  return useQuery({
+    queryKey: ['outreach', 'archive-detail', id],
+    queryFn: () => endpoints.outreachArchiveDetail(id!),
+    enabled: Boolean(id),
+  });
+}
+
 export function useGenerateTkScript() {
   return useMutation({
     mutationFn: ({ creator_id, ...body }: { creator_id: string | number; commission: number; strategy?: string; custom_prompt?: string; prompt_id?: string; product_asset_id?: string }) =>

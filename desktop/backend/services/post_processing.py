@@ -45,7 +45,7 @@ OUTREACH_EVENT_ORDER = [
 EVENT_TO_STATUS = {
     "recommended": "prospect",
     "assigned": "prospect",
-    "sent": "已建联",
+    "sent": "\u5f85\u56de\u590d",
     "pending_reply": "pending_reply",
     "replied": "confirmed",
     "sample_shipped": "sample_shipped",

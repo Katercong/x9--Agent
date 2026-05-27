@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { Package, Truck, AlertTriangle, CheckCircle2, Upload, Plus } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { DataTable, type Column } from '@/components/table/DataTable';
+import { PaginationControls } from '@/components/PaginationControls';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
 import { useOutreach } from '@/hooks/useApi';
@@ -28,9 +30,16 @@ const columns: Column<Outreach>[] = [
   { key: 'remark', header: '备注', cell: (r) => <span className="text-xs text-muted truncate max-w-[200px] block">{r.remark || '—'}</span> },
 ];
 
+const PAGE_SIZE = 10;
+
 export default function Samples() {
-  // 拉全量再前端聚合(SQLite 数据量小,够用)
-  const { data, isLoading, error } = useOutreach({ limit: 500, order_by: 'event_date:desc' });
+  const [page, setPage] = useState(0);
+  const { data, isLoading, error } = useOutreach({
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
+    order_by: 'event_date:desc',
+    status__in: 'sample_shipped,sample_delivered',
+  });
   const all = data?.items ?? [];
 
   // 与样品相关的事件
@@ -65,6 +74,14 @@ export default function Samples() {
         <AsyncState loading={isLoading} error={error} isEmpty={sampleEvents.length === 0} height={300}>
           <DataTable columns={columns} data={sampleEvents} rowKey={(r) => r.id} />
         </AsyncState>
+        <PaginationControls
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={data?.total ?? 0}
+          currentCount={all.length}
+          loading={isLoading}
+          onPageChange={setPage}
+        />
       </div>
     </div>
   );

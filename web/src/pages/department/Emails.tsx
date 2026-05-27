@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { Mail, Send, Eye, Reply, Sparkles, Plus } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { DataTable, type Column } from '@/components/table/DataTable';
+import { PaginationControls } from '@/components/PaginationControls';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
 import { useResource } from '@/hooks/useApi';
@@ -52,9 +54,18 @@ const tplColumns: Column<OutreachExample>[] = [
   { key: 'action', header: '', align: 'right', cell: () => <button className="chip text-xxs">使用</button> },
 ];
 
+const PAGE_SIZE = 10;
+
 export default function Emails() {
-  const examples = useResource<OutreachExample>('outreach_example', { limit: 50 });
-  const outreach = useResource<OutreachEvent>('outreach', { limit: 100, order_by: 'created_at:desc' });
+  const [tplPage, setTplPage] = useState(0);
+  const [eventPage, setEventPage] = useState(0);
+  const examples = useResource<OutreachExample>('outreach_example', { limit: PAGE_SIZE, offset: tplPage * PAGE_SIZE });
+  const outreach = useResource<OutreachEvent>('outreach', {
+    limit: PAGE_SIZE,
+    offset: eventPage * PAGE_SIZE,
+    order_by: 'created_at:desc',
+    channel__in: 'dm,email',
+  });
 
   const events = outreach.data?.items ?? [];
   const dmEvents = events.filter((e) => e.channel === 'dm' || e.channel === 'email');
@@ -80,6 +91,14 @@ export default function Emails() {
           <AsyncState loading={examples.isLoading} error={examples.error} isEmpty={tpls.length === 0} height={300}>
             <DataTable columns={tplColumns} data={tpls} rowKey={(r) => r.id} compact />
           </AsyncState>
+          <PaginationControls
+            page={tplPage}
+            pageSize={PAGE_SIZE}
+            total={examples.data?.total ?? 0}
+            currentCount={tpls.length}
+            loading={examples.isLoading}
+            onPageChange={setTplPage}
+          />
         </div>
         <div className="card lg:col-span-3">
           <div className="px-4 py-3 flex items-center justify-between border-b border-line">
@@ -89,6 +108,14 @@ export default function Emails() {
           <AsyncState loading={outreach.isLoading} error={outreach.error} isEmpty={dmEvents.length === 0} height={300}>
             <DataTable columns={queueColumns} data={dmEvents} rowKey={(r) => r.id} compact />
           </AsyncState>
+          <PaginationControls
+            page={eventPage}
+            pageSize={PAGE_SIZE}
+            total={outreach.data?.total ?? 0}
+            currentCount={events.length}
+            loading={outreach.isLoading}
+            onPageChange={setEventPage}
+          />
         </div>
       </div>
     </div>

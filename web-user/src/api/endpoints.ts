@@ -5,6 +5,7 @@ import type {
   AssistantInfo, AssistantReply, User, ListResp,
   ExtensionCommand, ExtensionSession, CollectorObservation,
   OutreachTemplate, PreviewResult, OutreachDraft, GmailAccount, GmailStatus, OutreachHistoryItem,
+  CreatorOutreachLock, OutreachArchiveItem, OutreachArchiveDetail,
   ReviewTaskUpdate, TkPrompt, TkScriptResult, ProductAsset,
 } from './types';
 
@@ -85,6 +86,22 @@ export const endpoints = {
 
   outreachHistory: (creator_id: string | number) =>
     api.get<ListResp<OutreachHistoryItem>>(`/outreach/history/${encodeURIComponent(String(creator_id))}`),
+
+  acquireOutreachLock: (creator_id: string | number, body?: { ttl_seconds?: number; force?: boolean }) =>
+    api.post<{ ok: boolean; lock: CreatorOutreachLock }>(`/outreach/locks/${encodeURIComponent(String(creator_id))}`, body || {}),
+  heartbeatOutreachLock: (lock_id: string, body?: { ttl_seconds?: number }) =>
+    api.post<{ ok: boolean; lock: CreatorOutreachLock }>(`/outreach/locks/${encodeURIComponent(lock_id)}/heartbeat`, body || {}),
+  releaseOutreachLock: (lock_id: string, body?: { force?: boolean; reason?: string }) =>
+    api.post<{ ok: boolean; lock: CreatorOutreachLock }>(`/outreach/locks/${encodeURIComponent(lock_id)}/release`, body || {}),
+  myOutreachLocks: () =>
+    api.get<ListResp<CreatorOutreachLock>>('/outreach/locks/mine'),
+  activeOutreachLocks: () =>
+    api.get<ListResp<CreatorOutreachLock>>('/outreach/locks/active'),
+
+  outreachArchive: (params?: Record<string, unknown>) =>
+    api.get<ListResp<OutreachArchiveItem>>('/outreach/archive', params),
+  outreachArchiveDetail: (id: string) =>
+    api.get<{ ok: boolean; item: OutreachArchiveDetail }>(`/outreach/archive/${encodeURIComponent(id)}`),
 
   generateTkScript: (creator_id: string | number, body: {
     commission: number;

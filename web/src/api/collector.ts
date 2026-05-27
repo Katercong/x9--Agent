@@ -225,7 +225,7 @@ export function useObservationsFeed(params: {
         platform: params.platform,
         date_from: params.date_from,
         date_to: params.date_to,
-        limit: params.limit ?? 100,
+        limit: params.limit ?? 10,
         offset: params.offset ?? 0,
         actor_user_id: params.actor_user_id,
       }),

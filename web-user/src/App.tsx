@@ -8,6 +8,7 @@ import CollectLeads from './pages/CollectLeads';
 import CollectImport from './pages/CollectImport';
 import Recommendations from './pages/Recommendations';
 import RecommendationDetail from './pages/RecommendationDetail';
+import OutreachArchive from './pages/OutreachArchive';
 import ExportImport from './pages/ExportImport';
 import HotKeywords from './pages/HotKeywords';
 import Assistant from './pages/Assistant';
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="/creators-info" element={<Navigate to="/recommendations" replace />} />
         <Route path="/recommendations" element={<Recommendations />} />
         <Route path="/recommendations/:creatorId" element={<RecommendationDetail />} />
+        <Route path="/emails" element={<OutreachArchive />} />
         <Route path="/review" element={<Navigate to="/business" replace />} />
         <Route path="/export" element={<ExportImport />} />
         <Route path="/hotkw" element={<HotKeywords />} />

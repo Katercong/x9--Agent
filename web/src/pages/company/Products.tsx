@@ -1,15 +1,19 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Trophy, ShoppingBag, Star } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
+import { PaginationControls } from '@/components/PaginationControls';
 import { AsyncState } from '@/components/states/States';
 import { useProducts, useCategories } from '@/hooks/useApi';
 import { categoryNameMap } from '@/lib/derive';
 import { chartPalette } from '@/lib/colors';
 
+const PAGE_SIZE = 10;
+
 export default function Products() {
-  const products = useProducts({ limit: 200 });
+  const [page, setPage] = useState(0);
+  const products = useProducts({ limit: PAGE_SIZE, offset: page * PAGE_SIZE });
   const categories = useCategories({ limit: 50 });
 
   const items = products.data?.items ?? [];
@@ -58,9 +62,17 @@ export default function Products() {
           <KpiCard label="类目数" value={cats.length} icon={Star} iconBg="#d1fae5" iconColor="#16a34a" />
         </div>
 
-        <ChartCard title="SKU 价值地图 · 按类目分组,大小=单价(USD)">
+        <ChartCard title="当前页 SKU 价值地图 · 按类目分组,大小=单价(USD)">
           <EChart option={treemapOption} height={420} />
         </ChartCard>
+        <PaginationControls
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={products.data?.total ?? 0}
+          currentCount={items.length}
+          loading={products.isLoading}
+          onPageChange={setPage}
+        />
       </div>
     </AsyncState>
   );

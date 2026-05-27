@@ -105,14 +105,14 @@ export function useObservationsFeed(params: { source?: SourceKey | 'all'; limit?
     queryFn: () =>
       api.get<FeedResponse>('/collector/observations-feed', {
         source: params.source ?? 'all',
-        limit: params.limit ?? 200,
+        limit: params.limit ?? 10,
         offset: params.offset ?? 0,
       }),
     refetchInterval: 10_000,
   });
 }
 
-export function useShopCollectionSummary(limit = 300) {
+export function useShopCollectionSummary(limit = 10) {
   return useQuery({
     queryKey: ['collector', 'shop-summary', limit],
     queryFn: () => api.get<ShopCollectionSummary>('/collector/shop-summary', { limit }),

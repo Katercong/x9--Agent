@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertOctagon,
   AlignCenter,
@@ -28,18 +28,22 @@ import {
   useGmailAccounts,
   useGmailDeleteAccount,
   useGmailStatus,
+  useAcquireOutreachLock,
+  useHeartbeatOutreachLock,
   useOutreachHistory,
   usePatchDraft,
   useProductAssets,
+  useReleaseOutreachLock,
   useSendDraft,
 } from '@/hooks/useApi';
 import { shortRelative } from '@/lib/format';
-import type { Creator, ProductAsset, TkStrategy } from '@/api/types';
+import type { Creator, CreatorOutreachLock, OutreachHistoryItem, ProductAsset, TkStrategy } from '@/api/types';
 
 interface Props {
   creator: Creator | null;
   open: boolean;
   onClose: () => void;
+  initialLock?: CreatorOutreachLock | null;
 }
 
 type Step = 'template' | 'preview' | 'edit' | 'sent';
@@ -160,7 +164,24 @@ function formatError(error: any) {
   return String(detail);
 }
 
-export function OutreachDrawer({ creator, open, onClose }: Props) {
+function htmlToPlainText(value: string) {
+  if (typeof window !== 'undefined' && 'DOMParser' in window) {
+    const doc = new DOMParser().parseFromString(value, 'text/html');
+    return (doc.body.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  return value
+    .replace(/<(br|\/p|\/div|\/li)\b[^>]*>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function safeEmailHtml(value?: string | null) {
+  return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>body{margin:0;padding:14px;background:#fff;color:#111827;font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}img{max-width:100%;height:auto}</style></head><body>${value || ''}</body></html>`;
+}
+
+export function OutreachDrawer({ creator, open, onClose, initialLock = null }: Props) {
   const [step, setStep] = useState<Step>('template');
   const [strategy, setStrategy] = useState<TkStrategy>('ai');
   const [commission, setCommission] = useState(20);
@@ -176,6 +197,10 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
   const [draftId, setDraftId] = useState<string | null>(null);
   const [sentSummary, setSentSummary] = useState('');
   const [sendError, setSendError] = useState('');
+  const [lockError, setLockError] = useState('');
+  const [activeLock, setActiveLock] = useState<CreatorOutreachLock | null>(initialLock);
+  const [reviewEmail, setReviewEmail] = useState<OutreachHistoryItem | null>(null);
+  const lockRequestKeyRef = useRef('');
   const [generationMeta, setGenerationMeta] = useState<{
     aiStatus?: string;
     productName?: string;
@@ -196,6 +221,9 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
   const accountsQ = useGmailAccounts();
   const assetsQ = useProductAssets(open && creator ? creator.id : undefined);
   const historyQ = useOutreachHistory(open && creator ? creator.id : undefined);
+  const acquireLock = useAcquireOutreachLock();
+  const heartbeatLock = useHeartbeatOutreachLock();
+  const releaseLock = useReleaseOutreachLock();
   const generateTk = useGenerateTkScript();
   const createAsset = useCreateProductAsset();
   const deleteAsset = useDeleteProductAsset();
@@ -218,12 +246,16 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
   const blockingGmailDiagnostic = gmailDiagnostics.find((item) => item.level === 'error') || gmailDiagnostics.find((item) => item.level === 'warn');
   const isPersistingDraft = createDraft.isPending || patchDraft.isPending;
   const isSending = isPersistingDraft || sendDraft.isPending;
+  const isLocking = acquireLock.isPending;
+  const hasOutreachLock = Boolean(activeLock?.id && !lockError);
   const hasGmailAccount = accounts.length > 0;
   const canSaveDraft = Boolean(toEmail.trim() && subject.trim() && body.trim());
-  const canSendDraft = Boolean(hasGmailAccount && toEmail.trim() && subject.trim() && body.trim() && !isSending);
+  const canSendDraft = Boolean(hasOutreachLock && hasGmailAccount && toEmail.trim() && subject.trim() && body.trim() && !isSending);
   const gmailReturnTo = typeof window !== 'undefined' ? `${window.location.pathname}${window.location.search}` : '/';
   const gmailConnectHref = `/api/local/outreach/gmail/connect?return_to=${encodeURIComponent(gmailReturnTo)}`;
-  const sendDisabledReason = !hasGmailAccount
+  const sendDisabledReason = !hasOutreachLock
+    ? '达人邮件建联占用中，请稍后再试'
+    : !hasGmailAccount
     ? '请先连接 Gmail 账户'
     : !toEmail.trim()
       ? '请填写收件邮箱'
@@ -248,10 +280,40 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
     setDraftId(null);
     setSentSummary('');
     setSendError('');
+    setLockError('');
+    setReviewEmail(null);
+    setActiveLock(initialLock || null);
+    lockRequestKeyRef.current = initialLock ? `${creator.id}:${initialLock.id}` : '';
     setGenerationMeta(null);
     setAssetFormOpen(false);
     resetAssetForm();
-  }, [open, creator?.id]);
+  }, [open, creator?.id, initialLock?.id]);
+
+  useEffect(() => {
+    if (!open || !creator || activeLock || initialLock) return;
+    const requestKey = String(creator.id);
+    if (lockRequestKeyRef.current === requestKey) return;
+    lockRequestKeyRef.current = requestKey;
+    setLockError('');
+    acquireLock.mutate(
+      { creator_id: creator.id },
+      {
+        onSuccess: (result) => setActiveLock(result.lock),
+        onError: (error) => setLockError(formatError(error)),
+      },
+    );
+  }, [acquireLock, activeLock, creator, initialLock, open]);
+
+  useEffect(() => {
+    if (!open || !activeLock) return;
+    const timer = window.setInterval(() => {
+      heartbeatLock.mutate(
+        { lock_id: activeLock.id },
+        { onSuccess: (result) => setActiveLock(result.lock) },
+      );
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [activeLock?.id, heartbeatLock, open]);
 
   useEffect(() => {
     if (!open || selectedAssetId || !matchedAsset?.id) return;
@@ -342,6 +404,10 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
 
   const onGenerate = () => {
     if (!creator) return;
+    if (!activeLock?.id) {
+      setLockError('请先占用该达人后再生成邮件');
+      return;
+    }
     setSendError('');
     generateTk.mutate(
       {
@@ -368,6 +434,7 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
   };
 
   const persistDraft = async () => {
+    if (!activeLock?.id) throw new Error('请先占用该达人后再保存邮件');
     if (!creator) throw new Error('缺少达人信息');
     if (!toEmail.trim()) throw new Error('收件邮箱必填');
     if (!subject.trim() || !body.trim()) throw new Error('请先生成并确认邮件内容');
@@ -425,6 +492,8 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
       });
       setSentSummary(`已发送 · 主题:${sent.subject} · 收件人:${sent.to_email}`);
       setStep('sent');
+      setActiveLock(null);
+      lockRequestKeyRef.current = '';
       historyQ.refetch();
     } catch (error: any) {
       setSendError(formatError(error));
@@ -447,6 +516,25 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
     setGenerationMeta(null);
   };
 
+  const handleClose = () => {
+    const lockId = activeLock?.id;
+    setActiveLock(null);
+    lockRequestKeyRef.current = '';
+    if (lockId) {
+      releaseLock.mutate({ lock_id: lockId, body: { reason: 'drawer_closed' } }, { onSettled: onClose });
+      return;
+    }
+    onClose();
+  };
+
+  const applyHistoryEmail = (item: OutreachHistoryItem) => {
+    setSubject(item.subject || '');
+    setBody(item.body_format === 'html' ? htmlToPlainText(item.body || '') : item.body || '');
+    setIncludeProductImage(false);
+    setSendError(item.body_format === 'html' ? '已将历史 HTML 邮件转成可编辑文本，请复查后再发送' : '');
+    setStep('edit');
+  };
+
   if (!creator) return null;
 
   const activeStrategy = STRATEGIES.find((item) => item.key === strategy);
@@ -464,7 +552,7 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
   return (
     <SideDrawer
       open={open}
-      onClose={onClose}
+      onClose={handleClose}
       width={640}
       title={<span>外联 · @{creator.handle}</span>}
       subtitle={<span>{creator.display_name} · {creator.country || '地区未知'} · {creator.tier || '?'} 级 · 邮箱:{creator.email || '未知'}</span>}
@@ -473,20 +561,20 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
           {step === 'sent' ? (
             <>
               <button onClick={onReset} className="btn"><RefreshCw size={12} />再来一封</button>
-              <button onClick={onClose} className="btn btn-primary">完成</button>
+              <button onClick={handleClose} className="btn btn-primary">完成</button>
             </>
           ) : (
             <>
-              <button onClick={onClose} className="btn">取消</button>
+              <button onClick={handleClose} className="btn">取消</button>
               {step === 'template' && (
-                <button onClick={onGenerate} disabled={generationBusy} className="btn btn-primary">
+                <button onClick={onGenerate} disabled={generationBusy || isLocking || !hasOutreachLock} className="btn btn-primary">
                   {generationBusy ? <RefreshCw size={12} className="animate-spin" /> : <Wand2 size={12} />}
                   {generationBusy ? '生成中...' : '生成邮件预览'} <ArrowRight size={12} />
                 </button>
               )}
               {(step === 'preview' || step === 'edit') && (
                 <>
-                  <button onClick={onSaveDraft} disabled={!canSaveDraft || isSending} className="btn">
+                  <button onClick={onSaveDraft} disabled={!hasOutreachLock || !canSaveDraft || isSending} className="btn">
                     <Save size={12} />{isPersistingDraft ? '保存中...' : '保存草稿'}
                   </button>
                   <button onClick={onSend} disabled={!canSendDraft} className="btn btn-primary">
@@ -499,6 +587,20 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
         </>
       }
     >
+      <div className={`mb-3 rounded-md border px-3 py-2 text-xs ${
+        lockError
+          ? 'border-bad/40 bg-bad/10 text-bad'
+          : hasOutreachLock
+            ? 'border-good/30 bg-good/10 text-good'
+            : 'border-warn/30 bg-warn/10 text-warn'
+      }`}>
+        {lockError
+          ? lockError
+          : hasOutreachLock
+            ? `已占用建联窗口，到期时间 ${shortRelative(activeLock?.expires_at)}`
+            : '正在占用达人邮件建联窗口...'}
+      </div>
+
       {accounts.length === 0 ? (
         <div className="card card-body mb-3" style={{ background: 'rgb(var(--warn) / 0.12)' }}>
           <div className="flex items-start gap-2 text-xs text-warn">
@@ -952,15 +1054,54 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
           <div className="text-xxs text-muted">还没有给这位达人发过邮件</div>
         ) : (
           <div className="space-y-1.5">
-            {history.map((h: any) => (
+            {history.map((h: OutreachHistoryItem) => (
               <div key={h.id} className="text-xxs border border-border rounded px-2 py-1.5" style={{ background: 'rgb(var(--bg-elev-2))' }}>
                 <div className="flex items-center justify-between">
-                  <span className="font-medium truncate flex-1 min-w-0">{h.subject}</span>
+                  <button
+                    type="button"
+                    onClick={() => setReviewEmail(h)}
+                    className="min-w-0 flex-1 truncate text-left font-medium hover:text-accent"
+                    title="查看邮件正文"
+                  >
+                    {h.subject}
+                  </button>
                   <Pill tone={h.status === 'sent' ? 'good' : h.status === 'queued' ? 'warn' : 'muted'}>{h.status}</Pill>
                 </div>
-                <div className="text-muted mt-0.5">{h.to_email} · {shortRelative(h.sent_at || h.created_at)} · {h.from_email || '未发送'}</div>
+                <div className="mt-0.5 flex flex-wrap items-center justify-between gap-2 text-muted">
+                  <span>{h.to_email} · {shortRelative(h.sent_at || h.created_at)} · {h.from_email || '未发送'}</span>
+                  <span className="flex items-center gap-1">
+                    <button type="button" onClick={() => setReviewEmail(h)} className="underline hover:text-accent">复查</button>
+                    {h.body && <button type="button" onClick={() => applyHistoryEmail(h)} className="underline hover:text-accent">套用</button>}
+                  </span>
+                </div>
               </div>
             ))}
+          </div>
+        )}
+        {reviewEmail && (
+          <div className="mt-3 overflow-hidden rounded-md border border-border bg-elev2">
+            <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+              <div className="min-w-0">
+                <div className="truncate text-xs font-semibold">{reviewEmail.subject}</div>
+                <div className="mt-0.5 text-xxs text-muted">{reviewEmail.from_email || '未发送'} → {reviewEmail.to_email}</div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {reviewEmail.body && (
+                  <button type="button" onClick={() => applyHistoryEmail(reviewEmail)} className="btn btn-ghost !h-8 text-xs">套用</button>
+                )}
+                <button type="button" onClick={() => setReviewEmail(null)} className="btn btn-ghost !h-8 text-xs">关闭</button>
+              </div>
+            </div>
+            {reviewEmail.body_format === 'html' ? (
+              <iframe
+                title="邮件正文复查"
+                sandbox=""
+                srcDoc={safeEmailHtml(reviewEmail.body)}
+                className="block h-72 w-full bg-white"
+              />
+            ) : (
+              <pre className="max-h-72 overflow-auto whitespace-pre-wrap p-3 text-xs leading-relaxed text-text">{reviewEmail.body || '无正文内容'}</pre>
+            )}
           </div>
         )}
       </div>

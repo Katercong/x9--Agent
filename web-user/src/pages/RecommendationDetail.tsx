@@ -8,9 +8,9 @@ import {
 import { AsyncState } from '@/components/states/States';
 import { OutreachDrawer } from '@/components/outreach/OutreachDrawer';
 import { TkScriptModal } from '@/components/outreach/TkScriptModal';
-import { useClaimCreator, useCreator, useReleaseCreator } from '@/hooks/useApi';
+import { useAcquireOutreachLock, useClaimCreator, useCreator, useReleaseCreator } from '@/hooks/useApi';
 import { formatCompact, maskEmail, shortRelative } from '@/lib/format';
-import type { Creator } from '@/api/types';
+import type { Creator, CreatorOutreachLock } from '@/api/types';
 
 type TabKey = 'overview' | 'evidence' | 'risk' | 'history';
 type Tone = 'good' | 'warn' | 'muted';
@@ -128,11 +128,14 @@ export default function RecommendationDetail() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>('overview');
   const [mailOpen, setMailOpen] = useState(false);
+  const [mailLock, setMailLock] = useState<CreatorOutreachLock | null>(null);
+  const [mailOpening, setMailOpening] = useState(false);
   const [scriptOpen, setScriptOpen] = useState(false);
 
   const creatorQ = useCreator(creatorId);
   const claim = useClaimCreator();
   const release = useReleaseCreator();
+  const acquireOutreachLock = useAcquireOutreachLock();
   const creator = creatorQ.data;
 
   const positiveTags = useMemo(() => listify(creator?.positive_tags), [creator]);
@@ -157,6 +160,20 @@ export default function RecommendationDetail() {
   const onRelease = () => {
     if (!creator) return;
     release.mutate({ id: creator.id }, { onSuccess: refreshCreator });
+  };
+
+  const openMail = async () => {
+    if (!creator) return;
+    setMailOpening(true);
+    try {
+      const result = await acquireOutreachLock.mutateAsync({ creator_id: creator.id });
+      setMailLock(result.lock);
+      setMailOpen(true);
+    } catch (error: any) {
+      alert(String(error?.body?.detail || error?.message || '达人已被其他用户占用，请刷新后再试'));
+    } finally {
+      setMailOpening(false);
+    }
   };
 
   return (
@@ -196,8 +213,8 @@ export default function RecommendationDetail() {
                 <div className="rounded-md border border-border px-3 py-1.5 text-xs text-muted" style={{ background: 'rgb(var(--bg-elev-2) / 0.45)' }}>
                   推荐分 <strong className="num ml-1 text-base text-text">{Math.round(score)}</strong>
                 </div>
-                <button type="button" onClick={() => setMailOpen(true)} className="btn btn-primary">
-                  <Mail size={14} /> 邮件建联
+                <button type="button" onClick={openMail} disabled={mailOpening} className="btn btn-primary">
+                  {mailOpening ? <RefreshCw size={14} className="animate-spin" /> : <Mail size={14} />} 邮件建联
                 </button>
                 {creator.profile_url && (
                   <a href={creator.profile_url} target="_blank" rel="noreferrer" className="btn">
@@ -396,8 +413,8 @@ export default function RecommendationDetail() {
                 <p className="mt-3 text-xs leading-relaxed text-muted">
                   邮件入口固定保留，外联抽屉会带入达人、邮箱、模板和历史记录。
                 </p>
-                <button type="button" onClick={() => setMailOpen(true)} className="btn btn-primary mt-4 w-full justify-center">
-                  <Mail size={14} /> 邮件建联
+                <button type="button" onClick={openMail} disabled={mailOpening} className="btn btn-primary mt-4 w-full justify-center">
+                  {mailOpening ? <RefreshCw size={14} className="animate-spin" /> : <Mail size={14} />} 邮件建联
                 </button>
                 <button
                   type="button"
@@ -454,7 +471,16 @@ export default function RecommendationDetail() {
             </aside>
           </main>
 
-          <OutreachDrawer creator={creator} open={mailOpen} onClose={() => setMailOpen(false)} />
+          <OutreachDrawer
+            creator={creator}
+            open={mailOpen}
+            initialLock={mailLock}
+            onClose={() => {
+              setMailOpen(false);
+              setMailLock(null);
+              refreshCreator();
+            }}
+          />
           {scriptOpen && <TkScriptModal creator={creator} onClose={() => setScriptOpen(false)} />}
         </div>
       )}

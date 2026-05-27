@@ -1428,6 +1428,26 @@ def _bind_named_query_params(q: dict, request: Request) -> dict[str, Any]:
     return bind
 
 
+def _named_query_page(request: Request) -> tuple[int | None, int]:
+    raw_limit = request.query_params.get("limit")
+    if raw_limit is None or raw_limit == "":
+        return None, 0
+    try:
+        limit = int(raw_limit)
+        offset = int(request.query_params.get("offset") or 0)
+    except ValueError:
+        raise HTTPException(400, "limit and offset must be integers")
+    if limit < 1 or limit > 1000:
+        raise HTTPException(400, "limit must be between 1 and 1000")
+    if offset < 0:
+        raise HTTPException(400, "offset must be >= 0")
+    return limit, offset
+
+
+def _named_query_sql(sql: str) -> str:
+    return sql.strip().rstrip(";")
+
+
 @router.get("/api/v1/queries")
 def list_queries() -> dict:
     if use_pg_v1():
@@ -1478,9 +1498,21 @@ def run_query(name: str, request: Request) -> dict:
             if not q:
                 raise HTTPException(404, f"unknown query '{name}' (try GET /api/v1/queries)")
             bind = _bind_named_query_params(q, request)
-            cur.execute(_pg_sql_placeholders(q["sql"]), bind)
+            limit, offset = _named_query_page(request)
+            sql = _pg_sql_placeholders(_named_query_sql(q["sql"]))
+            if limit is not None:
+                cur.execute(f"SELECT COUNT(*) AS count FROM ({sql}) AS named_query_count", bind)
+                total = int(cur.fetchone()["count"])
+                page_bind = {**bind, "__limit": limit, "__offset": offset}
+                cur.execute(
+                    f"SELECT * FROM ({sql}) AS named_query_page LIMIT %(__limit)s OFFSET %(__offset)s",
+                    page_bind,
+                )
+            else:
+                cur.execute(sql, bind)
+                total = None
             rows = [dict(r) for r in cur.fetchall()]
-        return {"query": name, "params": bind, "total": len(rows), "items": rows,
+        return {"query": name, "params": bind, "total": total if total is not None else len(rows), "items": rows,
                 "database_backend": "postgres"}
 
     con = get_con()
@@ -1500,10 +1532,24 @@ def run_query(name: str, request: Request) -> dict:
                 bind[pname] = {"int": int, "str": str, "float": float}[ptype](raw)
             except (ValueError, KeyError):
                 raise HTTPException(400, f"param {pname!r} expects {ptype}")
-        rows = [dict(r) for r in con.execute(q["sql"], bind)]
+        limit, offset = _named_query_page(request)
+        sql = _named_query_sql(q["sql"])
+        if limit is not None:
+            total = con.execute(f"SELECT COUNT(*) FROM ({sql}) AS named_query_count", bind).fetchone()[0]
+            page_bind = {**bind, "__limit": limit, "__offset": offset}
+            rows = [
+                dict(r)
+                for r in con.execute(
+                    f"SELECT * FROM ({sql}) AS named_query_page LIMIT :__limit OFFSET :__offset",
+                    page_bind,
+                )
+            ]
+        else:
+            rows = [dict(r) for r in con.execute(sql, bind)]
+            total = len(rows)
     finally:
         con.close()
-    return {"query": name, "params": bind, "total": len(rows), "items": rows}
+    return {"query": name, "params": bind, "total": total, "items": rows}
 
 
 @router.post("/api/v1/queries", dependencies=[Depends(require_user_or_above)])

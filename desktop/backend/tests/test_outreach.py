@@ -8,7 +8,7 @@ from __future__ import annotations
 import base64
 from email import policy
 from email.parser import BytesParser
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -19,6 +19,7 @@ from x9_creator_desktop_system.backend.database.connection import SessionLocal
 from x9_creator_desktop_system.backend.main import app
 from x9_creator_desktop_system.backend.models.creator import Creator
 from x9_creator_desktop_system.backend.models.gmail_account import GmailAccount
+from x9_creator_desktop_system.backend.models.creator_outreach_lock import CreatorOutreachLock
 from x9_creator_desktop_system.backend.models.outreach_email import OutreachEmail
 from x9_creator_desktop_system.backend.models.outreach_template import OutreachTemplate
 from x9_creator_desktop_system.backend.routers.creators import _fetch_outreach_signals
@@ -68,10 +69,34 @@ def sample_creator():
     yield creator_id
     with SessionLocal() as session:
         session.query(OutreachEmail).filter_by(creator_id=creator_id).delete()
+        session.query(CreatorOutreachLock).filter_by(creator_id=creator_id).delete()
         c = session.get(Creator, creator_id)
         if c is not None:
             session.delete(c)
         session.commit()
+
+
+def _user_client(username: str, department_code: str = "cross_border", role: str = "department_user") -> TestClient:
+    with SessionLocal() as session:
+        user = auth_service.upsert_user(
+            session,
+            username=username,
+            email=f"{username}@example.com",
+            password="TempPass123!",
+            role=role,
+            department_code=department_code,
+            approval_status=auth_service.ACTIVE_STATUS,
+        )
+        token, _ = auth_service.create_session_for_user(session, user, entry_scope="workspace")
+    c = TestClient(app)
+    c.cookies.set(auth_service.SESSION_COOKIE, token)
+    return c
+
+
+def _acquire_lock(client: TestClient, creator_id: str) -> str:
+    response = client.post(f"/api/local/outreach/locks/{creator_id}", json={})
+    assert response.status_code == 200, response.text
+    return response.json()["lock"]["id"]
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +280,7 @@ def test_preview_endpoint_renders(client, sample_creator):
 
 
 def test_create_draft_then_patch_then_send(client, sample_creator):
+    _acquire_lock(client, sample_creator)
     # 1. create draft
     create = client.post(
         "/api/local/outreach/draft",
@@ -289,12 +315,13 @@ def test_create_draft_then_patch_then_send(client, sample_creator):
     current_user = client.get("/api/local/auth/me").json()["user"]
     assert mock_send.call_args.kwargs["user_id"] == current_user["id"]
     assert mock_send.call_args.kwargs["include_shared"] is False
-    # creator current_status should now be "已建联"
+    # creator current_status should now wait for a reply.
     creator_after = client.get(f"/api/local/creators/{sample_creator}").json()
-    assert creator_after["current_status"] == "已建联"
+    assert creator_after["current_status"] == "待回复"
 
 
 def test_send_without_authorization_marks_failed(client, sample_creator):
+    _acquire_lock(client, sample_creator)
     create = client.post("/api/local/outreach/draft", json={"creator_id": sample_creator})
     draft_id = create.json()["id"]
 
@@ -314,10 +341,146 @@ def test_send_without_authorization_marks_failed(client, sample_creator):
 
 
 def test_history_endpoint(client, sample_creator):
+    _acquire_lock(client, sample_creator)
     client.post("/api/local/outreach/draft", json={"creator_id": sample_creator})
     r = client.get(f"/api/local/outreach/history/{sample_creator}")
     assert r.status_code == 200
     assert r.json()["total"] >= 1
+
+
+def test_outreach_lock_blocks_other_user_and_expires(sample_creator):
+    user_a = _user_client("outreach_lock_a")
+    user_b = _user_client("outreach_lock_b")
+
+    lock_id = _acquire_lock(user_a, sample_creator)
+
+    conflict = user_b.post(f"/api/local/outreach/locks/{sample_creator}", json={})
+    assert conflict.status_code == 409
+
+    hidden = user_b.get("/api/local/creators?handle_contains=testcreator&limit=20")
+    assert sample_creator not in [item["id"] for item in hidden.json()["items"]]
+
+    blocked_draft = user_b.post("/api/local/outreach/draft", json={"creator_id": sample_creator})
+    assert blocked_draft.status_code == 409
+
+    owner_draft = user_a.post("/api/local/outreach/draft", json={"creator_id": sample_creator})
+    assert owner_draft.status_code == 200, owner_draft.text
+
+    with SessionLocal() as session:
+        lock = session.get(CreatorOutreachLock, lock_id)
+        lock.expires_at = datetime.utcnow() - timedelta(seconds=1)
+        session.commit()
+
+    reacquired = user_b.post(f"/api/local/outreach/locks/{sample_creator}", json={})
+    assert reacquired.status_code == 200, reacquired.text
+    assert reacquired.json()["lock"]["is_mine"] is True
+
+
+def test_outreach_archive_is_sent_only_and_department_scoped():
+    creator_id = "creator_archive_cross"
+    foreign_creator_id = "creator_archive_foreign"
+    email_id = "archive_sent_cross"
+    draft_id = "archive_draft_cross"
+    foreign_email_id = "archive_sent_foreign"
+    with SessionLocal() as session:
+        for row_id in (email_id, draft_id, foreign_email_id):
+            session.query(OutreachEmail).filter_by(id=row_id).delete()
+        for cid in (creator_id, foreign_creator_id):
+            existing = session.get(Creator, cid)
+            if existing is not None:
+                session.delete(existing)
+        session.add(
+            Creator(
+                id=creator_id,
+                platform="tiktok",
+                handle="archive_cross",
+                display_name="Archive Cross",
+                department_code="cross_border",
+                email="archive@example.com",
+                has_email=1,
+            )
+        )
+        session.add(
+            Creator(
+                id=foreign_creator_id,
+                platform="tiktok",
+                handle="archive_foreign",
+                display_name="Archive Foreign",
+                department_code="foreign_trade",
+                email="foreign@example.com",
+                has_email=1,
+            )
+        )
+        session.add(
+            OutreachEmail(
+                id=email_id,
+                department_code="cross_border",
+                creator_id=creator_id,
+                to_email="archive@example.com",
+                from_email="bd@example.com",
+                subject="Archive subject",
+                body="<p>Full archived body</p>",
+                body_format="html",
+                status="sent",
+                sent_at=datetime(2026, 5, 20, 10, 0, 0),
+                created_by="sender_a",
+            )
+        )
+        session.add(
+            OutreachEmail(
+                id=draft_id,
+                department_code="cross_border",
+                creator_id=creator_id,
+                to_email="archive@example.com",
+                subject="Draft should stay private",
+                body="draft body",
+                status="draft",
+            )
+        )
+        session.add(
+            OutreachEmail(
+                id=foreign_email_id,
+                department_code="foreign_trade",
+                creator_id=foreign_creator_id,
+                to_email="foreign@example.com",
+                from_email="bd@example.com",
+                subject="Foreign archive subject",
+                body="foreign body",
+                status="sent",
+                sent_at=datetime(2026, 5, 20, 11, 0, 0),
+            )
+        )
+        session.commit()
+
+    same_department = _user_client("archive_same_department")
+    other_department = _user_client("archive_other_department", department_code="foreign_trade")
+    try:
+        listed = same_department.get("/api/local/outreach/archive?q=Archive%20subject").json()
+        ids = [item["id"] for item in listed["items"]]
+        assert email_id in ids
+        assert draft_id not in ids
+        assert all(item["status"] == "sent" for item in listed["items"])
+
+        detail = same_department.get(f"/api/local/outreach/archive/{email_id}")
+        assert detail.status_code == 200
+        payload = detail.json()["item"]
+        assert payload["body"] == "<p>Full archived body</p>"
+        assert payload["body_format"] == "html"
+        assert payload["creator_handle"] == "archive_cross"
+
+        hidden = other_department.get(f"/api/local/outreach/archive/{email_id}")
+        assert hidden.status_code == 404
+        foreign_list = other_department.get("/api/local/outreach/archive?q=Archive%20subject").json()
+        assert email_id not in [item["id"] for item in foreign_list["items"]]
+    finally:
+        with SessionLocal() as session:
+            for row_id in (email_id, draft_id, foreign_email_id):
+                session.query(OutreachEmail).filter_by(id=row_id).delete()
+            for cid in (creator_id, foreign_creator_id):
+                row = session.get(Creator, cid)
+                if row is not None:
+                    session.delete(row)
+            session.commit()
 
 
 def test_outreach_signals_normalize_numeric_creator_ids():

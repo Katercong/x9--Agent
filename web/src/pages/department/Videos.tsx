@@ -1,12 +1,22 @@
+import { useState } from 'react';
 import { Video, Eye, Heart, AlertTriangle, ExternalLink } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
+import { PaginationControls } from '@/components/PaginationControls';
 import { AsyncState } from '@/components/states/States';
 import { Empty } from '@/components/states/States';
 import { useOutreach } from '@/hooks/useApi';
 import { formatCompact, formatDate } from '@/lib/format';
 
+const PAGE_SIZE = 10;
+
 export default function Videos() {
-  const { data, isLoading, error } = useOutreach({ limit: 500 });
+  const [page, setPage] = useState(0);
+  const { data, isLoading, error } = useOutreach({
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
+    order_by: 'video_views:desc',
+    video_url__isnull: false,
+  });
   const all = data?.items ?? [];
 
   // 有 video_url 的 outreach 事件
@@ -46,7 +56,7 @@ export default function Videos() {
         </div>
         <AsyncState loading={isLoading} error={error} isEmpty={videos.length === 0} height={300}>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 p-4">
-            {sorted.slice(0, 40).map((v) => {
+            {sorted.map((v) => {
               const staleFlag = !v.metrics_updated_at ||
                 now - new Date(v.metrics_updated_at).getTime() > 24 * 3600_000;
               return (
@@ -87,6 +97,14 @@ export default function Videos() {
           </div>
           {sorted.length === 0 && <Empty height={200} />}
         </AsyncState>
+        <PaginationControls
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={data?.total ?? 0}
+          currentCount={all.length}
+          loading={isLoading}
+          onPageChange={setPage}
+        />
       </div>
     </div>
   );

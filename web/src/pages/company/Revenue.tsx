@@ -3,11 +3,12 @@ import { KpiCard } from '@/components/kpi/KpiCard';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
 import { DataTable, type Column } from '@/components/table/DataTable';
+import { PaginationControls } from '@/components/PaginationControls';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
 import { useProducts, useCategories } from '@/hooks/useApi';
 import { categoryNameMap, productsByCategory } from '@/lib/derive';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { Product } from '@/api/types';
 
 interface SkuRow extends Product {
@@ -15,8 +16,11 @@ interface SkuRow extends Product {
   categoryName: string;
 }
 
+const PAGE_SIZE = 10;
+
 export default function Revenue() {
-  const products = useProducts({ limit: 200 });
+  const [page, setPage] = useState(0);
+  const products = useProducts({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, order_by: 'price_tiktok', desc: true });
   const categories = useCategories({ limit: 50 });
 
   const items = products.data?.items ?? [];
@@ -97,6 +101,14 @@ export default function Revenue() {
             <div className="text-xxs text-muted mt-0.5">注:GMV 数据需 Postgres 看板,当前用 TikTok 单价排序</div>
           </div>
           <DataTable columns={skuColumns} data={top10} rowKey={(r) => r.id} />
+          <PaginationControls
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={products.data?.total ?? 0}
+            currentCount={items.length}
+            loading={products.isLoading}
+            onPageChange={setPage}
+          />
         </div>
       </div>
     </AsyncState>

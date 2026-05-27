@@ -7,7 +7,7 @@ import { useAnalyticsCompanyGrowth, useProducts, useDepartmentDashboardSummary }
 
 export default function Growth() {
   const growth = useAnalyticsCompanyGrowth(90);
-  const products = useProducts({ limit: 200 });
+  const products = useProducts({ limit: 1 });
   const dashboard = useDepartmentDashboardSummary();
 
   const loading = growth.isLoading || products.isLoading || dashboard.isLoading;

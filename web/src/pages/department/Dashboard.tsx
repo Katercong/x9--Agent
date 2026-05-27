@@ -89,7 +89,7 @@ function formatDay(value: string) {
 
 export default function Dashboard() {
   const dashboardQ = useDepartmentDashboardSummary();
-  const staffQ = useStaff({ limit: 100 });
+  const staffQ = useStaff({ limit: 10 });
   const data = dashboardQ.data;
   const summary = data?.summary ?? {
     total_creators: 0,

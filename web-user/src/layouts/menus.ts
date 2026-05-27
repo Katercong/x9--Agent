@@ -1,6 +1,6 @@
 import {
   Home, BarChart3, Telescope, Sparkles,
-  ArrowDownToLine, TrendingUp, Bot, Users, Store, Radar, FileSpreadsheet,
+  ArrowDownToLine, TrendingUp, Bot, Users, Store, Radar, FileSpreadsheet, MailCheck,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -36,6 +36,7 @@ export const portalMenu: MenuEntry[] = [
     ],
   },
   { key: 'recommendations', label: '达人库', to: '/recommendations', icon: Sparkles },
+  { key: 'emails', label: '邮件存档', to: '/emails', icon: MailCheck },
   { key: 'export', label: '数据工具', to: '/export', icon: ArrowDownToLine },
   { key: 'hotkw', label: 'TikTok 热搜', to: '/hotkw', icon: TrendingUp },
   { key: 'assistant', label: 'AI 助手', to: '/assistant', icon: Bot },
@@ -50,6 +51,7 @@ export const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/collect-import': { title: '采集 · 表格导入', subtitle: 'CSV / XLSX 批量导入 · 国家 / Tier / 质量分布' },
   '/creators-info': { title: '达人库', subtitle: '已合并到推荐池与全部达人统一页面' },
   '/recommendations': { title: '达人库', subtitle: '推荐池 / 全部达人统一视图 · 点击达人进入详情与邮件建联' },
+  '/emails': { title: '邮件存档', subtitle: '按部门复查已发送邮件正文、发件账号与达人记录' },
   '/export': { title: '数据工具', subtitle: '导出文件、下载模板，正式导入统一到表格导入页' },
   '/hotkw': { title: 'TikTok 热搜', subtitle: '热门关键词与增长趋势' },
   '/assistant': { title: 'AI 助手', subtitle: '智能问答与运维指引' },

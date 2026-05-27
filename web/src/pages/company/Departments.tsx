@@ -3,7 +3,7 @@ import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { AsyncState } from '@/components/states/States';
-import { useCreators, useOutreach, useStaff } from '@/hooks/useApi';
+import { useAnalyticsCompany, useStaff } from '@/hooks/useApi';
 import { staffStats } from '@/lib/derive';
 import { chartPalette } from '@/lib/colors';
 
@@ -17,38 +17,31 @@ interface DeptRow {
 }
 
 export default function Departments() {
-  const creators = useCreators({ limit: 1000 });
-  const outreach = useOutreach({ limit: 1000 });
-  const staffQ = useStaff({ limit: 100 });
+  const analytics = useAnalyticsCompany(30);
+  const staffQ = useStaff({ limit: 10 });
 
-  const loading = creators.isLoading || outreach.isLoading;
-  const error = creators.error || outreach.error;
+  const loading = analytics.isLoading;
+  const error = analytics.error;
 
-  const creatorList = creators.data?.items ?? [];
-  const outreachList = outreach.data?.items ?? [];
   const staffList = staffQ.data?.items ?? [];
 
-  // 按 store_assigned 聚合
-  const deptMap: Record<string, DeptRow> = {};
-  for (const c of creatorList) {
-    const k = c.store_assigned || '未分配';
-    if (!deptMap[k]) deptMap[k] = { name: k, creators: 0, outreach: 0, videos: 0, ad_running: 0, conv: 0 };
-    deptMap[k].creators++;
-  }
-  // 按 creator_id 找到部门并归类 outreach
-  const creatorDept: Record<number, string> = {};
-  for (const c of creatorList) creatorDept[c.id] = c.store_assigned || '未分配';
-  for (const o of outreachList) {
-    const k = creatorDept[o.creator_id] || o.store_name || '未分配';
-    if (!deptMap[k]) deptMap[k] = { name: k, creators: 0, outreach: 0, videos: 0, ad_running: 0, conv: 0 };
-    deptMap[k].outreach++;
-    if (o.video_url) deptMap[k].videos++;
-    if (o.status === 'ad_running') deptMap[k].ad_running++;
-  }
-  for (const dept of Object.values(deptMap)) {
-    dept.conv = dept.creators > 0 ? +((dept.videos / dept.creators) * 100).toFixed(1) : 0;
-  }
-  const departments = Object.values(deptMap)
+  const departments = (analytics.data?.departments ?? [])
+    .map((row) => {
+      const creators = Number(row.creators ?? row.recommended ?? row.assigned ?? 0);
+      const outreach = Number(row.sent ?? 0) + Number(row.pending_reply ?? 0) + Number(row.replied ?? 0)
+        + Number(row.sample_shipped ?? 0) + Number(row.sample_delivered ?? 0) + Number(row.partnered ?? 0)
+        + Number(row.video_published ?? 0);
+      const videos = Number(row.video_published ?? 0);
+      const adRunning = Number(row.partnered ?? 0);
+      return {
+        name: row.department_code || row.member || '未分配',
+        creators,
+        outreach,
+        videos,
+        ad_running: adRunning,
+        conv: creators > 0 ? +((videos / creators) * 100).toFixed(1) : 0,
+      };
+    })
     .filter((d) => d.creators >= 2 || d.outreach >= 2)
     .sort((a, b) => b.creators - a.creators);
 

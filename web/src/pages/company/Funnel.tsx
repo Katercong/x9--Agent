@@ -1,14 +1,13 @@
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
 import { AsyncState } from '@/components/states/States';
-import { useCreators } from '@/hooks/useApi';
-import { buildFunnel } from '@/lib/derive';
+import { useDepartmentDashboardSummary } from '@/hooks/useApi';
 import { chartPalette } from '@/lib/colors';
 
 export default function Funnel() {
-  const { data, isLoading, error } = useCreators({ limit: 1000 });
-  const creators = data?.items ?? [];
-  const funnel = buildFunnel(creators);
+  const { data, isLoading, error } = useDepartmentDashboardSummary();
+  const funnel = ((data?.stage_rows?.length ? data.stage_rows : data?.overview) ?? [])
+    .map((row) => ({ name: row.name, value: row.count, key: row.key }));
 
   const totalProspect = funnel[0]?.value || 1;
 
