@@ -13,13 +13,14 @@ log = logging.getLogger(__name__)
 _STARTED = False
 _LOCK = threading.Lock()
 _PROCESS_LOCK = threading.Lock()
-_INTERVAL_SECONDS = 10
-_BATCH_SIZE = 50
+_IDLE_INTERVAL_SECONDS = 1
+_BUSY_INTERVAL_SECONDS = 0.1
+_BATCH_SIZE = 200
 
 
-def _run_once() -> None:
+def _run_once() -> int:
     if not _PROCESS_LOCK.acquire(blocking=False):
-        return
+        return 0
     try:
         with SessionLocal() as db:
             result = reprocess_raw_observations(
@@ -32,18 +33,18 @@ def _run_once() -> None:
             handled = int(result.get("processed") or 0) + int(result.get("skipped") or 0) + int(result.get("errors") or 0)
             if handled:
                 log.info("raw_processor_scheduler: handled %d queued raw observations", handled)
+            return handled
     except Exception as exc:
         log.warning("raw_processor_scheduler: processing failed: %s", exc)
+        return 0
     finally:
         _PROCESS_LOCK.release()
 
 
 def _run() -> None:
     while True:
-        started = time.perf_counter()
-        _run_once()
-        elapsed = time.perf_counter() - started
-        time.sleep(max(1, _INTERVAL_SECONDS - elapsed))
+        handled = _run_once()
+        time.sleep(_BUSY_INTERVAL_SECONDS if handled else _IDLE_INTERVAL_SECONDS)
 
 
 def start_raw_processor() -> None:

@@ -18,6 +18,7 @@ from desktop.backend.services.collection_stats_service import (
     get_actor_collection_stats_map,
     get_source_stats,
 )
+from desktop.backend.services.collector_service import reprocess_raw_observations
 from desktop.backend.services import auth_service
 from desktop.backend.utils import stats_cache
 
@@ -187,14 +188,18 @@ def test_bound_worker_upload_without_cookie_is_attributed():
             .order_by(RawObservation.created_at.desc())
             .first()
         )
+    assert raw is not None
+    assert raw.actor_user_id == actor_id
+
+    with SessionLocal() as db:
+        result = reprocess_raw_observations(db, platform="all", queued_only=True, auto_process=False, limit=10)
         source = (
             db.query(CreatorSource)
             .filter(CreatorSource.worker_id == worker_id, CreatorSource.handle == handle)
             .order_by(CreatorSource.created_at.desc())
             .first()
         )
-    assert raw is not None
-    assert raw.actor_user_id == actor_id
+    assert result["processed"] >= 1
     assert source is not None
     assert source.actor_user_id == actor_id
 

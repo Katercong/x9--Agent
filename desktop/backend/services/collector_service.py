@@ -323,36 +323,37 @@ def reprocess_raw_observations(
         if not payload:
             counts["skipped"] += 1
             counts["skipped_missing_payload"] += 1
-            _mark_raw_processed(db, obs_id, "skipped", "missing_payload")
+            _mark_raw_processed(db, obs_id, "skipped", "missing_payload", commit=False)
             continue
         payload.setdefault("event_type", "creator_observation")
         if skip_invalid_handle_repairs and not _raw_payload_has_clean_handle(payload):
             counts["skipped"] += 1
             counts["skipped_invalid_handle_source"] += 1
-            _mark_raw_processed(db, obs_id, "skipped", "invalid_handle_source")
+            _mark_raw_processed(db, obs_id, "skipped", "invalid_handle_source", commit=False)
             continue
         try:
             result = ingest_observation(db, payload, auto_process=auto_process, persist_raw=False, observation_id=obs_id)
         except Exception as exc:
             counts["errors"] += 1
             errors.append({"observation_id": obs_id, "error": str(exc)})
-            _mark_raw_processed(db, obs_id, "error", str(exc))
+            _mark_raw_processed(db, obs_id, "error", str(exc), commit=False)
             continue
         action = result.get("action")
         if action in {"inserted", "updated"}:
             counts["processed"] += 1
             counts[action] += 1
-            _mark_raw_processed(db, obs_id, "processed")
+            _mark_raw_processed(db, obs_id, "processed", commit=False)
         elif action == "skipped":
             counts["skipped"] += 1
             if result.get("reason") == "missing_contact":
                 counts["skipped_missing_contact"] += 1
-            _mark_raw_processed(db, obs_id, "skipped", str(result.get("reason") or "skipped"))
+            _mark_raw_processed(db, obs_id, "skipped", str(result.get("reason") or "skipped"), commit=False)
     counts["scanned"] = scanned
+    db.commit()
     return {"ok": True, **counts, "error_samples": errors[:20]}
 
 
-def _mark_raw_processed(db: Session, obs_id: str, status: str, error: str | None = None) -> None:
+def _mark_raw_processed(db: Session, obs_id: str, status: str, error: str | None = None, *, commit: bool = True) -> None:
     db.execute(
         update(RawObservation)
         .where(RawObservation.id == obs_id)
@@ -362,7 +363,8 @@ def _mark_raw_processed(db: Session, obs_id: str, status: str, error: str | None
             process_error=(error[:1000] if error else None),
         )
     )
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def _auto_process_creator(db: Session, creator_id: str) -> dict[str, Any]:
