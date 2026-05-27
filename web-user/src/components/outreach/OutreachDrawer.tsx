@@ -66,6 +66,7 @@ const IMAGE_POSITIONS: Array<{ key: EmailImagePosition; label: string }> = [
   { key: 'after_intro', label: '第一段后' },
   { key: 'bottom', label: '正文结尾' },
 ];
+const DEFAULT_EMAIL_IMAGE_POSITION: EmailImagePosition = 'top';
 
 function productLabel(key?: string | null) {
   return PRODUCT_OPTIONS.find((item) => item.key === key)?.label || key || '未分类';
@@ -168,7 +169,7 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
   const [body, setBody] = useState('');
   const [toEmail, setToEmail] = useState('');
   const [includeProductImage, setIncludeProductImage] = useState(false);
-  const [emailImagePosition, setEmailImagePosition] = useState<EmailImagePosition>('after_intro');
+  const [emailImagePosition, setEmailImagePosition] = useState<EmailImagePosition>(DEFAULT_EMAIL_IMAGE_POSITION);
   const [emailImageAlign, setEmailImageAlign] = useState<EmailImageAlign>('center');
   const [emailImageWidth, setEmailImageWidth] = useState(520);
   const [emailImageCaption, setEmailImageCaption] = useState('');
@@ -240,7 +241,7 @@ export function OutreachDrawer({ creator, open, onClose }: Props) {
     setBody('');
     setToEmail(creator.email || '');
     setIncludeProductImage(false);
-    setEmailImagePosition('after_intro');
+    setEmailImagePosition(DEFAULT_EMAIL_IMAGE_POSITION);
     setEmailImageAlign('center');
     setEmailImageWidth(520);
     setEmailImageCaption('');
