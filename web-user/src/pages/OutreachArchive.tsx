@@ -12,9 +12,12 @@ import {
   X,
 } from 'lucide-react';
 import { AsyncState } from '@/components/states/States';
+import { PaginationControls } from '@/components/PaginationControls';
 import { useOutreachArchive, useOutreachArchiveDetail } from '@/hooks/useApi';
 import { pickItems, type OutreachArchiveItem } from '@/api/types';
 import { shortRelative } from '@/lib/format';
+
+const PAGE_SIZE = 10;
 
 function safeEmailHtml(value?: string | null) {
   return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>body{margin:0;padding:18px;background:#fff;color:#111827;font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}img{max-width:100%;height:auto}</style></head><body>${value || ''}</body></html>`;
@@ -35,17 +38,19 @@ export default function OutreachArchive() {
   const [toEmail, setToEmail] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [copyState, setCopyState] = useState('');
 
   const params = useMemo(() => ({
-    limit: 80,
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
     q: q.trim() || undefined,
     from_email: fromEmail.trim() || undefined,
     to_email: toEmail.trim() || undefined,
     date_from: dateFrom || undefined,
     date_to: dateTo || undefined,
-  }), [dateFrom, dateTo, fromEmail, q, toEmail]);
+  }), [dateFrom, dateTo, fromEmail, page, q, toEmail]);
 
   const archiveQ = useOutreachArchive(params);
   const rows = pickItems<OutreachArchiveItem>(archiveQ.data);
@@ -60,12 +65,17 @@ export default function OutreachArchive() {
     }
   }, [rows, selectedId]);
 
+  useEffect(() => {
+    setPage(0);
+  }, [dateFrom, dateTo, fromEmail, q, toEmail]);
+
   const resetFilters = () => {
     setQ('');
     setFromEmail('');
     setToEmail('');
     setDateFrom('');
     setDateTo('');
+    setPage(0);
   };
 
   const copyBody = async () => {
@@ -172,6 +182,14 @@ export default function OutreachArchive() {
                 </button>
               );
             })}
+            <PaginationControls
+              page={page}
+              pageSize={PAGE_SIZE}
+              total={archiveQ.data?.total ?? 0}
+              currentCount={rows.length}
+              loading={archiveQ.isFetching}
+              onPageChange={setPage}
+            />
           </div>
         </AsyncState>
 

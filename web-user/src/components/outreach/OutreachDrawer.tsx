@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { SideDrawer } from '@/components/drawer/SideDrawer';
 import { Pill } from '@/components/Pill';
+import { PaginationControls } from '@/components/PaginationControls';
 import {
   useCreateDraft,
   useCreateProductAsset,
@@ -65,6 +66,7 @@ const STRATEGIES: Array<{ key: TkStrategy; label: string; desc: string }> = [
 ];
 
 const COMMISSIONS = [20];
+const HISTORY_PAGE_SIZE = 10;
 const IMAGE_POSITIONS: Array<{ key: EmailImagePosition; label: string }> = [
   { key: 'top', label: '正文开头' },
   { key: 'after_intro', label: '第一段后' },
@@ -200,6 +202,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
   const [lockError, setLockError] = useState('');
   const [activeLock, setActiveLock] = useState<CreatorOutreachLock | null>(initialLock);
   const [reviewEmail, setReviewEmail] = useState<OutreachHistoryItem | null>(null);
+  const [historyPage, setHistoryPage] = useState(0);
   const lockRequestKeyRef = useRef('');
   const [generationMeta, setGenerationMeta] = useState<{
     aiStatus?: string;
@@ -220,7 +223,10 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
   const gmailStatusQ = useGmailStatus();
   const accountsQ = useGmailAccounts();
   const assetsQ = useProductAssets(open && creator ? creator.id : undefined);
-  const historyQ = useOutreachHistory(open && creator ? creator.id : undefined);
+  const historyQ = useOutreachHistory(
+    open && creator ? creator.id : undefined,
+    { limit: HISTORY_PAGE_SIZE, offset: historyPage * HISTORY_PAGE_SIZE },
+  );
   const acquireLock = useAcquireOutreachLock();
   const heartbeatLock = useHeartbeatOutreachLock();
   const releaseLock = useReleaseOutreachLock();
@@ -235,6 +241,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
   const accounts = accountsQ.data?.items ?? [];
   const defaultAcc = accounts.find((a) => Boolean(a.is_default)) || accounts[0];
   const history = historyQ.data?.items ?? [];
+  const historyTotal = historyQ.data?.total ?? history.length;
   const productAssets = assetsQ.data?.items ?? [];
   const matchedAsset = assetsQ.data?.matched ?? null;
   const selectedAsset = useMemo(
@@ -282,6 +289,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
     setSendError('');
     setLockError('');
     setReviewEmail(null);
+    setHistoryPage(0);
     setActiveLock(initialLock || null);
     lockRequestKeyRef.current = initialLock ? `${creator.id}:${initialLock.id}` : '';
     setGenerationMeta(null);
@@ -1048,7 +1056,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
         <div className="flex items-center gap-2 mb-2">
           <History size={13} className="text-muted" />
           <h4 className="text-xs font-semibold">历史外联记录</h4>
-          <span className="text-xxs text-muted">共 {history.length} 条</span>
+          <span className="text-xxs text-muted">共 {historyTotal} 条</span>
         </div>
         {history.length === 0 ? (
           <div className="text-xxs text-muted">还没有给这位达人发过邮件</div>
@@ -1076,6 +1084,14 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                 </div>
               </div>
             ))}
+            <PaginationControls
+              page={historyPage}
+              pageSize={HISTORY_PAGE_SIZE}
+              total={historyTotal}
+              currentCount={history.length}
+              loading={historyQ.isFetching}
+              onPageChange={setHistoryPage}
+            />
           </div>
         )}
         {reviewEmail && (

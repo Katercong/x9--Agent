@@ -84,8 +84,8 @@ export const endpoints = {
   sendDraft: (id: string, body: { confirm?: boolean; update_creator_status?: boolean; from_account_id?: string }) =>
     api.post<OutreachDraft>(`/outreach/send/${id}`, { confirm: true, ...body }),
 
-  outreachHistory: (creator_id: string | number) =>
-    api.get<ListResp<OutreachHistoryItem>>(`/outreach/history/${encodeURIComponent(String(creator_id))}`),
+  outreachHistory: (creator_id: string | number, params?: Record<string, unknown>) =>
+    api.get<ListResp<OutreachHistoryItem>>(`/outreach/history/${encodeURIComponent(String(creator_id))}`, params),
 
   acquireOutreachLock: (creator_id: string | number, body?: { ttl_seconds?: number; force?: boolean }) =>
     api.post<{ ok: boolean; lock: CreatorOutreachLock }>(`/outreach/locks/${encodeURIComponent(String(creator_id))}`, body || {}),

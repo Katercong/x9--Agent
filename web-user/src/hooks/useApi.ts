@@ -145,10 +145,10 @@ export function usePatchDraft() {
 export function useSendDraft() {
   return useMutation({ mutationFn: ({ id, body }: { id: string; body?: Parameters<typeof endpoints.sendDraft>[1] }) => endpoints.sendDraft(id, body || { confirm: true }) });
 }
-export function useOutreachHistory(creator_id?: string | number) {
+export function useOutreachHistory(creator_id?: string | number, params?: Params) {
   return useQuery({
-    queryKey: ['outreach', 'history', creator_id],
-    queryFn: () => endpoints.outreachHistory(creator_id!),
+    queryKey: ['outreach', 'history', creator_id, params],
+    queryFn: () => endpoints.outreachHistory(creator_id!, params),
     enabled: !!creator_id,
   });
 }

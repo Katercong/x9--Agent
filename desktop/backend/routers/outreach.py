@@ -1072,7 +1072,7 @@ def list_outreach_archive(
     to_email: str | None = Query(default=None),
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=10, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -1141,35 +1141,46 @@ def list_drafts(
     request: Request,
     status: str | None = Query(default=None),
     creator_id: str | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=10, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> dict:
-    q = select(OutreachEmail)
+    filters = []
     where_department = department_where(OutreachEmail, current_department_code(request))
     if where_department is not None:
-        q = q.where(where_department)
+        filters.append(where_department)
     if status:
-        q = q.where(OutreachEmail.status == status)
+        filters.append(OutreachEmail.status == status)
     if creator_id:
-        q = q.where(OutreachEmail.creator_id == creator_id)
-    q = q.order_by(OutreachEmail.created_at.desc()).offset(offset).limit(limit)
+        filters.append(OutreachEmail.creator_id == creator_id)
+    total = int(db.scalar(select(func.count()).select_from(OutreachEmail).where(*filters)) or 0)
+    q = select(OutreachEmail).where(*filters).order_by(OutreachEmail.created_at.desc()).offset(offset).limit(limit)
     rows = list(db.scalars(q).all())
-    return {"ok": True, "total": len(rows), "items": [_email_to_dict(r) for r in rows]}
+    return {"ok": True, "total": total, "items": [_email_to_dict(r) for r in rows]}
 
 
 @router.get("/history/{creator_id}")
-def email_history(creator_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
-    q = (
-        select(OutreachEmail)
-        .where(OutreachEmail.creator_id == creator_id)
-        .order_by(OutreachEmail.created_at.desc())
-    )
+def email_history(
+    creator_id: str,
+    request: Request,
+    limit: int = Query(default=10, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> dict:
+    filters = [OutreachEmail.creator_id == creator_id]
     where_department = department_where(OutreachEmail, current_department_code(request))
     if where_department is not None:
-        q = q.where(where_department)
+        filters.append(where_department)
+    total = int(db.scalar(select(func.count()).select_from(OutreachEmail).where(*filters)) or 0)
+    q = (
+        select(OutreachEmail)
+        .where(*filters)
+        .order_by(OutreachEmail.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
     rows = list(db.scalars(q).all())
-    return {"ok": True, "total": len(rows), "items": [_email_to_dict(r) for r in rows]}
+    return {"ok": True, "total": total, "items": [_email_to_dict(r) for r in rows]}
 
 
 # ---------------------------------------------------------------------------
