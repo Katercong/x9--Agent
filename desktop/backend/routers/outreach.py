@@ -1041,13 +1041,27 @@ def send_draft(draft_id: str, body: SendIn, request: Request, db: Session = Depe
     if body.update_creator_status:
         creator = db.get(Creator, draft.creator_id)
         if creator is not None:
+            actor_user_id = current_user.get("id") or current_user.get("identity")
+            event_metadata = {
+                "outreach_email_id": draft.id,
+                "gmail_message_id": draft.gmail_message_id,
+                "gmail_thread_id": draft.gmail_thread_id,
+            }
             create_outreach_event(
                 db,
                 creator,
                 event_type="sent",
-                actor_user_id=current_user.get("id") or current_user.get("identity"),
+                actor_user_id=actor_user_id,
                 owner_bd=creator.owner_bd,
-                metadata={"outreach_email_id": draft.id, "gmail_message_id": draft.gmail_message_id},
+                metadata=event_metadata,
+            )
+            create_outreach_event(
+                db,
+                creator,
+                event_type="pending_reply",
+                actor_user_id=actor_user_id,
+                owner_bd=creator.owner_bd,
+                metadata=event_metadata,
             )
         elif str(draft.creator_id).isdigit():
             try:

@@ -34,11 +34,16 @@ OUTREACH_EVENT_ORDER = [
     "assigned",
     "sent",
     "pending_reply",
+    "contacted",
     "replied",
+    "communicating",
+    "confirmed",
     "sample_shipped",
     "sample_delivered",
-    "partnered",
     "video_published",
+    "partnered",
+    "ad_authorized",
+    "ad_running",
     "dropped",
 ]
 
@@ -46,11 +51,16 @@ EVENT_TO_STATUS = {
     "recommended": "prospect",
     "assigned": "prospect",
     "sent": "\u5f85\u56de\u590d",
-    "pending_reply": "pending_reply",
-    "replied": "confirmed",
+    "pending_reply": "\u5f85\u56de\u590d",
+    "contacted": "\u6c9f\u901a\u4e2d",
+    "replied": "\u6c9f\u901a\u4e2d",
+    "communicating": "\u6c9f\u901a\u4e2d",
+    "confirmed": "\u6c9f\u901a\u4e2d",
     "sample_shipped": "sample_shipped",
     "sample_delivered": "sample_delivered",
     "partnered": "ad_authorized",
+    "ad_authorized": "ad_authorized",
+    "ad_running": "ad_running",
     "video_published": "video_published",
     "dropped": "dropped",
 }
@@ -335,6 +345,15 @@ def create_outreach_event(
     status = EVENT_TO_STATUS.get(event_type)
     if status and (event_type not in {"recommended", "assigned"} or not (creator.current_status or "").strip()):
         creator.current_status = status
+    from .followup_service import apply_outreach_event_followups  # noqa: WPS433
+
+    apply_outreach_event_followups(
+        db,
+        creator=creator,
+        event_type=event_type,
+        actor_user_id=actor_user_id,
+        metadata=metadata,
+    )
     db.flush()
     return event
 

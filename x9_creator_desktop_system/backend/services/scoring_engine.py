@@ -280,6 +280,10 @@ def compute_score(record: dict) -> ScoreResult:
         + audience_bonus * 0.05
         + repeat["score"] * 0.10
     )
+    if contactability_score > 0:
+        raw += 8
+    if contactability_score > 0 and data_quality_score >= 50 and primary_score >= 20:
+        raw += 4
     recommendation_score = max(0, min(100, int(round(raw))))
 
     return ScoreResult(

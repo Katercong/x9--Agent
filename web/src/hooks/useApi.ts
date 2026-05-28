@@ -70,6 +70,10 @@ export function useDepartmentDashboardSummary() {
   return useQuery({ queryKey: ['dashboard', 'department-summary'], queryFn: () => endpoints.departmentDashboardSummary() });
 }
 
+export function useUnifiedDashboard() {
+  return useQuery({ queryKey: ['dashboard', 'unified'], queryFn: () => endpoints.unifiedDashboard() });
+}
+
 export function useAnalyticsMe(days = 30) {
   return useQuery({ queryKey: ['analytics', 'me', days], queryFn: () => endpoints.analyticsMe(days) });
 }

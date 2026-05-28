@@ -3,12 +3,12 @@ import { KpiCard } from '@/components/kpi/KpiCard';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
 import { AsyncState } from '@/components/states/States';
-import { useAnalyticsCompanyGrowth, useProducts, useDepartmentDashboardSummary } from '@/hooks/useApi';
+import { useAnalyticsCompanyGrowth, useProducts, useUnifiedDashboard } from '@/hooks/useApi';
 
 export default function Growth() {
   const growth = useAnalyticsCompanyGrowth(90);
   const products = useProducts({ limit: 1 });
-  const dashboard = useDepartmentDashboardSummary();
+  const dashboard = useUnifiedDashboard();
 
   const loading = growth.isLoading || products.isLoading || dashboard.isLoading;
   const error = growth.error || products.error || dashboard.error;
@@ -88,8 +88,8 @@ export default function Growth() {
     <AsyncState loading={loading} error={error} height={400}>
       <div className="space-y-4">
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <KpiCard label="总发现量" value={dashboardSummary?.total_creators ?? summary?.total_creators ?? 0} icon={Users} iconBg="#e0e7ff" iconColor="#4f46e5" />
-          <KpiCard label="去重达人主档" value={summary?.processed_creators ?? dashboardSummary?.processed_creators ?? 0} icon={UserCheck} iconBg="#dcfce7" iconColor="#16a34a" />
+          <KpiCard label="总发现" value={dashboardSummary?.total_discovered ?? summary?.total_creators ?? 0} icon={Users} iconBg="#e0e7ff" iconColor="#4f46e5" />
+          <KpiCard label="总达人推荐" value={dashboardSummary?.total_recommended ?? summary?.recommended ?? 0} icon={UserCheck} iconBg="#dcfce7" iconColor="#16a34a" />
           <KpiCard label="SKU 总数" value={products.data?.total ?? 0} icon={ShoppingBag} iconBg="#cffafe" iconColor="#0891b2" />
           <KpiCard label="90 日入库" value={totalProcessedInWindow} icon={ShoppingCart} iconBg="#d1fae5" iconColor="#16a34a" />
           <KpiCard label="合作转化" value={`${conversionPct}%`} icon={TrendingUp} iconBg="#fed7aa" iconColor="#ea580c" />

@@ -35,7 +35,14 @@ from ..services.departments import (
 router = APIRouter(prefix="/api/local/admin", tags=["admin"])
 
 
-RECOMMENDED_STATUSES = {"recommended", "recommended_after_review", "low_cost_test", "affiliate_test"}
+RECOMMENDED_STATUSES = {
+    "recommended",
+    "recommended_after_review",
+    "low_cost_test",
+    "affiliate_test",
+    "brand_awareness_only",
+    "manual_review_before_outreach",
+}
 BUSINESS_STATUS_ORDER = ("待建联", "已建联", "待回复", "已寄样", "视频已发布")
 
 

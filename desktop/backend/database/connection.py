@@ -90,9 +90,11 @@ def _ensure_schema_columns() -> None:
         "raw_observations",
         "creator_tags",
         "creator_recommendations",
+        "creator_outreach_events",
         "review_tasks",
         "outreach_emails",
         "creator_outreach_locks",
+        "followup_tasks",
         "outreach_templates",
         "extension_sessions",
         "extension_commands",
@@ -126,6 +128,41 @@ def _ensure_schema_columns() -> None:
         _ensure_index(conn, "ix_gmail_accounts_user_id", "gmail_accounts", "user_id")
         _ensure_index(conn, "ix_gmail_accounts_department_code", "gmail_accounts", "department_code")
 
+        _ensure_column(conn, "followup_tasks", "creator_id", "VARCHAR(120)")
+        _ensure_column(conn, "followup_tasks", "department_code", "VARCHAR(40)")
+        _ensure_column(conn, "followup_tasks", "owner_user_id", "VARCHAR(120)")
+        _ensure_column(conn, "followup_tasks", "task_type", "VARCHAR(60)")
+        _ensure_column(conn, "followup_tasks", "status", "VARCHAR(40)")
+        _ensure_column(conn, "followup_tasks", "due_at", "TIMESTAMP")
+        _ensure_column(conn, "followup_tasks", "completed_at", "TIMESTAMP")
+        _ensure_column(conn, "followup_tasks", "priority", "INTEGER")
+        _ensure_column(conn, "followup_tasks", "reason", "TEXT")
+        _ensure_column(conn, "followup_tasks", "metadata_json", "TEXT")
+        _ensure_column(conn, "followup_tasks", "created_at", "TIMESTAMP")
+        _ensure_column(conn, "followup_tasks", "updated_at", "TIMESTAMP")
+        _ensure_index(conn, "ix_followup_tasks_creator_id", "followup_tasks", "creator_id")
+        _ensure_index(conn, "ix_followup_tasks_status", "followup_tasks", "status")
+        _ensure_index(conn, "ix_followup_tasks_due_at", "followup_tasks", "due_at")
+        _ensure_index(conn, "ix_followup_tasks_owner_user_id", "followup_tasks", "owner_user_id")
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_followup_tasks_department_status_due "
+            "ON followup_tasks (department_code, status, due_at)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_followup_tasks_creator_status "
+            "ON followup_tasks (creator_id, status)"
+        ))
+
+        _ensure_column(conn, "gmail_sync_state", "last_history_id", "VARCHAR(120)")
+        _ensure_column(conn, "gmail_sync_state", "last_sync_at", "TIMESTAMP")
+        _ensure_column(conn, "gmail_sync_state", "next_sync_at", "TIMESTAMP")
+        _ensure_column(conn, "gmail_sync_state", "interval_minutes", "INTEGER")
+        _ensure_column(conn, "gmail_sync_state", "status", "VARCHAR(40)")
+        _ensure_column(conn, "gmail_sync_state", "error_message", "TEXT")
+        _ensure_column(conn, "gmail_sync_state", "updated_at", "TIMESTAMP")
+        _ensure_index(conn, "ix_gmail_sync_state_status", "gmail_sync_state", "status")
+        _ensure_index(conn, "ix_gmail_sync_state_next_sync_at", "gmail_sync_state", "next_sync_at")
+
         _ensure_column(conn, "raw_observations", "actor_user_id", "VARCHAR(120)")
         _ensure_column_type(conn, "raw_observations", "worker_id", "VARCHAR(120)")
         _ensure_column_type(conn, "raw_observations", "account_id", "VARCHAR(120)")
@@ -149,6 +186,10 @@ def _ensure_schema_columns() -> None:
         _set_nulls(conn, "app_users", "approval_status", "active")
         _set_nulls_typed(conn, "app_users", "must_change_password", 0)
         _set_nulls_typed(conn, "app_users", "failed_login_count", 0)
+        _set_nulls(conn, "followup_tasks", "status", "open")
+        _set_nulls_typed(conn, "followup_tasks", "priority", 50)
+        _set_nulls(conn, "gmail_sync_state", "status", "idle")
+        _set_nulls_typed(conn, "gmail_sync_state", "interval_minutes", 30)
         for table in department_tables:
             if table not in {"outreach_templates", "app_users"}:
                 _set_nulls(conn, table, "department_code", DEFAULT_DEPARTMENT)

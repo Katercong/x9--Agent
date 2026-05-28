@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 
-CURRENT_STATUS_VALUES = ("待建联", "已建联", "待回复", "视频已发布", "已寄样")
+CURRENT_STATUS_VALUES = ("待建联", "已建联", "待回复", "沟通中", "已寄样", "样品签收", "视频已发布", "已授权", "广告投放中")
 
 _STATUS_ALIASES = {
     "待建联": "待建联",
@@ -25,6 +25,13 @@ _STATUS_ALIASES = {
     "pending_reply": "待回复",
     "awaiting_reply": "待回复",
     "waiting_reply": "待回复",
+    "沟通中": "沟通中",
+    "已回复": "沟通中",
+    "已确认": "沟通中",
+    "确认合作": "沟通中",
+    "communicating": "沟通中",
+    "replied": "沟通中",
+    "confirmed": "沟通中",
     "视频已发布": "视频已发布",
     "已发布视频": "视频已发布",
     "已发布": "视频已发布",
@@ -37,6 +44,17 @@ _STATUS_ALIASES = {
     "sample_sent": "已寄样",
     "sent_sample": "已寄样",
     "sampled": "已寄样",
+    "样品签收": "样品签收",
+    "已签收": "样品签收",
+    "sample_delivered": "样品签收",
+    "delivered": "样品签收",
+    "已授权": "已授权",
+    "广告授权": "已授权",
+    "ad_authorized": "已授权",
+    "authorized": "已授权",
+    "广告投放中": "广告投放中",
+    "ad_running": "广告投放中",
+    "running": "广告投放中",
 }
 
 
