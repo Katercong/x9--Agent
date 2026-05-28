@@ -1,11 +1,11 @@
-import { Wallet, ShoppingCart, Users, TrendingUp, Building2, Video, ArrowUpRight, AlertOctagon, UserCheck } from 'lucide-react';
+import { Wallet, ShoppingCart, Users, TrendingUp, Building2, Video, ArrowUpRight, AlertOctagon, UserCheck, UserPlus } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
-import { useCreators, useOutreach, useProducts, useStaff, useDepartmentDashboardSummary, useAnalyticsCompany } from '@/hooks/useApi';
+import { useCreators, useOutreach, useProducts, useStaff, useUnifiedDashboard, useAnalyticsCompany } from '@/hooks/useApi';
 import { trendByDay, groupByOwner, staffStats } from '@/lib/derive';
 import { chartPalette } from '@/lib/colors';
 import { formatDate } from '@/lib/format';
@@ -31,17 +31,17 @@ export default function Overview() {
   const outreach = useOutreach({ limit: 10, order_by: 'created_at:desc' });
   const products = useProducts({ limit: 1 });
   const staff = useStaff({ limit: 10 });
-  const dashboard = useDepartmentDashboardSummary();
+  const unifiedDashboard = useUnifiedDashboard();
   const companyAnalytics = useAnalyticsCompany(30);
 
-  const loading = creators.isLoading || outreach.isLoading || products.isLoading || dashboard.isLoading || companyAnalytics.isLoading;
-  const error = creators.error || outreach.error || products.error || dashboard.error || companyAnalytics.error;
+  const loading = creators.isLoading || outreach.isLoading || products.isLoading || unifiedDashboard.isLoading || companyAnalytics.isLoading;
+  const error = creators.error || outreach.error || products.error || unifiedDashboard.error || companyAnalytics.error;
 
   const creatorList = creators.data?.items ?? [];
   const outreachList = outreach.data?.items ?? [];
   const productList = products.data?.items ?? [];
   const staffList = staff.data?.items ?? [];
-  const legacySummary = dashboard.data?.summary;
+  const unifiedSummary = unifiedDashboard.data?.summary;
   const company = companyAnalytics.data;
   const summary = company?.summary;
   const sourceTotal = (company?.source_counts ?? []).reduce((sum, row) => sum + row.count, 0);
@@ -85,15 +85,16 @@ export default function Overview() {
   });
 
   const overviewKpis = [
-    { label: '总发现量', value: legacySummary?.total_creators ?? summary?.total_creators ?? 0, icon: Users, bg: '#e0e7ff', fg: '#4f46e5' },
-    { label: '去重达人主档', value: summary?.processed_creators ?? legacySummary?.processed_creators ?? legacySummary?.unique_creators ?? creators.data?.total ?? 0, icon: UserCheck, bg: '#dcfce7', fg: '#16a34a' },
-    { label: '推荐达人', value: summary?.recommended ?? 0, icon: ShoppingCart, bg: '#d1fae5', fg: '#16a34a' },
-    { label: 'SKU 总数', value: products.data?.total ?? 0, icon: Wallet, bg: '#cffafe', fg: '#0891b2' },
-    { label: '已发送', value: summary?.outreach_sent ?? outreach.data?.total ?? 0, icon: TrendingUp, bg: '#fed7aa', fg: '#ea580c' },
-    { label: '已认领', value: summary?.assigned ?? 0, icon: Building2, bg: '#ede9fe', fg: '#7c3aed' },
-    { label: '已合作', value: summary?.partnered ?? 0, icon: Video, bg: '#fce7f3', fg: '#db2777' },
-    { label: '近 30 天入库', value: trend30.reduce((sum, row) => sum + row.processed, 0), icon: ArrowUpRight, bg: '#fef3c7', fg: '#ca8a04' },
-    { label: '来源记录', value: sourceTotal || totalContacted, icon: AlertOctagon, bg: '#fee2e2', fg: '#dc2626' },
+    { label: '总发现', value: unifiedSummary?.total_discovered ?? 0, icon: Users, bg: '#e0e7ff', fg: '#4f46e5' },
+    { label: '总采集', value: unifiedSummary?.total_collected ?? 0, icon: UserCheck, bg: '#dcfce7', fg: '#16a34a' },
+    { label: '今日发现', value: unifiedSummary?.today_discovered ?? 0, icon: ShoppingCart, bg: '#d1fae5', fg: '#16a34a' },
+    { label: '今日采集', value: unifiedSummary?.today_collected ?? 0, icon: Wallet, bg: '#cffafe', fg: '#0891b2' },
+    { label: '今日重复达人', value: unifiedSummary?.today_duplicate_creators ?? 0, icon: UserPlus, bg: '#fee2e2', fg: '#dc2626' },
+    { label: '总达人推荐', value: unifiedSummary?.total_recommended ?? 0, icon: TrendingUp, bg: '#fed7aa', fg: '#ea580c' },
+    { label: '待建联', value: unifiedSummary?.pending_contact ?? 0, icon: Building2, bg: '#ede9fe', fg: '#7c3aed' },
+    { label: '待回复', value: unifiedSummary?.pending_reply ?? 0, icon: Video, bg: '#fce7f3', fg: '#db2777' },
+    { label: '沟通中', value: unifiedSummary?.communicating ?? 0, icon: ArrowUpRight, bg: '#fef3c7', fg: '#ca8a04' },
+    { label: '广告投放中', value: unifiedSummary?.ad_running ?? 0, icon: AlertOctagon, bg: '#fee2e2', fg: '#dc2626' },
   ];
 
   // 趋势图
@@ -136,7 +137,7 @@ export default function Overview() {
   return (
     <AsyncState loading={loading} error={error} height={400}>
       <div className="space-y-4">
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
           {overviewKpis.map((k) => (
             <KpiCard key={k.label} label={k.label} value={k.value} icon={k.icon} iconBg={k.bg} iconColor={k.fg} />
           ))}

@@ -354,6 +354,78 @@ export interface DepartmentDashboardSummary {
   analytics?: AnalyticsSummary;
 }
 
+export interface UnifiedDashboardSummary {
+  total_discovered: number;
+  total_collected: number;
+  today_discovered: number;
+  today_collected: number;
+  today_duplicate_creators: number;
+  total_recommended: number;
+  pending_contact: number;
+  pending_reply: number;
+  communicating: number;
+  sample_shipped: number;
+  sample_delivered: number;
+  video_published: number;
+  ad_authorized: number;
+  ad_running: number;
+}
+
+export interface UnifiedDashboardStageRow {
+  key: string;
+  name: string;
+  count: number;
+}
+
+export interface UnifiedDashboardFollowupItem {
+  id: string;
+  creator_id: string;
+  department_code?: string | null;
+  owner_user_id?: string | null;
+  task_type: string;
+  status: string;
+  due_at?: string | null;
+  completed_at?: string | null;
+  priority: number;
+  reason?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UnifiedDashboardGmailAccount {
+  account_id: string;
+  email: string;
+  department_code?: string | null;
+  is_active: number;
+  is_default: number;
+  last_history_id?: string | null;
+  last_sync_at?: string | null;
+  next_sync_at?: string | null;
+  interval_minutes: number;
+  status: string;
+  error_message?: string | null;
+  readonly_scope: boolean;
+  reauthorization_required: boolean;
+}
+
+export interface UnifiedDashboardResponse {
+  ok: boolean;
+  generated_at: string;
+  scope: {
+    type: 'department' | 'company' | 'super';
+    department_code: string | null;
+  };
+  summary: UnifiedDashboardSummary;
+  stage_rows: UnifiedDashboardStageRow[];
+  followups: {
+    overdue: number;
+    due_today: number;
+    items: UnifiedDashboardFollowupItem[];
+  };
+  gmail_sync: {
+    accounts: UnifiedDashboardGmailAccount[];
+  };
+}
+
 export interface AnalyticsSourceCount {
   name: string;
   count: number;

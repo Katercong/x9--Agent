@@ -27,7 +27,7 @@ def make(**overrides):
     return base
 
 
-def test_search_only_match_with_no_commerce_signal_routes_to_low_confidence_hold():
+def test_search_only_match_with_no_commerce_signal_routes_to_affiliate_test():
     s = compute_score(make(
         bio="just vibing",
         source_video_title="TikTok - Make Your Day",
@@ -36,8 +36,8 @@ def test_search_only_match_with_no_commerce_signal_routes_to_low_confidence_hold
     assert s.feminine_search_only_match is True
     assert s.commerce_signal_score < 70
     d = decide(s, followers=30_000, has_email=True)
-    assert d.queue_type == "low_confidence_hold"
-    assert d.recommendation_status == "hold"
+    assert d.queue_type == "affiliate_test_queue"
+    assert d.recommendation_status == "affiliate_test"
     assert d.review_required is False
 
 

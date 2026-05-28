@@ -19,13 +19,13 @@ import { EChart } from '@/components/charts/EChart';
 import { PriorityBar } from '@/components/progress/PriorityBar';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { AsyncState } from '@/components/states/States';
-import { useDepartmentDashboardSummary, useStaff } from '@/hooks/useApi';
+import { useDepartmentDashboardSummary, useStaff, useUnifiedDashboard } from '@/hooks/useApi';
 import { staffStats } from '@/lib/derive';
 import type { AnalyticsMemberRow } from '@/api/types';
 
-const topKpiIcons = [Users, UserCheck, Inbox, ThumbsUp, Clock, Handshake];
-const topKpiBg = ['#e0e7ff', '#dcfce7', '#d1fae5', '#cffafe', '#fed7aa', '#ede9fe'];
-const topKpiFg = ['#4f46e5', '#16a34a', '#16a34a', '#0891b2', '#ea580c', '#7c3aed'];
+const topKpiIcons = [Users, UserCheck, Inbox, ThumbsUp, UserPlus, Clock, Handshake];
+const topKpiBg = ['#e0e7ff', '#dcfce7', '#d1fae5', '#cffafe', '#fee2e2', '#fed7aa', '#ede9fe'];
+const topKpiFg = ['#4f46e5', '#16a34a', '#16a34a', '#0891b2', '#dc2626', '#ea580c', '#7c3aed'];
 
 const overviewIcons = [
   ArrowUpRight, MessageSquare, ListChecks, Clock, UserPlus,
@@ -41,9 +41,13 @@ const overviewFg = [
 ];
 
 const stageColors: Record<string, string> = {
+  discovered: '#94a3b8',
+  recommended: '#38bdf8',
+  pending_contact: '#22c55e',
   prospect: '#94a3b8',
   contacted: '#60a5fa',
   pending_reply: '#fbbf24',
+  communicating: '#3370ff',
   confirmed: '#3370ff',
   sample_shipped: '#8b5cf6',
   sample_delivered: '#a855f7',
@@ -88,35 +92,47 @@ function formatDay(value: string) {
 }
 
 export default function Dashboard() {
-  const dashboardQ = useDepartmentDashboardSummary();
+  const dashboardQ = useUnifiedDashboard();
+  const legacyDashboardQ = useDepartmentDashboardSummary();
   const staffQ = useStaff({ limit: 10 });
   const data = dashboardQ.data;
+  const legacyData = legacyDashboardQ.data;
   const summary = data?.summary ?? {
-    total_creators: 0,
+    total_discovered: 0,
+    total_collected: 0,
+    today_discovered: 0,
     today_collected: 0,
-    contacted: 0,
-    review_pending: 0,
-    progressed: 0,
+    today_duplicate_creators: 0,
+    total_recommended: 0,
+    pending_contact: 0,
+    pending_reply: 0,
+    communicating: 0,
+    sample_shipped: 0,
+    sample_delivered: 0,
+    video_published: 0,
+    ad_authorized: 0,
+    ad_running: 0,
   };
-  const overviewCounts = Object.fromEntries((data?.overview ?? []).map((row) => [row.key, row.count]));
-  const analytics = data?.analytics;
+  const overviewCounts = Object.fromEntries((data?.stage_rows ?? []).map((row) => [row.key, row.count]));
+  const analytics = legacyData?.analytics;
   const sourceCounts = Object.fromEntries((analytics?.source_counts ?? []).map((row) => [row.name, row.count]));
   const memberRows = analytics?.members?.slice(0, 8) ?? [];
-  const trend7 = data?.trend_7d ?? [];
+  const trend7 = legacyData?.trend_7d ?? [];
   const recent7 = trend7.reduce((sum, row) => sum + row.count, 0);
-  const categoryCounts = data?.category_counts?.length ? data.category_counts : [{ name: '未填写', value: 0 }];
-  const ownerRows = (data?.owner_counts ?? []).map((row) => ({ label: row.name, value: row.count }));
+  const categoryCounts = legacyData?.category_counts?.length ? legacyData.category_counts : [{ name: '未填写', value: 0 }];
+  const ownerRows = (legacyData?.owner_counts ?? []).map((row) => ({ label: row.name, value: row.count }));
   const bdRows = staffStats(staffQ.data?.items ?? [])
     .sort((a, b) => b.contacted - a.contacted)
     .slice(0, 8);
 
   const topRow = [
-    { label: '总发现量', value: summary.total_creators, subLabel: '列表/详情/入库累计', delta: null as number | null },
-    { label: '去重达人主档', value: summary.processed_creators ?? summary.unique_creators ?? 0, subLabel: '推荐池使用此口径', delta: null },
-    { label: '今日采集', value: summary.today_collected, delta: null },
-    { label: '已建联', value: summary.contacted, delta: null },
-    { label: '待审核', value: summary.review_pending, delta: null },
-    { label: '已推进', value: summary.progressed, delta: null },
+    { label: '总发现', value: summary.total_discovered, subLabel: '当前达人主队列总量', delta: null as number | null },
+    { label: '总采集', value: summary.total_collected, subLabel: '去除队列标记后的采集量', delta: null },
+    { label: '今日发现', value: summary.today_discovered, subLabel: '今天入队总量', delta: null },
+    { label: '今日采集', value: summary.today_collected, subLabel: '今天新增有效采集', delta: null },
+    { label: '今日重复达人', value: summary.today_duplicate_creators, subLabel: '今天重复出现的达人', delta: null },
+    { label: '总达人推荐', value: summary.total_recommended, delta: null },
+    { label: '待建联', value: summary.pending_contact, delta: null },
   ];
 
   const sourceRow = [
@@ -126,11 +142,11 @@ export default function Dashboard() {
   ];
 
   const overview = [
-    { label: '潜在线索', value: overviewCounts.prospect || 0 },
-    { label: '已联系', value: overviewCounts.contacted || 0 },
-    { label: '已确认', value: overviewCounts.confirmed || 0 },
     { label: '待回复', value: overviewCounts.pending_reply || 0 },
+    { label: '沟通中', value: overviewCounts.communicating || 0 },
     { label: '近 7 天新增', value: recent7 },
+    { label: '跟进逾期', value: data?.followups.overdue ?? 0 },
+    { label: '今日跟进', value: data?.followups.due_today ?? 0 },
     { label: '已寄样', value: overviewCounts.sample_shipped || 0 },
     { label: '样品签收', value: overviewCounts.sample_delivered || 0 },
     { label: '视频已发', value: overviewCounts.video_published || 0 },
@@ -145,7 +161,7 @@ export default function Dashboard() {
       value: row.count,
       color: stageColors[row.key] || '#94a3b8',
     }));
-  const donutTotal = summary.total_creators;
+  const donutTotal = summary.total_discovered;
 
   const trendOption = {
     grid: { top: 30, right: 16, bottom: 30, left: 36, containLabel: true },
@@ -220,7 +236,7 @@ export default function Dashboard() {
   return (
     <AsyncState loading={dashboardQ.isLoading} error={dashboardQ.error} height={400}>
       <div className="space-y-4">
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-3">
           {topRow.map((k, i) => (
             <KpiCard
               key={k.label}

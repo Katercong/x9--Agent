@@ -47,6 +47,8 @@ SHOP_SECTION_NAMES = (
     "Categories",
     "Content quality",
 )
+
+RAW_QUEUE_LEAD_STATUSES = ("shop_list_seen", "shop_queue_cleared")
 SHOP_SIGNAL_LINE_RE = re.compile(
     r"\b("
     r"gmv|gpm|commission|affiliate|collab|collaboration|sample|flat fee|sales|sold|"
@@ -267,6 +269,8 @@ def reprocess_raw_observations(
     skip_invalid_handle_repairs: bool = True,
     auto_process: bool = True,
     queued_only: bool = False,
+    unprocessed_only: bool = False,
+    exclude_queue: bool = False,
 ) -> dict[str, Any]:
     """Replay stored raw observations through current server-side processors.
 
@@ -287,19 +291,25 @@ def reprocess_raw_observations(
     # reprocess loop then wrote NULL back to the database, destroying the
     # raw JSON we just read. (Wiped 4000+ tiktok_shop captures on 2026-05-19/20.)
     #
-    # Fetch only the columns we need as Core-level Rows and parse locally.
-    light_q = select(RawObservation.id, RawObservation.raw_json)
+    # Fetch only IDs up front, then read each raw_json row separately. The
+    # ingestion path commits per row, so keeping a server-side cursor open
+    # while replaying can invalidate the cursor on PostgreSQL.
+    light_q = select(RawObservation.id)
     if platform and platform != "all":
         light_q = light_q.where(RawObservation.platform == platform)
     if department_code:
         light_q = light_q.where(RawObservation.department_code == department_code)
     if queued_only:
         light_q = light_q.where(RawObservation.process_status == "queued")
+    if unprocessed_only:
+        light_q = light_q.where(func.coalesce(RawObservation.process_status, "") == "")
+    if exclude_queue:
+        light_q = light_q.where(func.coalesce(RawObservation.lead_status, "").notin_(RAW_QUEUE_LEAD_STATUSES))
     light_q = light_q.order_by(
         func.coalesce(RawObservation.collected_at, RawObservation.created_at).asc(),
         RawObservation.id.asc(),
     ).limit(limit)
-    stream = db.execute(light_q.execution_options(yield_per=200))
+    obs_ids = [str(row[0]) for row in db.execute(light_q).all()]
 
     scanned = 0
     counts = {
@@ -315,8 +325,9 @@ def reprocess_raw_observations(
     }
     errors: list[dict[str, str]] = []
 
-    for obs_id, raw_json in stream:
+    for obs_id in obs_ids:
         scanned += 1
+        raw_json = db.scalar(select(RawObservation.raw_json).where(RawObservation.id == obs_id))
         payload = _load_raw_payload(raw_json)
         # `raw_json` local var falls out of scope at loop end → GC reclaims
         # the ~142 KB blob. No ORM dirty bit set.

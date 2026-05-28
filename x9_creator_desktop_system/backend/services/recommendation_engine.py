@@ -132,18 +132,18 @@ def decide(
                 review_required=False,
             )
         return Decision(
-            recommendation_status=STATUS_HOLD,
+            recommendation_status=STATUS_AFFILIATE_TEST,
             recommended_product_type=None,
-            recommended_collab_type=COLLAB_DO_NOT_CONTACT,
-            outreach_priority=P4,
-            queue_type=QUEUE_LOW_CONFIDENCE_HOLD,
+            recommended_collab_type=COLLAB_AFFILIATE,
+            outreach_priority=P3,
+            queue_type=QUEUE_AFFILIATE,
             recommendation_reason=(
                 "Valid email present, but feminine-care match comes only from the search keyword. "
                 "Bio, video title and video description do not contain real feminine-care evidence. "
-                "The lead is held automatically until stronger product-fit evidence appears."
+                "Route to a commission-only test instead of paid outreach."
             ),
-            next_action="Do not contact now. Re-score after collecting stronger bio or video evidence.",
-            risk_summary="search_keyword_only_match; low_confidence_hold",
+            next_action="Offer an affiliate / commission-only collaboration and verify category fit before spending budget.",
+            risk_summary="search_keyword_only_match; relaxed_affiliate_test",
             review_required=False,
         )
 
@@ -259,34 +259,34 @@ def decide(
     # --- 6. low_confidence_hold (other ambiguity) ---
     if score.evidence_strength == "weak" or score.content_format_status == "unknown":
         return Decision(
-            recommendation_status=STATUS_HOLD,
-            recommended_product_type=None,
-            recommended_collab_type=COLLAB_DO_NOT_CONTACT,
-            outreach_priority=P4,
-            queue_type=QUEUE_LOW_CONFIDENCE_HOLD,
+            recommendation_status=STATUS_AFFILIATE_TEST,
+            recommended_product_type=primary_cat if primary_score >= 30 else None,
+            recommended_collab_type=COLLAB_AFFILIATE,
+            outreach_priority=P3,
+            queue_type=QUEUE_AFFILIATE,
             recommendation_reason=(
                 f"Evidence is weak (strength={score.evidence_strength}, content_format={score.content_format_status}). "
-                f"The lead is held automatically until the collector finds clearer category evidence."
+                f"Because a contact method exists, route to a commission-only test instead of holding it."
             ),
-            next_action="Collect more profile/video evidence, then re-run the pipeline.",
-            risk_summary="weak_category_evidence",
+            next_action="Offer commission-only outreach; only send samples or budget after fit is confirmed.",
+            risk_summary="weak_category_evidence; relaxed_affiliate_test",
             review_required=False,
         )
 
     # --- 7. general_lifestyle_hold ---
     if primary_score < 40:
         return Decision(
-            recommendation_status=STATUS_HOLD,
+            recommendation_status=STATUS_AFFILIATE_TEST,
             recommended_product_type=None,
-            recommended_collab_type=COLLAB_DO_NOT_CONTACT,
-            outreach_priority=P4,
-            queue_type=QUEUE_GENERAL_HOLD,
+            recommended_collab_type=COLLAB_AFFILIATE,
+            outreach_priority=P3,
+            queue_type=QUEUE_AFFILIATE,
             recommendation_reason=(
                 "No category reaches the 40-point fit threshold. The creator looks like a general "
-                "lifestyle account — hold until a clearer signal appears."
+                "lifestyle account, but contact exists, so keep it as a commission-only test candidate."
             ),
-            next_action="Watch the next batch of uploads for vertical signals.",
-            risk_summary="low_product_fit",
+            next_action="Offer affiliate / commission-only collaboration; avoid upfront sample or paid budget.",
+            risk_summary="low_product_fit; relaxed_affiliate_test",
             review_required=False,
         )
 
@@ -306,16 +306,16 @@ def decide(
 
     # --- Default fallback: warm hold ---
     return Decision(
-        recommendation_status=STATUS_HOLD,
+        recommendation_status=STATUS_LOW_COST_TEST,
         recommended_product_type=primary_cat if primary_score >= 40 else None,
         recommended_collab_type=COLLAB_GIFTED,
         outreach_priority=P3,
-        queue_type=QUEUE_GENERAL_HOLD,
+        queue_type=QUEUE_SAMPLE,
         recommendation_reason=(
             f"Mixed signals: product fit {primary_score} ({primary_cat}), commercial {cv}, content format "
-            f"{score.content_format_status}. Default to a low-cost test if email is available."
+            f"{score.content_format_status}. Contact exists, so default to a low-cost test."
         ),
         next_action="Send a small gifted product test if budget allows; otherwise wait for stronger signals.",
-        risk_summary="mixed_signals",
+        risk_summary="mixed_signals; relaxed_low_cost_test",
         review_required=False,
     )

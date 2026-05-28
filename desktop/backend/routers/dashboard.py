@@ -14,6 +14,7 @@ from ..models.creator import Creator
 from ..models.creator_outreach_event import CreatorOutreachEvent
 from ..database.connection import engine
 from ..services.post_processing import OUTREACH_EVENT_ORDER, analytics_summary, migrate_staff_note_bd_stats
+from ..services.unified_dashboard_service import build_unified_dashboard
 from ..services.departments import (
     DEFAULT_DEPARTMENT,
     DEPARTMENTS,
@@ -961,6 +962,15 @@ def _build_legacy_summary_from_analytics(db, department_code: str | None) -> dic
     }
 
 
+def _dashboard_scope_type(user: dict[str, Any]) -> str:
+    role = user.get("role")
+    if role == "super_admin":
+        return "super"
+    if role == "company_admin":
+        return "company"
+    return "department"
+
+
 @router.get("/department-summary")
 def department_summary(request: Request, _user: dict = Depends(current_user)) -> dict[str, Any]:
     department_code = current_department_code(request)
@@ -971,3 +981,14 @@ def department_summary(request: Request, _user: dict = Depends(current_user)) ->
         business["processed_source_counts"] = processed.get("source_counts", [])
         business["analytics"] = processed.get("analytics")
         return business
+
+
+@router.get("/unified")
+def unified_dashboard(request: Request, user: dict = Depends(current_user)) -> dict[str, Any]:
+    department_code = current_department_code(request)
+    with SessionLocal() as db:
+        return build_unified_dashboard(
+            db,
+            scope_type=_dashboard_scope_type(user),
+            department_code=department_code,
+        )

@@ -15,6 +15,7 @@ import type {
   VersionInfo,
   ApiItems,
   DepartmentDashboardSummary,
+  UnifiedDashboardResponse,
   AnalyticsSummary,
   SystemMetrics,
 } from './types';
@@ -78,6 +79,8 @@ export const endpoints = {
     api.get<ListResponse<import('./types').BusinessMetricDaily>>(`${BASE}/data/business_metrics_daily`, params),
   departmentDashboardSummary: () =>
     api.get<DepartmentDashboardSummary>(`${LOCAL}/dashboard/department-summary`),
+  unifiedDashboard: () =>
+    api.get<UnifiedDashboardResponse>(`${LOCAL}/dashboard/unified`),
   analyticsMe: (days = 30) =>
     api.get<AnalyticsSummary>(`${LOCAL}/analytics/me`, { days }),
   analyticsDepartment: (params?: { department_code?: string; days?: number }) =>

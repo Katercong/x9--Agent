@@ -47,6 +47,8 @@ SHOP_SECTION_NAMES = (
     "Categories",
     "Content quality",
 )
+
+RAW_QUEUE_LEAD_STATUSES = ("shop_list_seen", "shop_queue_cleared")
 SHOP_SIGNAL_LINE_RE = re.compile(
     r"\b("
     r"gmv|gpm|commission|affiliate|collab|collaboration|sample|flat fee|sales|sold|"
@@ -207,6 +209,8 @@ def reprocess_raw_observations(
     department_code: str | None = None,
     skip_invalid_handle_repairs: bool = True,
     auto_process: bool = True,
+    unprocessed_only: bool = False,
+    exclude_queue: bool = False,
 ) -> dict[str, Any]:
     """Replay stored raw observations through current server-side processors.
 
@@ -242,6 +246,10 @@ def reprocess_raw_observations(
         light_q = light_q.where(RawObservation.platform == platform)
     if department_code:
         light_q = light_q.where(RawObservation.department_code == department_code)
+    if unprocessed_only:
+        light_q = light_q.where(func.coalesce(RawObservation.process_status, "") == "")
+    if exclude_queue:
+        light_q = light_q.where(func.coalesce(RawObservation.lead_status, "").notin_(RAW_QUEUE_LEAD_STATUSES))
     light_q = light_q.order_by(
         func.coalesce(RawObservation.collected_at, RawObservation.created_at).asc(),
         RawObservation.id.asc(),

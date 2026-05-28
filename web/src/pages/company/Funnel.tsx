@@ -1,15 +1,16 @@
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
 import { AsyncState } from '@/components/states/States';
-import { useDepartmentDashboardSummary } from '@/hooks/useApi';
+import { useUnifiedDashboard } from '@/hooks/useApi';
 import { chartPalette } from '@/lib/colors';
 
 export default function Funnel() {
-  const { data, isLoading, error } = useDepartmentDashboardSummary();
-  const funnel = ((data?.stage_rows?.length ? data.stage_rows : data?.overview) ?? [])
+  const { data, isLoading, error } = useUnifiedDashboard();
+  const funnel = (data?.stage_rows ?? [])
     .map((row) => ({ name: row.name, value: row.count, key: row.key }));
+  const counts = Object.fromEntries(funnel.map((row) => [row.key, row.value]));
 
-  const totalProspect = funnel[0]?.value || 1;
+  const totalProspect = data?.summary.total_discovered || 1;
 
   const funnelOption = {
     tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
@@ -50,11 +51,11 @@ export default function Funnel() {
     <AsyncState loading={isLoading} error={error} height={400}>
       <div className="space-y-4">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {[
-            { label: '潜在线索', value: funnel[0]?.value || 0, sub: '起始池' },
-            { label: '已确认', value: funnel[2]?.value || 0, sub: '占总 ' + (((funnel[2]?.value || 0) / totalProspect) * 100).toFixed(1) + '%' },
-            { label: '视频已发', value: funnel[5]?.value || 0, sub: '占总 ' + (((funnel[5]?.value || 0) / totalProspect) * 100).toFixed(1) + '%' },
-            { label: '广告投放中', value: funnel[7]?.value || 0, sub: '占总 ' + (((funnel[7]?.value || 0) / totalProspect) * 100).toFixed(1) + '%' },
+            {[
+            { label: '总发现', value: data?.summary.total_discovered ?? 0, sub: '起始池' },
+            { label: '沟通中', value: counts.communicating || 0, sub: '占总 ' + (((counts.communicating || 0) / totalProspect) * 100).toFixed(1) + '%' },
+            { label: '视频已发', value: counts.video_published || 0, sub: '占总 ' + (((counts.video_published || 0) / totalProspect) * 100).toFixed(1) + '%' },
+            { label: '广告投放中', value: counts.ad_running || 0, sub: '占总 ' + (((counts.ad_running || 0) / totalProspect) * 100).toFixed(1) + '%' },
           ].map((k) => (
             <div key={k.label} className="card card-body">
               <div className="text-xs text-muted">{k.label}</div>
@@ -64,7 +65,7 @@ export default function Funnel() {
           ))}
         </div>
 
-        <ChartCard title="8 阶段转化漏斗" extra={<span>基于 creator.current_status</span>}>
+        <ChartCard title="统一建联状态漏斗" extra={<span>基于统一状态投影</span>}>
           <EChart option={funnelOption} height={420} />
         </ChartCard>
 

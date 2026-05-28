@@ -133,7 +133,13 @@ def run_for_creator(db: Session, creator: Creator, repeat_discovery: dict[str, A
         is_current=1,
         rec_version=settings.rec_version,
     ))
-    if decision.recommendation_status in {"recommended", "recommended_after_review", "low_cost_test", "affiliate_test"}:
+    if decision.recommendation_status in {
+        "recommended",
+        "recommended_after_review",
+        "low_cost_test",
+        "affiliate_test",
+        "brand_awareness_only",
+    }:
         existing_recommended = db.scalars(
             select(CreatorOutreachEvent.id)
             .where(CreatorOutreachEvent.creator_id == creator.id)

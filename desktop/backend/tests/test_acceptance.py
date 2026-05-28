@@ -359,9 +359,9 @@ def test_search_keyword_only_match(client):
         c = db.query(Creator).filter_by(handle="search_only_creator").one()
         assert "search_keyword_only_match" in (c.risk_tags_json or "")
         assert "manual_review_required" not in (c.risk_tags_json or "")
-        assert c.queue_type == "low_confidence_hold"
+        assert c.queue_type == "affiliate_test_queue"
         assert c.review_required == 0
-        assert c.recommendation_status == "hold"
+        assert c.recommendation_status == "affiliate_test"
     finally:
         db.close()
 
