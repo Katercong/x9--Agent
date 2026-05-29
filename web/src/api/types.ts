@@ -448,6 +448,19 @@ export interface AnalyticsTrendRow {
   partnered: number;
 }
 
+export interface AnalyticsRecentEvent {
+  id: string;
+  occurred_at: string;
+  source: string;
+  event_type: string;
+  event_label: string;
+  actor?: string | null;
+  creator_id?: string | null;
+  creator?: string | null;
+  department_code?: string | null;
+  title: string;
+}
+
 export interface AnalyticsMemberRow {
   member: string;
   tiktok_shop_processed?: number;
@@ -505,6 +518,7 @@ export interface AnalyticsSummary {
   };
   source_counts: AnalyticsSourceCount[];
   event_counts: AnalyticsEventCount[];
+  recent_events?: AnalyticsRecentEvent[];
   members: AnalyticsMemberRow[];
   departments: AnalyticsDepartmentRow[];
   trend: AnalyticsTrendRow[];

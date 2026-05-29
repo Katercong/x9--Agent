@@ -62,6 +62,30 @@ CONTACTED_EVENT_TYPES = {
     "ad_running",
 }
 
+RECENT_EVENT_LABELS = {
+    "recommended": "推荐",
+    "assigned": "分配",
+    "sent": "已发送",
+    "pending_reply": "待回复",
+    "contacted": "已建联",
+    "replied": "已回复",
+    "communicating": "沟通中",
+    "confirmed": "已确认",
+    "sample_shipped": "已寄样",
+    "sample_delivered": "样品签收",
+    "video_published": "视频已发",
+    "partnered": "已合作",
+    "ad_authorized": "已授权",
+    "ad_running": "广告投放中",
+    "dropped": "已放弃",
+}
+
+EMAIL_EVENT_LABELS = {
+    "queued": "邮件排队",
+    "sent": "已发送",
+    "failed": "邮件失败",
+}
+
 EVENT_TO_STATUS = {
     "recommended": "prospect",
     "assigned": "prospect",
@@ -936,6 +960,93 @@ def _raw_collected_trend(db: Session, department_code: str | None, day_keys: lis
     return {str(day): int(count or 0) for day, count in db.execute(text(sql), params).all()}
 
 
+def _creator_display_name(creator: Creator | None, creator_id: str | None) -> str:
+    if creator is None:
+        return str(creator_id or "未知达人")
+    return (
+        str(creator.display_name or "").strip()
+        or str(creator.handle or "").strip()
+        or str(creator_id or "未知达人")
+    )
+
+
+def _recent_activity_rows(
+    db: Session,
+    *,
+    department_code: str | None,
+    actor_user_id: str | None,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    event_q = select(CreatorOutreachEvent)
+    email_q = select(OutreachEmail).where(OutreachEmail.status.in_(tuple(EMAIL_EVENT_LABELS)))
+    if department_code:
+        event_q = event_q.where(CreatorOutreachEvent.department_code == department_code)
+        email_q = email_q.where(OutreachEmail.department_code == department_code)
+    if actor_user_id:
+        event_q = event_q.where(CreatorOutreachEvent.actor_user_id == actor_user_id)
+        email_q = email_q.where(OutreachEmail.created_by == actor_user_id)
+    event_rows = list(db.scalars(
+        event_q
+        .order_by(CreatorOutreachEvent.event_at.desc(), CreatorOutreachEvent.created_at.desc())
+        .limit(max(limit * 2, limit))
+    ).all())
+    email_rows = list(db.scalars(
+        email_q
+        .order_by(func.coalesce(OutreachEmail.sent_at, OutreachEmail.updated_at, OutreachEmail.created_at).desc())
+        .limit(max(limit * 2, limit))
+    ).all())
+
+    creator_ids = {str(row.creator_id) for row in event_rows + email_rows if row.creator_id}
+    creator_map = {
+        str(creator.id): creator
+        for creator in db.scalars(select(Creator).where(Creator.id.in_(creator_ids))).all()
+    } if creator_ids else {}
+    rows: list[dict[str, Any]] = []
+    for event in event_rows:
+        dt = _db_datetime(event.event_at) or _db_datetime(event.created_at) or datetime.min
+        event_type = str(event.event_type or "").strip()
+        label = RECENT_EVENT_LABELS.get(event_type, event_type or "事件")
+        actor = str(event.owner_bd or event.actor_user_id or "系统").strip() or "系统"
+        creator_name = _creator_display_name(creator_map.get(str(event.creator_id)), str(event.creator_id))
+        rows.append({
+            "id": f"outreach_event:{event.id}",
+            "occurred_at": dt.isoformat(),
+            "source": "creator_outreach_events",
+            "event_type": event_type,
+            "event_label": label,
+            "actor": actor,
+            "creator_id": str(event.creator_id),
+            "creator": creator_name,
+            "department_code": event.department_code,
+            "title": str(event.note or "").strip() or f"{actor} 对 {creator_name} {label}",
+            "_sort_at": dt,
+        })
+    for email in email_rows:
+        dt = _db_datetime(email.sent_at) or _db_datetime(email.updated_at) or _db_datetime(email.created_at) or datetime.min
+        status = str(email.status or "").strip().lower()
+        label = EMAIL_EVENT_LABELS.get(status, f"邮件{status}" if status else "邮件事件")
+        actor = str(email.from_email or email.created_by or "系统").strip() or "系统"
+        creator_name = _creator_display_name(creator_map.get(str(email.creator_id)), str(email.creator_id))
+        rows.append({
+            "id": f"outreach_email:{email.id}",
+            "occurred_at": dt.isoformat(),
+            "source": "outreach_emails",
+            "event_type": f"email_{status}" if status else "email",
+            "event_label": label,
+            "actor": actor,
+            "creator_id": str(email.creator_id),
+            "creator": creator_name,
+            "department_code": email.department_code,
+            "title": f"{actor} 给 {creator_name} {label}",
+            "_sort_at": dt,
+        })
+    rows.sort(key=lambda row: row["_sort_at"], reverse=True)
+    return [
+        {key: value for key, value in row.items() if key != "_sort_at"}
+        for row in rows[:limit]
+    ]
+
+
 def analytics_summary(
     db: Session,
     *,
@@ -1064,6 +1175,12 @@ def analytics_summary(
             for source in (SOURCE_TIKTOK_SHOP, SOURCE_TIKTOK_VIDEO, SOURCE_BD)
         ],
         "event_counts": [{"name": name, "count": event_counts.get(name, 0)} for name in OUTREACH_EVENT_ORDER],
+        "recent_events": _recent_activity_rows(
+            db,
+            department_code=dept,
+            actor_user_id=actor_user_id,
+            limit=12,
+        ),
         "members": [
             {"member": member, **dict(counts)}
             for member, counts in sorted(member_counts.items(), key=lambda item: (-sum(item[1].values()), item[0]))

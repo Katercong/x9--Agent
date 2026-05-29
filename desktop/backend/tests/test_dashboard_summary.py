@@ -9,6 +9,7 @@ from x9_creator_desktop_system.backend.database import SessionLocal
 from x9_creator_desktop_system.backend.models.creator import Creator
 from x9_creator_desktop_system.backend.models.creator_source import CreatorSource
 from x9_creator_desktop_system.backend.models.raw_observation import RawObservation
+from x9_creator_desktop_system.backend.services.post_processing import create_outreach_event
 
 
 def _summary(client) -> dict:
@@ -157,3 +158,38 @@ def test_company_analytics_trend_includes_total_collected_excluding_queue(client
 
     after = _dashboard(client)
     assert _today_trend(after)["collected"] == _today_trend(before).get("collected", 0) + 1
+
+
+def test_dashboard_recent_events_include_unified_outreach_events(client):
+    marker = datetime.now().strftime("%Y%m%d%H%M%S%f")
+
+    with SessionLocal() as session:
+        creator = Creator(
+            id=f"creator_dashboard_event_{marker}",
+            platform="tiktok",
+            handle=f"dashboard_event_{marker}",
+            display_name=f"Dashboard Event {marker}",
+            department_code="cross_border",
+            source="x9_leads",
+            collected_at=datetime.now(),
+        )
+        session.add(creator)
+        session.flush()
+        create_outreach_event(
+            session,
+            creator,
+            event_type="sample_shipped",
+            actor_user_id=f"actor_{marker}",
+            owner_bd=f"BD {marker}",
+            note=f"recent event marker {marker}",
+        )
+        session.commit()
+
+    payload = _dashboard(client)
+    recent_events = payload["analytics"].get("recent_events") or []
+    assert any(
+        row.get("source") == "creator_outreach_events"
+        and row.get("event_type") == "sample_shipped"
+        and marker in row.get("title", "")
+        for row in recent_events
+    )

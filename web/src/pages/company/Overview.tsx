@@ -11,8 +11,10 @@ import { trendByDay } from '@/lib/derive';
 import { formatDate } from '@/lib/format';
 
 interface RecentEvent {
-  id: number;
+  id: string;
   date: string;
+  sortAt: number;
+  source: string;
   type: string;
   level: 'good' | 'info' | 'warn' | 'bad';
   title: string;
@@ -21,10 +23,59 @@ interface RecentEvent {
 
 const eventColumns: Column<RecentEvent>[] = [
   { key: 'date', header: '日期', cell: (r) => <span className="text-xs text-muted">{r.date}</span>, width: '100px' },
-  { key: 'type', header: '类型', cell: (r) => <Pill tone={r.level}>{r.type}</Pill> },
+  { key: 'source', header: '来源', cell: (r) => <span className="text-xs text-muted">{r.source}</span>, width: '120px' },
+  {
+    key: 'type',
+    header: '类型',
+    width: '92px',
+    cell: (r) => <Pill tone={r.level} className="min-w-[64px] justify-center whitespace-nowrap">{r.type}</Pill>,
+  },
   { key: 'title', header: '事件', cell: (r) => <span className="text-xs">{r.title}</span> },
   { key: 'dept', header: '部门', cell: (r) => <span className="text-xs text-muted">{r.dept}</span> },
 ];
+
+const EVENT_TYPE_LABELS: Record<string, string> = {
+  recommended: '推荐',
+  assigned: '分配',
+  sent: '已发送',
+  email_sent: '已发送',
+  queued: '邮件排队',
+  email_queued: '邮件排队',
+  failed: '邮件失败',
+  email_failed: '邮件失败',
+  pending_reply: '待回复',
+  contacted: '已建联',
+  replied: '已回复',
+  communicating: '沟通中',
+  confirmed: '已确认',
+  sample_shipped: '已寄样',
+  sample_delivered: '样品签收',
+  video_published: '视频已发',
+  partnered: '已合作',
+  ad_authorized: '已授权',
+  ad_running: '投放中',
+  dropped: '已放弃',
+};
+
+function eventLevel(type: string): RecentEvent['level'] {
+  if (['ad_running', 'ad_authorized', 'partnered', 'email_sent'].includes(type)) return 'good';
+  if (['dropped', 'failed', 'email_failed'].includes(type)) return 'bad';
+  if (['video_published', 'sample_shipped', 'sample_delivered'].includes(type)) return 'warn';
+  return 'info';
+}
+
+function eventTime(value: string | null | undefined) {
+  const time = value ? Date.parse(value) : 0;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function eventLabel(type: string | null | undefined, fallback?: string | null) {
+  const normalized = String(type || '').trim().toLowerCase();
+  const mapped = EVENT_TYPE_LABELS[normalized];
+  if (mapped) return mapped;
+  if (fallback === '邮件已发') return '已发送';
+  return fallback || normalized || '事件';
+}
 
 export default function Overview() {
   const creators = useCreators({ limit: 10 });
@@ -54,22 +105,33 @@ export default function Overview() {
     : trendByDay(creatorList as any, 30).map((d) => ({ date: d.date, collected: 0, processed: d.count, recommended: 0, sent: 0, partnered: 0 }));
 
   // 近期事件(从 outreach 取最近的)
-  const recentEvents: RecentEvent[] = outreachList.slice(0, 8).map((o) => {
-    const type = o.action || o.status || '事件';
-    const level: 'good' | 'info' | 'warn' | 'bad' =
-      o.status === 'ad_running' || o.status === 'ad_authorized' ? 'good' :
-      o.status === 'dropped' ? 'bad' :
-      o.status === 'video_published' ? 'warn' : 'info';
+  const platformEvents: RecentEvent[] = (company?.recent_events ?? []).map((event) => ({
+    id: event.id,
+    date: formatDate(event.occurred_at),
+    sortAt: eventTime(event.occurred_at),
+    source: event.source === 'outreach_emails' ? '邮件系统' : '建联事件',
+    type: eventLabel(event.event_type, event.event_label),
+    level: eventLevel(event.event_type),
+    title: event.title || `${event.actor || '-'} 对 ${event.creator || event.creator_id || '-'} ${eventLabel(event.event_type, event.event_label)}`,
+    dept: event.department_code || '全平台',
+  }));
+  const legacyEvents: RecentEvent[] = outreachList.map((o) => {
+    const type = eventLabel(o.status || o.action, o.action || o.status || '事件');
     return {
-      id: o.id,
+      id: `legacy_outreach:${o.id}`,
       date: formatDate(o.event_date || o.created_at),
+      sortAt: eventTime(o.event_date || o.created_at),
+      source: '历史BD',
       type,
-      level,
+      level: eventLevel(o.status || o.action || ''),
       title: o.message ? o.message.slice(0, 30) + (o.message.length > 30 ? '...' : '') :
         `BD ${o.bd_owner || '-'} 对 #${o.creator_id} ${type}`,
       dept: o.store_name || '—',
     };
   });
+  const recentEvents: RecentEvent[] = [...platformEvents, ...legacyEvents]
+    .sort((a, b) => b.sortAt - a.sortAt)
+    .slice(0, 8);
 
   const overviewKpis = [
     { label: '总发现', value: unifiedSummary?.total_discovered ?? 0, icon: Users, bg: '#e0e7ff', fg: '#4f46e5' },
@@ -133,7 +195,7 @@ export default function Overview() {
         <div className="card">
           <div className="px-4 py-3 border-b border-line">
             <h3 className="text-sm font-semibold text-gray-800">最近事件流水</h3>
-            <div className="text-xxs text-muted mt-0.5">数据源:outreach (按 created_at desc)</div>
+            <div className="text-xxs text-muted mt-0.5">数据源：全平台建联事件、邮件系统、历史 BD 流水，按事件时间倒序合并</div>
           </div>
           <DataTable columns={eventColumns} data={recentEvents} rowKey={(r) => r.id} compact />
         </div>
