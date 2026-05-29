@@ -117,7 +117,7 @@ export default function Dashboard() {
   const overview = [
     { label: '待回复', value: overviewCounts.pending_reply || 0 },
     { label: '沟通中', value: overviewCounts.communicating || 0 },
-    { label: '近 7 天新增', value: recent7 },
+    { label: '近 7 天入库', value: recent7 },
     { label: '跟进逾期', value: data?.followups.overdue ?? 0 },
     { label: '今日跟进', value: data?.followups.due_today ?? 0 },
     { label: '已寄样', value: overviewCounts.sample_shipped || 0 },
@@ -259,7 +259,7 @@ export default function Dashboard() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-          <ChartCard title="近 7 天达人新增">
+          <ChartCard title="近 7 天入库新增">
             <EChart option={trendOption} height={240} />
           </ChartCard>
           <ChartCard title="达人阶段分布">
