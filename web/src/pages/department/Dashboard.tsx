@@ -73,7 +73,7 @@ const memberColumns: Column<AnalyticsMemberRow>[] = [
   { key: 'video', header: '视频入库', align: 'right', cell: (r) => <span className="text-xs num">{r.tiktok_video_processed ?? 0}</span> },
   { key: 'bd', header: 'BD入库', align: 'right', cell: (r) => <span className="text-xs num">{r.bd_processed ?? 0}</span> },
   { key: 'recommended', header: '推荐', align: 'right', cell: (r) => <span className="text-xs num">{r.recommended ?? 0}</span> },
-  { key: 'sent', header: '已发送', align: 'right', cell: (r) => <span className="text-xs num">{r.sent ?? 0}</span> },
+  { key: 'total_contacted', header: '总建联', align: 'right', cell: (r) => <span className="text-xs num">{r.total_contacted ?? r.sent ?? 0}</span> },
   { key: 'replied', header: '已回复', align: 'right', cell: (r) => <span className="text-xs num">{r.replied ?? 0}</span> },
   { key: 'sample_shipped', header: '已寄样', align: 'right', cell: (r) => <span className="text-xs num">{r.sample_shipped ?? 0}</span> },
   { key: 'partnered', header: '已合作', align: 'right', cell: (r) => <span className="text-xs num">{r.partnered ?? 0}</span> },
@@ -104,6 +104,8 @@ export default function Dashboard() {
     today_collected: 0,
     today_duplicate_creators: 0,
     total_recommended: 0,
+    total_contacted: 0,
+    today_contacted: 0,
     pending_contact: 0,
     pending_reply: 0,
     communicating: 0,
@@ -114,8 +116,9 @@ export default function Dashboard() {
     ad_running: 0,
   };
   const overviewCounts = Object.fromEntries((data?.stage_rows ?? []).map((row) => [row.key, row.count]));
+  const stageRows = legacyData?.stage_rows?.length ? legacyData.stage_rows : (data?.stage_rows ?? []);
   const analytics = legacyData?.analytics;
-  const sourceCounts = Object.fromEntries((analytics?.source_counts ?? []).map((row) => [row.name, row.count]));
+  const sourceCounts = Object.fromEntries(((legacyData?.processed_source_counts ?? analytics?.source_counts) ?? []).map((row) => [row.name, row.count]));
   const memberRows = analytics?.members?.slice(0, 8) ?? [];
   const trend7 = legacyData?.trend_7d ?? [];
   const recent7 = trend7.reduce((sum, row) => sum + row.count, 0);
@@ -128,11 +131,11 @@ export default function Dashboard() {
   const topRow = [
     { label: '总发现', value: summary.total_discovered, subLabel: '当前达人主队列总量', delta: null as number | null },
     { label: '总采集', value: summary.total_collected, subLabel: '去除队列标记后的采集量', delta: null },
-    { label: '今日发现', value: summary.today_discovered, subLabel: '今天入队总量', delta: null },
+    { label: '今日建联', value: summary.today_contacted ?? 0, subLabel: '今天新发起建联', delta: null },
     { label: '今日采集', value: summary.today_collected, subLabel: '今天新增有效采集', delta: null },
     { label: '今日重复达人', value: summary.today_duplicate_creators, subLabel: '今天重复出现的达人', delta: null },
     { label: '总达人推荐', value: summary.total_recommended, delta: null },
-    { label: '待建联', value: summary.pending_contact, delta: null },
+    { label: '总建联', value: summary.total_contacted ?? 0, delta: null },
   ];
 
   const sourceRow = [
@@ -154,14 +157,14 @@ export default function Dashboard() {
     { label: '广告投放中', value: overviewCounts.ad_running || 0 },
   ];
 
-  const donutData = (data?.stage_rows ?? [])
+  const donutData = stageRows
     .filter((row) => row.count > 0)
     .map((row) => ({
       name: row.name,
       value: row.count,
       color: stageColors[row.key] || '#94a3b8',
     }));
-  const donutTotal = summary.total_discovered;
+  const donutTotal = donutData.reduce((sum, row) => sum + row.value, 0);
 
   const trendOption = {
     grid: { top: 30, right: 16, bottom: 30, left: 36, containLabel: true },

@@ -4,16 +4,36 @@ import { useUiStore } from '@/stores/uiStore';
 import { useMe } from '@/hooks/useApi';
 import { endpoints } from '@/api/endpoints';
 import { useQueryClient } from '@tanstack/react-query';
-import { pageMeta } from './menus';
+import { getPageMeta } from './menus';
+
+const topBarCopy = {
+  zh: {
+    refresh: '刷新',
+    switchLanguage: '切换到 English',
+    switchTheme: '切换主题',
+    openMenu: '打开菜单',
+    logout: '退出',
+    anonymous: '匿名',
+    emptyRole: '--',
+    languageTarget: 'EN',
+  },
+  en: {
+    refresh: 'Refresh',
+    switchLanguage: 'Switch to Chinese',
+    switchTheme: 'Toggle theme',
+    openMenu: 'Open menu',
+    logout: 'Log out',
+    anonymous: 'Anonymous',
+    emptyRole: '--',
+    languageTarget: '中',
+  },
+};
 
 export default function TopBar() {
   const { pathname } = useLocation();
-  const meta = pageMeta[pathname] || (
-    pathname.startsWith('/recommendations/')
-      ? { title: '达人详情', subtitle: '推荐判断、证据复核与邮件建联' }
-      : { title: '页面', subtitle: '' }
-  );
   const { theme, toggleTheme, language, toggleLanguage, openMobileDrawer } = useUiStore();
+  const meta = getPageMeta(pathname, language);
+  const copy = topBarCopy[language];
   const { data: me } = useMe();
   const qc = useQueryClient();
 
@@ -24,18 +44,17 @@ export default function TopBar() {
   };
 
   const user = me?.user;
-  const username = user?.display_name || user?.username || '匿名';
+  const username = user?.display_name || user?.username || copy.anonymous;
 
   return (
     <header
       className="h-14 border-b border-border flex items-center px-3 md:px-5 gap-2 md:gap-4 shrink-0"
       style={{ background: 'rgb(var(--bg-elev-1))' }}
     >
-      {/* Hamburger - 仅移动端 */}
       <button
         onClick={openMobileDrawer}
         className="md:hidden w-9 h-9 rounded flex items-center justify-center text-muted hover:text-text shrink-0"
-        aria-label="打开菜单"
+        aria-label={copy.openMenu}
       >
         <Menu size={18} />
       </button>
@@ -46,19 +65,32 @@ export default function TopBar() {
       </div>
 
       <div className="ml-auto flex items-center gap-1 md:gap-1.5 shrink-0">
-        <button onClick={onRefresh} className="w-8 h-8 rounded flex items-center justify-center text-muted hover:text-text" title="刷新">
+        <button
+          onClick={onRefresh}
+          className="w-8 h-8 rounded flex items-center justify-center text-muted hover:text-text"
+          title={copy.refresh}
+          aria-label={copy.refresh}
+        >
           <RefreshCw size={15} />
         </button>
-        {/* 语言/主题切换 - 仅桌面显示(避免移动端拥挤) */}
-        <button onClick={toggleLanguage} className="hidden md:flex w-8 h-8 rounded items-center justify-center text-muted hover:text-text" title="切换语言">
-          <span className="text-xs font-medium">{language === 'zh' ? '中' : 'EN'}</span>
+        <button
+          onClick={toggleLanguage}
+          className="flex w-8 h-8 rounded items-center justify-center text-muted hover:text-text"
+          title={copy.switchLanguage}
+          aria-label={copy.switchLanguage}
+        >
+          <span className="text-xs font-medium">{copy.languageTarget}</span>
         </button>
-        <button onClick={toggleTheme} className="w-8 h-8 rounded flex items-center justify-center text-muted hover:text-text" title="切换主题">
+        <button
+          onClick={toggleTheme}
+          className="w-8 h-8 rounded flex items-center justify-center text-muted hover:text-text"
+          title={copy.switchTheme}
+          aria-label={copy.switchTheme}
+        >
           {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
         </button>
         <div className="hidden md:block w-px h-6 bg-border mx-1" />
 
-        {/* 用户区:桌面完整,移动端仅头像 + 退出 */}
         <div className="flex items-center gap-2 px-1 md:px-2 py-1 rounded">
           <div
             className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
@@ -68,9 +100,14 @@ export default function TopBar() {
           </div>
           <div className="hidden md:flex flex-col items-start leading-tight">
             <span className="text-xs font-medium">{username}</span>
-            <span className="text-xxs text-muted">{user?.role || '—'}</span>
+            <span className="text-xxs text-muted">{user?.role || copy.emptyRole}</span>
           </div>
-          <button onClick={onLogout} className="w-7 h-7 rounded flex items-center justify-center text-muted hover:text-bad" title="退出">
+          <button
+            onClick={onLogout}
+            className="w-7 h-7 rounded flex items-center justify-center text-muted hover:text-bad"
+            title={copy.logout}
+            aria-label={copy.logout}
+          >
             <LogOut size={14} />
           </button>
         </div>

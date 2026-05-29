@@ -25,6 +25,7 @@ type SortFilter = 'recommended' | 'score' | 'followers' | 'fit' | 'priority' | '
 
 type SelectOption = { value: string; label: string };
 type ActiveFilterBadge = { key: string; label: string; onClear: () => void };
+type CreatorTag = { label: string; tone?: 'shop' | 'good' | 'warn' | 'muted' };
 
 const PAGE_SIZE = 10;
 
@@ -159,9 +160,36 @@ function followers(c: Creator) {
   return c.followers_count ?? c.followers ?? null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function compactText(value: unknown) {
+  const text = String(value ?? '').trim();
+  return text && text !== 'null' && text !== 'undefined' ? text : '';
+}
+
 function numberValue(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function shopValue(c: Creator, ...keys: string[]) {
+  const shop = asRecord(c.tiktok_shop);
+  for (const key of keys) {
+    const value = compactText(shop?.[key] ?? c[key]);
+    if (value) return value;
+  }
+  return '';
+}
+
+function recordSearchValues(value: unknown): string[] {
+  const record = asRecord(value);
+  if (!record) return [];
+  return Object.values(record)
+    .flatMap((item) => Array.isArray(item) ? item : [item])
+    .filter((item) => typeof item === 'string' || typeof item === 'number')
+    .map((item) => String(item));
 }
 
 function creatorDate(c: Creator) {
@@ -226,13 +254,43 @@ function isToday(value?: string | null) {
     && day.getDate() === now.getDate();
 }
 
+function pushTag(tags: CreatorTag[], seen: Set<string>, label: unknown, tone: CreatorTag['tone'] = 'muted') {
+  const text = compactText(label);
+  if (!text || seen.has(text)) return;
+  seen.add(text);
+  tags.push({ label: text, tone });
+}
+
 function tagsFor(c: Creator) {
-  return [
-    c.primary_product_category,
-    c.recommended_product_type,
-    ...(c.category_tags || []),
-    ...(c.positive_tags || []),
-  ].filter(Boolean).slice(0, 4) as string[];
+  const tags: CreatorTag[] = [];
+  const seen = new Set<string>();
+  const gmv = shopValue(c, 'gmv_raw', 'gmv');
+  const gpm = shopValue(c, 'gpm_raw', 'gpm');
+  const commission = shopValue(c, 'avg_commission_rate_raw', 'commission_rate_raw', 'commission_rate');
+  const shopCategory = shopValue(c, 'category_text', 'category', 'primary_category');
+  const detailCapturedAt = shopValue(c, 'detail_captured_at');
+
+  if (sourceKey(c) === 'tiktok_shop' || c.shop_profile_url || asRecord(c.tiktok_shop)) {
+    pushTag(tags, seen, 'TikTok Shop', 'shop');
+  }
+  pushTag(tags, seen, gmv ? `GMV ${gmv}` : '', 'shop');
+  pushTag(tags, seen, gpm ? `GPM ${gpm}` : '', 'shop');
+  pushTag(tags, seen, commission ? `佣金 ${commission}` : '', 'shop');
+  pushTag(tags, seen, shopCategory, 'shop');
+  pushTag(tags, seen, detailCapturedAt ? '详情已采集' : '', 'good');
+  pushTag(tags, seen, c.lead_status, 'warn');
+  pushTag(tags, seen, c.primary_product_category, 'good');
+  pushTag(tags, seen, c.recommended_product_type, 'good');
+  for (const tag of c.category_tags || []) pushTag(tags, seen, tag, 'muted');
+  for (const tag of c.positive_tags || []) pushTag(tags, seen, tag, 'good');
+  return tags.slice(0, 9);
+}
+
+function tagClass(tone: CreatorTag['tone']) {
+  if (tone === 'shop') return 'border-pink-500/20 bg-pink-500/10 text-pink-700';
+  if (tone === 'good') return 'border-emerald-500/20 bg-emerald-500/10 text-good';
+  if (tone === 'warn') return 'border-amber-500/25 bg-amber-500/10 text-amber-700';
+  return 'border-border bg-elev1 text-muted';
 }
 
 function scoreMatches(c: Creator, filter: ScoreFilter) {
@@ -312,6 +370,14 @@ function RecommendationCard({
   const priority = creator.outreach_priority || creator.priority_level || 'P?';
   const status = creator.recommendation_status || creator.current_status || '待处理';
   const source = sourceMeta(creator);
+  const gmv = shopValue(creator, 'gmv_raw', 'gmv');
+  const gpm = shopValue(creator, 'gpm_raw', 'gpm');
+  const commission = shopValue(creator, 'avg_commission_rate_raw', 'commission_rate_raw', 'commission_rate');
+  const shopMetrics = [
+    ['GMV', gmv],
+    ['GPM', gpm],
+    ['佣金', commission],
+  ].filter(([, value]) => Boolean(value));
 
   return (
     <article
@@ -321,9 +387,9 @@ function RecommendationCard({
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') onOpen(creator);
       }}
-      className="card card-body group grid cursor-pointer grid-cols-1 gap-3 transition-all hover:-translate-y-0.5 hover:shadow-lg lg:grid-cols-[minmax(280px,1.2fr)_minmax(320px,1fr)_220px]"
+      className="group grid cursor-pointer grid-cols-1 overflow-hidden rounded-md border border-border bg-elev1 shadow-card transition-all hover:-translate-y-0.5 hover:border-accent/50 hover:shadow-lg xl:grid-cols-[minmax(260px,0.9fr)_minmax(380px,1.35fr)_minmax(250px,0.75fr)_58px]"
     >
-      <div className="flex min-w-0 gap-3">
+      <div className="flex min-w-0 gap-3 p-3">
         <div className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md text-xl font-black text-white shadow-sm" style={{ background: source.color }}>
           <span>{creatorInitial(creator)}</span>
           <span className="absolute inset-x-2 bottom-1 h-1 rounded-full bg-white/25" />
@@ -356,7 +422,7 @@ function RecommendationCard({
         </div>
       </div>
 
-      <div className="min-w-0">
+      <div className="min-w-0 border-y border-border/70 p-3 xl:border-x xl:border-y-0">
         <div className="flex flex-wrap items-center gap-2">
           <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ color: tone.fg, background: tone.bg }}>
             <Star size={12} /> {tone.label}
@@ -368,50 +434,82 @@ function RecommendationCard({
         </p>
         <div className="mt-2 flex flex-wrap gap-1.5">
           {tags.length > 0 ? tags.map((tag) => (
-            <span key={tag} className="rounded-full border border-border bg-elev1 px-2 py-0.5 text-[11px] text-muted">{tag}</span>
+            <span key={tag.label} className={`rounded-full border px-2 py-0.5 text-[11px] ${tagClass(tag.tone)}`}>{tag.label}</span>
           )) : (
             <span className="text-[11px] text-muted">暂无标签</span>
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-[76px_1fr]">
-        <div className="rounded-md border border-border bg-elev2 p-2">
-          <div className="text-[11px] text-muted">评分</div>
-          <div className="mt-1 font-mono text-2xl font-black leading-none">{Math.round(creator.recommendation_score ?? 0)}</div>
+      <div className="grid gap-2 p-3">
+        <div className="grid grid-cols-3 gap-2">
+          <div className="rounded-md border border-border bg-elev2 p-2">
+            <div className="text-[11px] text-muted">评分</div>
+            <div className="mt-1 font-mono text-xl font-black leading-none">{Math.round(creator.recommendation_score ?? 0)}</div>
+          </div>
+          <div className="rounded-md border border-border bg-elev2 p-2">
+            <div className="text-[11px] text-muted">粉丝</div>
+            <div className="mt-1 text-sm font-black">{formatCompact(followers(creator))}</div>
+          </div>
+          <div className="rounded-md border border-border bg-elev2 p-2">
+            <div className="text-[11px] text-muted">匹配</div>
+            <div className="mt-1 text-sm font-black">{creator.primary_product_fit_score ?? '-'}</div>
+          </div>
         </div>
-        <div className="rounded-md border border-border bg-elev2 p-2">
-          <div className="text-[11px] text-muted">粉丝 / 联系</div>
-          <div className="mt-1 text-sm font-black">{formatCompact(followers(creator))}</div>
-          <div className="mt-0.5 truncate text-[11px] text-muted">{creator.email ? maskEmail(creator.email) : '暂无邮箱'}</div>
+        <div className="min-w-0 rounded-md border border-border bg-elev2 px-2 py-1.5">
+          <div className="truncate text-[11px] text-muted">{creator.email ? maskEmail(creator.email) : '暂无邮箱'}</div>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {shopMetrics.length > 0 ? shopMetrics.map(([label, value]) => (
+              <span key={label} className="rounded-full bg-pink-500/10 px-2 py-0.5 text-[10px] font-semibold text-pink-700">
+                {label} {value}
+              </span>
+            )) : (
+              <span className="text-[11px] text-muted">暂无 Shop 指标</span>
+            )}
+          </div>
         </div>
-        <div className="col-span-2 flex items-center justify-end gap-2">
-          {creator.profile_url && (
-            <a
-              href={creator.profile_url}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(event) => event.stopPropagation()}
-              className="btn btn-ghost !h-8 !px-2.5 text-xs"
-            >
-              <ExternalLink size={13} /> 主页
-            </a>
-          )}
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onMail(creator);
-            }}
-            disabled={mailPending}
-            className="btn btn-primary !h-8 !px-3 text-xs disabled:opacity-60"
+      </div>
+
+      <div className="flex items-center justify-end gap-2 border-t border-border/70 bg-elev2/45 p-3 xl:flex-col xl:border-l xl:border-t-0 xl:p-2">
+        {creator.profile_url && (
+          <a
+            href={creator.profile_url}
+            target="_blank"
+            rel="noreferrer"
+            title="达人主页"
+            onClick={(event) => event.stopPropagation()}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-elev1 text-muted transition-colors hover:border-accent hover:text-accent"
           >
-            <Mail size={13} /> {mailPending ? '占用中' : '邮件建联'}
-          </button>
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-elev2 text-accent transition-transform group-hover:translate-x-0.5">
-            <ArrowRight size={15} />
-          </span>
-        </div>
+            <ExternalLink size={14} />
+          </a>
+        )}
+        {creator.shop_profile_url && (
+          <a
+            href={creator.shop_profile_url}
+            target="_blank"
+            rel="noreferrer"
+            title="Shop 详情"
+            onClick={(event) => event.stopPropagation()}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-elev1 text-muted transition-colors hover:border-accent hover:text-accent"
+          >
+            <Tag size={14} />
+          </a>
+        )}
+        <button
+          type="button"
+          title="邮件建联"
+          onClick={(event) => {
+            event.stopPropagation();
+            onMail(creator);
+          }}
+          disabled={mailPending}
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent bg-accent text-white transition-transform hover:scale-[1.02] disabled:opacity-60"
+        >
+          <Mail size={14} />
+        </button>
+        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-elev1 text-accent transition-transform group-hover:translate-x-0.5">
+          <ArrowRight size={15} />
+        </span>
       </div>
     </article>
   );
@@ -434,6 +532,7 @@ export default function Recommendations() {
   const [collabFilter, setCollabFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [sort, setSort] = useState<SortFilter>('recommended');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [drawerCreator, setDrawerCreator] = useState<Creator | null>(null);
   const [drawerLock, setDrawerLock] = useState<CreatorOutreachLock | null>(null);
   const [lockingCreatorId, setLockingCreatorId] = useState<string | null>(null);
@@ -513,6 +612,9 @@ export default function Recommendations() {
         creator.recommended_collab_type,
         creator.source_label,
         creator.source,
+        creator.shop_profile_url,
+        creator.lead_status,
+        creator.followers_raw,
         creator.country,
         creator.language,
         creator.tier,
@@ -524,6 +626,7 @@ export default function Recommendations() {
         ...(creator.positive_tags || []),
         ...(creator.matched_keywords || []),
         ...(creator.contact_types || []),
+        ...recordSearchValues(creator.tiktok_shop),
       ].filter(Boolean).join(' ').toLowerCase();
       if (text && !hay.includes(text)) return false;
       if (source !== 'all' && sourceKey(creator) !== source) return false;
@@ -631,19 +734,19 @@ export default function Recommendations() {
 
   return (
     <div className="space-y-4">
-      <div className="card overflow-hidden">
-        <div className="grid gap-4 p-4 lg:grid-cols-[minmax(320px,1fr)_auto]">
-          <div>
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <span className="chip text-xxs">
-                <Sparkles size={12} /> 达人库
+      <div className="overflow-hidden rounded-md border border-border bg-elev1 shadow-card">
+        <div className="grid gap-3 border-b border-border p-3 xl:grid-cols-[220px_minmax(0,1fr)]">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="chip text-xxs"><Sparkles size={12} /> 达人库</span>
+              <span className="rounded-full bg-accent/10 px-2 py-1 text-[11px] font-semibold text-accent">
+                {filtered.length} / {formatCompact(endpointAllTotal)}
               </span>
-              <span className="chip text-xxs">推荐池和达人信息已合并</span>
             </div>
-            <h2 className="text-xl font-semibold leading-tight text-text">达人库</h2>
-            <div className="mt-2 text-xs text-muted">当前来源：{activeSourceLabel}</div>
+            <h2 className="mt-2 text-lg font-black leading-tight text-text">推荐达人作战台</h2>
+            <div className="mt-1 text-xs text-muted">当前来源：{activeSourceLabel}</div>
           </div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:min-w-[660px] lg:grid-cols-6">
+          <div className="grid grid-cols-3 gap-2 md:grid-cols-6">
             {[
               { label: '全部达人', value: formatCompact(allTotal), icon: Users },
               { label: '推荐池', value: formatCompact(recommendedTotal), icon: Sparkles },
@@ -654,116 +757,94 @@ export default function Recommendations() {
             ].map((kpi) => {
               const Icon = kpi.icon;
               return (
-                <div key={kpi.label} className="rounded-md border border-border bg-elev2 p-3">
-                  <div className="flex items-center gap-1.5 text-[11px] text-muted"><Icon size={12} />{kpi.label}</div>
-                  <div className="mt-2 font-mono text-xl font-semibold text-text">{kpi.value}</div>
+                <div key={kpi.label} className="rounded-md border border-border bg-elev2/70 px-3 py-2">
+                  <div className="flex items-center gap-1.5 text-[10px] text-muted"><Icon size={11} />{kpi.label}</div>
+                  <div className="mt-1 font-mono text-base font-black text-text">{kpi.value}</div>
                 </div>
               );
             })}
           </div>
         </div>
 
-        <div className="border-t border-border">
-          <div className="grid gap-3 p-3 xl:grid-cols-[minmax(420px,1.05fr)_minmax(360px,0.95fr)]">
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2 text-xs font-semibold text-text">
-                  <SlidersHorizontal size={14} className="text-accent" />
-                  <span>筛选工作台</span>
-                  <span className="rounded-full bg-elev2 px-2 py-0.5 text-[11px] font-medium text-muted">
-                    {filtered.length} / {formatCompact(items.length)}
-                  </span>
-                  {activeFilterCount > 0 && (
-                    <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold text-accent">
-                      {activeFilterCount} 项启用
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <a href="/api/local/export/recommended-creators.csv" className="btn btn-ghost !h-8 text-xs">
-                    <Download size={13} /> 导出 CSV
-                  </a>
-                  <button type="button" onClick={resetFilters} className="btn btn-ghost !h-8 text-xs">
-                    <RotateCcw size={13} /> 重置
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid gap-2 lg:grid-cols-[minmax(300px,1fr)_minmax(280px,0.85fr)]">
-                <div className="min-w-0 rounded-md border border-border bg-elev2/70 p-1">
-                  <div className="flex max-w-full gap-1 overflow-x-auto">
-                    {SOURCE_FILTERS.map((item) => {
-                      const meta = item.key === 'all' ? null : SOURCE_META[item.key];
-                      return (
-                        <SegmentedButton
-                          key={item.key}
-                          active={source === item.key}
-                          onClick={() => setSource(item.key)}
-                          accent={meta?.color || 'rgb(var(--accent))'}
-                        >
-                          {meta && <span className="h-1.5 w-1.5 rounded-full bg-current opacity-90" />}
-                          {item.label}
-                        </SegmentedButton>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="flex h-10 min-w-0 items-center gap-2 rounded-md border border-border bg-elev1 px-3 shadow-sm focus-within:border-accent">
-                  <Search size={15} className="shrink-0 text-muted" />
-                  <input
-                    value={q}
-                    onChange={(event) => setQ(event.target.value)}
-                    placeholder="搜索 handle / 邮箱 / 商品 / 推荐理由"
-                    className="min-w-0 flex-1 bg-transparent text-xs text-text outline-none placeholder:text-muted"
-                  />
-                  {q.trim() && (
-                    <button type="button" onClick={() => setQ('')} className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-elev2 hover:text-text">
-                      <X size={13} />
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className="grid gap-2 md:grid-cols-2">
-                <div className="rounded-md border border-border bg-elev2/50 p-2">
-                  <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-muted">
-                    <Star size={12} /> 优先级
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {PRIORITY_FILTERS.map((item) => (
-                      <SegmentedButton key={item.key} active={priority === item.key} onClick={() => setPriority(item.key)}>
-                        {item.label}
-                      </SegmentedButton>
-                    ))}
-                  </div>
-                </div>
-                <div className="rounded-md border border-border bg-elev2/50 p-2">
-                  <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-muted">
-                    <Mail size={12} /> 联系方式
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {CONTACT_FILTERS.map((item) => (
-                      <SegmentedButton key={item.key} active={contact === item.key} onClick={() => setContact(item.key)}>
-                        {item.key === 'contactable' && <CheckCircle2 size={12} />}
-                        {item.label}
-                      </SegmentedButton>
-                    ))}
-                  </div>
-                </div>
+        <div className="p-3">
+          <div className="grid gap-2 xl:grid-cols-[minmax(420px,0.95fr)_minmax(300px,1fr)_auto]">
+            <div className="min-w-0 rounded-md border border-border bg-elev2/70 p-1">
+              <div className="flex max-w-full gap-1 overflow-x-auto">
+                {SOURCE_FILTERS.map((item) => {
+                  const meta = item.key === 'all' ? null : SOURCE_META[item.key];
+                  return (
+                    <SegmentedButton
+                      key={item.key}
+                      active={source === item.key}
+                      onClick={() => setSource(item.key)}
+                      accent={meta?.color || 'rgb(var(--accent))'}
+                    >
+                      {meta && <span className="h-1.5 w-1.5 rounded-full bg-current opacity-90" />}
+                      {item.label}
+                    </SegmentedButton>
+                  );
+                })}
               </div>
             </div>
 
-            <div className="space-y-3 rounded-md border border-border bg-elev2/40 p-3">
-              <div className="flex items-center justify-between gap-2">
+            <div className="flex h-10 min-w-0 items-center gap-2 rounded-md border border-border bg-elev1 px-3 shadow-sm focus-within:border-accent">
+              <Search size={15} className="shrink-0 text-muted" />
+              <input
+                value={q}
+                onChange={(event) => setQ(event.target.value)}
+                placeholder="搜索 handle / 邮箱 / 商品 / 推荐理由"
+                className="min-w-0 flex-1 bg-transparent text-xs text-text outline-none placeholder:text-muted"
+              />
+              {q.trim() && (
+                <button type="button" onClick={() => setQ('')} className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-elev2 hover:text-text">
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button type="button" onClick={() => setShowAdvanced((value) => !value)} className="btn !h-10 shrink-0 text-xs">
+                <Filter size={13} /> 高级筛选
+                {activeFilterCount > 0 && <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] text-white">{activeFilterCount}</span>}
+              </button>
+              <a href="/api/local/export/recommended-creators.csv" className="btn btn-ghost !h-10 shrink-0 text-xs" title="导出 CSV">
+                <Download size={13} /> 导出
+              </a>
+              <button type="button" onClick={resetFilters} className="btn btn-ghost !h-10 shrink-0 text-xs" title="重置筛选">
+                <RotateCcw size={13} /> 重置
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-2 grid gap-2 md:grid-cols-[minmax(260px,0.7fr)_minmax(320px,1fr)]">
+            <div className="flex flex-wrap items-center gap-1 rounded-md border border-border bg-elev2/45 p-1">
+              {PRIORITY_FILTERS.map((item) => (
+                <SegmentedButton key={item.key} active={priority === item.key} onClick={() => setPriority(item.key)}>
+                  {item.label}
+                </SegmentedButton>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-1 rounded-md border border-border bg-elev2/45 p-1">
+              {CONTACT_FILTERS.map((item) => (
+                <SegmentedButton key={item.key} active={contact === item.key} onClick={() => setContact(item.key)}>
+                  {item.key === 'contactable' && <CheckCircle2 size={12} />}
+                  {item.label}
+                </SegmentedButton>
+              ))}
+            </div>
+          </div>
+
+          {showAdvanced && (
+            <div className="mt-3 rounded-md border border-border bg-elev2/40 p-3">
+              <div className="mb-3 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-xs font-semibold text-text">
-                  <Filter size={14} className="text-muted" />
+                  <SlidersHorizontal size={14} className="text-accent" />
                   <span>高级条件</span>
-                </div>
+              </div>
                 <span className="text-[11px] text-muted">当前来源: {activeSourceLabel}</span>
               </div>
 
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
                 <FilterField label="评分" icon={<Star size={12} />}>
                   <select value={scoreFilter} onChange={(event) => setScoreFilter(event.target.value as ScoreFilter)} className={filterControlClass}>
                     {SCORE_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
@@ -808,19 +889,19 @@ export default function Recommendations() {
                     {DATE_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
                   </select>
                 </FilterField>
-                <FilterField label="排序" icon={<SlidersHorizontal size={12} />} className="md:col-span-2">
+                <FilterField label="排序" icon={<SlidersHorizontal size={12} />} className="xl:col-span-2">
                   <select value={sort} onChange={(event) => setSort(event.target.value as SortFilter)} className={filterControlClass}>
                     {SORT_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
                   </select>
                 </FilterField>
               </div>
             </div>
-          </div>
+          )}
 
-          <div className="flex min-h-11 flex-wrap items-center gap-2 border-t border-border bg-elev2/30 px-3 py-2">
+          <div className="mt-3 flex min-h-9 flex-wrap items-center gap-2 border-t border-border pt-2">
             <span className="text-[11px] font-semibold text-muted">已启用</span>
             {activeFilterBadges.length === 0 ? (
-              <span className="rounded-full bg-elev1 px-2 py-1 text-[11px] text-muted">无额外条件</span>
+              <span className="rounded-full bg-elev2 px-2 py-1 text-[11px] text-muted">无额外条件</span>
             ) : activeFilterBadges.map((item) => (
               <button
                 key={item.key}

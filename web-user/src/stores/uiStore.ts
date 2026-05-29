@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { applyDocumentLanguage, normalizeLanguage, type Language } from '@/lib/i18n';
 
 type Theme = 'dark' | 'light';
 
@@ -11,7 +12,7 @@ interface UiState {
   closeMobileDrawer: () => void;
   theme: Theme;
   toggleTheme: () => void;
-  language: 'zh' | 'en';
+  language: Language;
   toggleLanguage: () => void;
 }
 
@@ -22,6 +23,16 @@ function initialTheme(): Theme {
   }
   return 'dark';
 }
+
+function initialLanguage(): Language {
+  if (typeof localStorage !== 'undefined') {
+    return normalizeLanguage(localStorage.getItem('x9_ui_language'));
+  }
+  return 'zh';
+}
+
+const bootLanguage = initialLanguage();
+applyDocumentLanguage(bootLanguage);
 
 export const useUiStore = create<UiState>((set) => ({
   sidebarCollapsed: false,
@@ -37,11 +48,12 @@ export const useUiStore = create<UiState>((set) => ({
       document.documentElement.setAttribute('data-theme', next);
       return { theme: next };
     }),
-  language: (typeof localStorage !== 'undefined' && (localStorage.getItem('x9_ui_language') as 'zh' | 'en')) || 'zh',
+  language: bootLanguage,
   toggleLanguage: () =>
     set((s) => {
-      const next: 'zh' | 'en' = s.language === 'zh' ? 'en' : 'zh';
+      const next: Language = s.language === 'zh' ? 'en' : 'zh';
       localStorage.setItem('x9_ui_language', next);
+      applyDocumentLanguage(next);
       return { language: next };
     }),
 }));

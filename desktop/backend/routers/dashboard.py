@@ -979,6 +979,7 @@ def department_summary(request: Request, _user: dict = Depends(current_user)) ->
         business = _build_summary(department_code)
         business["source_counts"] = processed.get("source_counts", business.get("source_counts", []))
         business["processed_source_counts"] = processed.get("source_counts", [])
+        business["trend_7d"] = processed.get("trend_7d", business.get("trend_7d", []))
         business["analytics"] = processed.get("analytics")
         return business
 

@@ -223,8 +223,7 @@ async def require_dashboard_login(request, call_next):
             if not allowed:
                 return RedirectResponse(url=_home_for_user(user), status_code=303)
     if (
-        (path == "/portal" or path.startswith("/portal/"))
-        and not path.startswith("/portal/assets/")
+        path in {"/portal", "/portal/"}
         and user
         and user.get("role") in {"super_admin", "company_admin", "department_admin"}
     ):

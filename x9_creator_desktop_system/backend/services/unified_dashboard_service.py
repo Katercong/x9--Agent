@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session
 
+from ..models.bd_monthly_stat import BdMonthlyStat
 from ..models.creator import Creator
 from ..models.creator_outreach_event import CreatorOutreachEvent
 from ..models.followup_task import FollowupTask
@@ -35,6 +36,8 @@ SUMMARY_KEYS = (
     "today_collected",
     "today_duplicate_creators",
     "total_recommended",
+    "total_contacted",
+    "today_contacted",
     "pending_contact",
     "pending_reply",
     "communicating",
@@ -58,10 +61,19 @@ STAGE_ORDER = (
     "ad_running",
 )
 STAGE_RANK = {stage: index for index, stage in enumerate(STAGE_ORDER)}
+CONTACTED_STAGES = {
+    "pending_reply",
+    "communicating",
+    "sample_shipped",
+    "sample_delivered",
+    "video_published",
+    "ad_authorized",
+    "ad_running",
+}
 STAGE_LABELS = {
     "discovered": "\u53d1\u73b0",
     "recommended": "\u63a8\u8350",
-    "pending_contact": "\u5f85\u5efa\u8054",
+    "pending_contact": "\u603b\u5efa\u8054",
     "pending_reply": "\u5f85\u56de\u590d",
     "communicating": "\u6c9f\u901a\u4e2d",
     "sample_shipped": "\u5df2\u5bc4\u6837",
@@ -101,6 +113,11 @@ EVENT_STAGE_ALIASES = {
     "ad_running": "ad_running",
     "ad_started": "ad_running",
     "running": "ad_running",
+}
+CONTACT_EVENT_TYPES = {
+    event_type
+    for event_type, stage in EVENT_STAGE_ALIASES.items()
+    if stage in CONTACTED_STAGES
 }
 
 STATUS_STAGE_ALIASES = {
@@ -176,8 +193,10 @@ def build_unified_dashboard(
     total_collected = _raw_observation_count(db, dept, exclude_queue=True)
     total_discovered = _total_discovered_count(db, dept)
     today_discovered = _raw_observation_count(db, dept, start=today_start, end=tomorrow_start)
+    today_contacted = _today_contacted_count(db, dept, creator_ids, start=today_start, end=tomorrow_start)
     today_collected = _raw_observation_count(db, dept, start=today_start, end=tomorrow_start, exclude_queue=True)
     today_duplicate_creators = _today_duplicate_creator_count(db, dept, local_today)
+    bd_history_contacted = _bd_history_contacted_count(db, dept)
     summary = {
         "total_discovered": total_discovered,
         "total_collected": total_collected,
@@ -185,6 +204,8 @@ def build_unified_dashboard(
         "today_collected": today_collected,
         "today_duplicate_creators": today_duplicate_creators,
         "total_recommended": total_recommended,
+        "total_contacted": _total_contacted_count(stage_counts) + bd_history_contacted,
+        "today_contacted": today_contacted,
         "pending_contact": stage_counts.get("pending_contact", 0),
         "pending_reply": stage_counts.get("pending_reply", 0),
         "communicating": stage_counts.get("communicating", 0),
@@ -278,6 +299,89 @@ def _sent_email_creator_ids(db: Session, department_code: str | None, creator_id
     if where_department is not None:
         stmt = stmt.where(where_department)
     return {str(row[0]) for row in db.execute(stmt).all() if str(row[0]) in creator_ids}
+
+
+def _total_contacted_count(stage_counts: Counter[str]) -> int:
+    return int(sum(stage_counts.get(stage, 0) for stage in CONTACTED_STAGES))
+
+
+def _bd_history_contacted_count(db: Session, department_code: str | None) -> int:
+    inspector = inspect(db.bind)
+    if "bd_monthly_stats" not in inspector.get_table_names():
+        return 0
+    stmt = select(func.coalesce(func.sum(BdMonthlyStat.contacted), 0))
+    where_department = department_where(BdMonthlyStat, department_code)
+    if where_department is not None:
+        stmt = stmt.where(where_department)
+    return int(db.scalar(stmt) or 0)
+
+
+def _today_contacted_count(
+    db: Session,
+    department_code: str | None,
+    creator_ids: set[str],
+    *,
+    start: datetime,
+    end: datetime,
+) -> int:
+    if not creator_ids:
+        return 0
+
+    contacted_creator_ids: set[str] = set()
+
+    email_date = "DATE(COALESCE(NULLIF(CAST(sent_at AS TEXT), ''), NULLIF(CAST(created_at AS TEXT), '')))"
+    email_clauses = [
+        "status = :email_status",
+        f"{email_date} >= :start_date",
+        f"{email_date} < :end_date",
+    ]
+    params: dict[str, Any] = {
+        "email_status": "sent",
+        "start_date": start.date().isoformat(),
+        "end_date": end.date().isoformat(),
+    }
+    if department_code:
+        params["department_code"] = department_code
+        if department_code == DEFAULT_DEPARTMENT:
+            email_clauses.append("(department_code = :department_code OR department_code IS NULL OR department_code = '')")
+        else:
+            email_clauses.append("department_code = :department_code")
+    email_sql = "SELECT creator_id FROM outreach_emails WHERE " + " AND ".join(email_clauses)
+    contacted_creator_ids.update(
+        str(row[0])
+        for row in db.execute(text(email_sql), params).all()
+        if str(row[0]) in creator_ids
+    )
+
+    event_params: dict[str, Any] = {
+        "start_date": start.date().isoformat(),
+        "end_date": end.date().isoformat(),
+    }
+    event_placeholders = []
+    for index, event_type in enumerate(sorted(CONTACT_EVENT_TYPES)):
+        key = f"event_type_{index}"
+        event_params[key] = event_type
+        event_placeholders.append(f":{key}")
+    event_date = "DATE(NULLIF(CAST(event_at AS TEXT), ''))"
+    event_clauses = [
+        f"event_type IN ({', '.join(event_placeholders)})",
+        f"{event_date} >= :start_date",
+        f"{event_date} < :end_date",
+    ]
+    if department_code:
+        event_params["department_code"] = department_code
+        if department_code == DEFAULT_DEPARTMENT:
+            event_clauses.append("(department_code = :department_code OR department_code IS NULL OR department_code = '')")
+        else:
+            event_clauses.append("department_code = :department_code")
+    event_sql = "SELECT creator_id FROM creator_outreach_events WHERE " + " AND ".join(event_clauses)
+    contacted_creator_ids.update(
+        str(row[0])
+        for row in db.execute(text(event_sql), event_params).all()
+        if str(row[0]) in creator_ids
+    )
+
+    return len(contacted_creator_ids)
 
 
 def _raw_observation_count(

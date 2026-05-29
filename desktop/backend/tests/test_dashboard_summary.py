@@ -17,6 +17,17 @@ def _summary(client) -> dict:
     return response.json()["summary"]
 
 
+def _dashboard(client) -> dict:
+    response = client.get("/api/local/dashboard/department-summary")
+    assert response.status_code == 200
+    return response.json()
+
+
+def _today_trend(payload: dict) -> dict:
+    today = datetime.now().date().isoformat()
+    return next(row for row in payload["analytics"]["trend"] if row["date"] == today)
+
+
 def test_business_summary_counts_cumulative_creator_rows(client):
     before = _summary(client)
     marker = datetime.now().strftime("%Y%m%d%H%M%S%f")
@@ -107,3 +118,42 @@ def test_business_summary_migrates_bd_history_without_faking_creators(client):
     assert after["business_with_bd_history_total"] == before.get("business_with_bd_history_total", before["total_creators"]) + 7
     assert after["bd_history_contacted"] == before.get("bd_history_contacted", 0) + 7
     assert after["bd_history_confirmed"] == before.get("bd_history_confirmed", 0) + 3
+
+    payload = _dashboard(client)
+    member = next(row for row in payload["analytics"]["members"] if row["member"] == f"BD Dashboard {marker}")
+    assert member["total_contacted"] == 7
+    assert member["bd_history_contacted"] == 7
+    assert member["bd_history_confirmed"] == 3
+
+
+def test_company_analytics_trend_includes_total_collected_excluding_queue(client):
+    before = _dashboard(client)
+    marker = datetime.now().strftime("%Y%m%d%H%M%S%f")
+
+    with SessionLocal() as session:
+        session.add_all([
+            RawObservation(
+                id=f"obs_dashboard_collected_{marker}",
+                platform="tiktok_shop",
+                department_code="cross_border",
+                source="test",
+                raw_json=json.dumps({"marker": marker, "kind": "collected"}),
+                content_hash=f"hash_dashboard_collected_{marker}",
+                lead_status="processed",
+                collected_at=datetime.now(),
+            ),
+            RawObservation(
+                id=f"obs_dashboard_queue_{marker}",
+                platform="tiktok_shop",
+                department_code="cross_border",
+                source="test",
+                raw_json=json.dumps({"marker": marker, "kind": "queue"}),
+                content_hash=f"hash_dashboard_queue_{marker}",
+                lead_status="shop_list_seen",
+                collected_at=datetime.now(),
+            ),
+        ])
+        session.commit()
+
+    after = _dashboard(client)
+    assert _today_trend(after)["collected"] == _today_trend(before).get("collected", 0) + 1

@@ -12,11 +12,12 @@ import { useAcquireOutreachLock, useClaimCreator, useCreator, useReleaseCreator 
 import { formatCompact, maskEmail, shortRelative } from '@/lib/format';
 import type { Creator, CreatorOutreachLock } from '@/api/types';
 
-type TabKey = 'overview' | 'evidence' | 'risk' | 'history';
+type TabKey = 'overview' | 'shop' | 'evidence' | 'risk' | 'history';
 type Tone = 'good' | 'warn' | 'muted';
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'overview', label: '推荐判断' },
+  { key: 'shop', label: 'Shop 数据' },
   { key: 'evidence', label: '证据来源' },
   { key: 'risk', label: '风险复核' },
   { key: 'history', label: '外联历史' },
@@ -36,6 +37,61 @@ function listify(value: unknown): string[] {
     return trimmed.split(/[,\n]/).map((item) => item.trim()).filter(Boolean);
   }
   return [];
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function compactText(value: unknown) {
+  const text = String(value ?? '').trim();
+  return text && text !== 'null' && text !== 'undefined' ? text : '';
+}
+
+function hasValue(value: unknown) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return compactText(value).length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0;
+  return true;
+}
+
+function displayValue(value: unknown): string {
+  if (!hasValue(value)) return '—';
+  if (Array.isArray(value)) return value.map((item) => displayValue(item)).filter((item) => item !== '—').join(' / ');
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function shopValue(creator: Creator, ...keys: string[]) {
+  const shop = asRecord(creator.tiktok_shop) || {};
+  for (const key of keys) {
+    const value = shop[key] ?? creator[key];
+    if (hasValue(value)) return value;
+  }
+  return null;
+}
+
+function scalarEntries(value: unknown, limit = 24): Array<[string, unknown]> {
+  const record = asRecord(value);
+  if (!record) return [];
+  return Object.entries(record)
+    .filter(([, item]) => hasValue(item) && (typeof item !== 'object' || Array.isArray(item)))
+    .slice(0, limit);
+}
+
+function nestedEntries(value: unknown, limit = 8): Array<[string, Record<string, unknown>]> {
+  const record = asRecord(value);
+  if (!record) return [];
+  return Object.entries(record)
+    .filter(([, item]) => asRecord(item))
+    .map(([key, item]) => [key, asRecord(item)!] as [string, Record<string, unknown>])
+    .slice(0, limit);
+}
+
+function metricValue(creator: Creator, ...keys: string[]) {
+  const value = shopValue(creator, ...keys);
+  return hasValue(value) ? displayValue(value) : null;
 }
 
 function creatorName(c?: Creator | null) {
@@ -118,6 +174,108 @@ function ScoreBar({ label, value, tone = 'info' }: { label: string; value?: numb
       <div className="mt-2 h-1.5 overflow-hidden rounded-pill" style={{ background: 'rgb(var(--bg-elev-1))' }}>
         <div className="h-full rounded-pill" style={{ width: `${pct}%`, background: fill }} />
       </div>
+    </div>
+  );
+}
+
+function KeyValueList({ rows }: { rows: Array<[string, unknown]> }) {
+  if (rows.length === 0) return <span>暂无数据</span>;
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {rows.map(([label, value]) => (
+        <div key={label} className="rounded-md border border-border p-2.5" style={{ background: 'rgb(var(--bg-elev-1))' }}>
+          <div className="text-xxs text-muted">{label}</div>
+          <div className="mt-1 break-words text-xs font-medium text-text">{displayValue(value)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ShopDataPanel({ creator }: { creator: Creator }) {
+  const shop = asRecord(creator.tiktok_shop);
+  const hasShopData = Boolean(shop && Object.keys(shop).length > 0) || Boolean(creator.shop_profile_url);
+  const metricRows = [
+    ['GMV', metricValue(creator, 'gmv_raw', 'gmv'), true],
+    ['GPM', metricValue(creator, 'gpm_raw', 'gpm'), true],
+    ['平均佣金', metricValue(creator, 'avg_commission_rate_raw', 'commission_rate_raw', 'commission_rate'), false],
+    ['Shop 粉丝', metricValue(creator, 'followers_raw', 'shop_followers_raw'), false],
+    ['销售件数', metricValue(creator, 'items_sold_raw', 'items_sold'), false],
+    ['商品数', metricValue(creator, 'products_raw', 'product_count'), false],
+    ['合作品牌', metricValue(creator, 'brand_collaborations_raw', 'brand_collaborations'), false],
+    ['品类', metricValue(creator, 'category_text', 'category', 'primary_category'), false],
+    ['平均播放', metricValue(creator, 'avg_video_views_raw', 'avg_video_views'), false],
+    ['互动率', metricValue(creator, 'avg_video_engagement_rate_raw', 'avg_video_engagement_rate'), false],
+    ['PPS 分', metricValue(creator, 'pps_score_raw', 'pps_score'), false],
+    ['样品分', metricValue(creator, 'sample_score_raw', 'sample_score'), false],
+  ].filter(([, value]) => Boolean(value)) as Array<[string, string, boolean]>;
+  const signalLines = listify(shop?.detail_signal_lines);
+  const detailSections = asRecord(shop?.detail_sections) || asRecord(shop?.sections);
+  const nestedSections = nestedEntries(detailSections);
+  const detailExcerpt = compactText(shop?.detail_text_excerpt || shop?.detail_text || shop?.description);
+  const scalarRows = scalarEntries(shop).filter(([key]) => !key.includes('raw_html') && !key.includes('json'));
+
+  if (!hasShopData) {
+    return (
+      <InfoBlock title="TikTok Shop 数据">
+        暂无 TikTok Shop 明细。列表数据可能来自普通达人采集或表格导入，后续采集详情后会在这里显示 GMV、GPM、佣金、商品、品牌合作和画像字段。
+      </InfoBlock>
+    );
+  }
+
+  return (
+    <div className="grid gap-3">
+      <InfoBlock title="Shop 档案">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Pill tone="info">{creator.source_label || creator.source || 'TikTok Shop'}</Pill>
+          {creator.lead_status && <Pill tone="warn">{creator.lead_status}</Pill>}
+          {hasValue(shop?.detail_captured_at) && <Pill tone="good">详情采集 {displayValue(shop?.detail_captured_at)}</Pill>}
+          {hasValue(shop?.detail_links_count) && <Pill>链接 {displayValue(shop?.detail_links_count)}</Pill>}
+          {creator.shop_profile_url && (
+            <a href={creator.shop_profile_url} target="_blank" rel="noreferrer" className="btn btn-ghost !h-7 !px-2 text-xs">
+              <ExternalLink size={13} /> 打开 Shop 详情
+            </a>
+          )}
+        </div>
+      </InfoBlock>
+
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        {metricRows.length > 0 ? metricRows.map(([label, value, accent]) => (
+          <Metric key={label} label={label} value={value} accent={accent} />
+        )) : (
+          <div className="col-span-full text-xs text-muted">暂无核心指标。</div>
+        )}
+      </div>
+
+      {signalLines.length > 0 && (
+        <InfoBlock title="详情信号">
+          <div className="flex flex-wrap gap-1.5">
+            {signalLines.map((line) => <Pill key={line} tone="info">{line}</Pill>)}
+          </div>
+        </InfoBlock>
+      )}
+
+      {detailExcerpt && (
+        <InfoBlock title="详情摘录">
+          <div className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-border p-3 text-xs text-text" style={{ background: 'rgb(var(--bg-elev-1))' }}>
+            {detailExcerpt}
+          </div>
+        </InfoBlock>
+      )}
+
+      {nestedSections.length > 0 && (
+        <div className="grid gap-3 lg:grid-cols-2">
+          {nestedSections.map(([title, value]) => (
+            <InfoBlock key={title} title={title}>
+              <KeyValueList rows={scalarEntries(value, 10)} />
+            </InfoBlock>
+          ))}
+        </div>
+      )}
+
+      <InfoBlock title="全部可用字段">
+        <KeyValueList rows={scalarRows} />
+      </InfoBlock>
     </div>
   );
 }
@@ -221,6 +379,11 @@ export default function RecommendationDetail() {
                     <ExternalLink size={14} /> 主页
                   </a>
                 )}
+                {creator.shop_profile_url && (
+                  <a href={creator.shop_profile_url} target="_blank" rel="noreferrer" className="btn">
+                    <ExternalLink size={14} /> Shop 详情
+                  </a>
+                )}
               </div>
             </div>
           </div>
@@ -253,6 +416,8 @@ export default function RecommendationDetail() {
                 <Metric label="推荐分" value={Math.round(score)} accent />
                 <Metric label="商品匹配" value={creator.primary_product_fit_score ?? '—'} />
                 <Metric label="优先级" value={priority} />
+                <Metric label="Shop GMV" value={metricValue(creator, 'gmv_raw', 'gmv') ?? '—'} accent />
+                <Metric label="Shop GPM" value={metricValue(creator, 'gpm_raw', 'gpm') ?? '—'} />
               </div>
 
               <dl className="border-t border-border px-4 py-2">
@@ -263,6 +428,10 @@ export default function RecommendationDetail() {
                   ['推荐商品', creator.recommended_product_type || creator.primary_product_category || '未设定'],
                   ['状态', creator.recommendation_status || creator.current_status || '待处理'],
                   ['采集来源', creator.source_label || creator.source || '—'],
+                  ['线索状态', creator.lead_status || '未标记'],
+                  ['Shop 详情', creator.shop_profile_url ? '已采集' : '暂无'],
+                  ['入库时间', creator.collected_at ? shortRelative(creator.collected_at) : '—'],
+                  ['最后发现', creator.last_seen_at ? shortRelative(creator.last_seen_at) : '—'],
                 ].map(([label, value]) => (
                   <div key={label} className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 border-b border-border/60 py-2.5 text-xs last:border-b-0">
                     <dt className="text-muted">{label}</dt>
@@ -338,7 +507,27 @@ export default function RecommendationDetail() {
                         {positiveTags.length === 0 && !creator.primary_product_category && <span>暂无标签</span>}
                       </div>
                     </InfoBlock>
+                    <InfoBlock title="基础资料">
+                      <KeyValueList rows={([
+                        ['平台', creator.platform || 'tiktok'],
+                        ['来源', creator.source_label || creator.source],
+                        ['线索状态', creator.lead_status],
+                        ['地区/语言', [creator.country, creator.language].filter(Boolean).join(' / ')],
+                        ['原始粉丝', creator.followers_raw],
+                        ['邮箱', creator.email],
+                        ['外部链接', listify(creator.external_links).join(' / ')],
+                        ['主页', creator.profile_url],
+                        ['Shop 详情', creator.shop_profile_url],
+                        ['入库时间', creator.collected_at],
+                        ['最近发现', creator.last_seen_at],
+                        ['更新时间', creator.updated_at],
+                      ] as Array<[string, unknown]>).filter(([, value]) => hasValue(value))} />
+                    </InfoBlock>
                   </div>
+                )}
+
+                {tab === 'shop' && (
+                  <ShopDataPanel creator={creator} />
                 )}
 
                 {tab === 'evidence' && (

@@ -45,7 +45,7 @@ Remove-Item F:\X9_AI_system\desktop -Recurse -Force -ErrorAction SilentlyContinu
 Remove-Item F:\X9_AI_system\scrapers -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item F:\X9_AI_system\tools -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item F:\X9_AI_system\infra -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item F:\X9_AI_system\extension-archive -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item F:\X9_AI_system\archive\extensions -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item F:\X9_AI_system\docs -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item F:\X9_AI_system\README.md, F:\X9_AI_system\.env.shared, F:\X9_AI_system\.gitignore, F:\X9_AI_system\start_all.ps1 -Force -ErrorAction SilentlyContinue
 

@@ -10,6 +10,7 @@ export default function AppShell() {
   const location = useLocation();
 
   useEffect(() => {
+    if (location.pathname !== '/') return;
     const role = meQ.data?.user?.role;
     const adminHome =
       role === 'super_admin' ? '/a/monitor' :
@@ -18,7 +19,7 @@ export default function AppShell() {
       '';
     if (!adminHome) return;
     window.location.replace(adminHome + (location.search || ''));
-  }, [location.search, meQ.data?.user?.role]);
+  }, [location.pathname, location.search, meQ.data?.user?.role]);
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'rgb(var(--bg))' }}>

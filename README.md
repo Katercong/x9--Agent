@@ -50,7 +50,7 @@ F:\X9_AI_system\
 ├── infra/             ← 基础设施
 │   ├── docker/docker-compose.yml   x9-postgres 容器定义
 │   └── scripts/                   db_init/db_backup/db_restore + 部署脚本
-├── extension-archive/ ← v1.0.19 扩展归档
+├── archive/extensions/ ← v1.0.19 扩展归档
 ├── docs/              ← 文档(架构、部署、schema、回滚)
 ├── .env.shared        ← 共享配置(各子项目可覆写)
 ├── start_all.ps1      ← 一键启动

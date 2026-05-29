@@ -103,7 +103,7 @@ cd desktop
 .\scripts\install_extension_strict.ps1
 ```
 
-这会把 `extension-archive/tiktok-creator-lead-browser-extension-1.0.19/` 加上 `chrome-extension-relay/` 的 x9_relay.js / x9_sw.js 注入到 Chrome 的扩展目录。
+这会把 `archive/extensions/tiktok-creator-lead-browser-extension-1.0.19/` 加上 `chrome-extension-relay/` 的 x9_relay.js / x9_sw.js 注入到 Chrome 的扩展目录。
 
 然后用扩展抓 1 个 TikTok 创作者,跑:
 ```powershell

@@ -15,6 +15,7 @@ from x9_creator_desktop_system.backend.models.raw_observation import RawObservat
 from x9_creator_desktop_system.backend.services import auth_service
 from x9_creator_desktop_system.backend.services.gmail_sync_service import record_inbound_reply
 from x9_creator_desktop_system.backend.services.post_processing import create_outreach_event
+from x9_creator_desktop_system.backend.models.bd_monthly_stat import BdMonthlyStat
 
 
 def _unified(client) -> dict:
@@ -99,6 +100,8 @@ def test_unified_dashboard_kpis_and_state_projection(client):
     assert after["today_discovered"] == before["today_discovered"] + 1
     assert after["today_collected"] == before["today_collected"] + 1
     assert after["total_recommended"] == before["total_recommended"] + 8
+    assert after["total_contacted"] == before["total_contacted"] + 7
+    assert after["today_contacted"] == before["today_contacted"] + 7
     for key, _event_type in stages:
         assert after[key] == before[key] + 1
 
@@ -141,6 +144,31 @@ def test_today_duplicate_creators_counts_repeat_sources(client):
     after = _summary(client)
     assert after["today_discovered"] == before["today_discovered"] + 1
     assert after["today_duplicate_creators"] == before["today_duplicate_creators"] + 1
+
+
+def test_total_contacted_includes_bd_history(client):
+    before = _summary(client)
+    marker = datetime.now().strftime("%Y%m%d%H%M%S%f")
+
+    with SessionLocal() as session:
+        session.add(
+            BdMonthlyStat(
+                id=f"bdm_unified_{marker}",
+                department_code="cross_border",
+                owner_name=f"BD Unified {marker}",
+                month="2099-01",
+                contacted=11,
+                confirmed=0,
+                samples=0,
+                videos=0,
+                source_staff_id=f"staff_unified_{marker}",
+            )
+        )
+        session.commit()
+
+    after = _summary(client)
+    assert after["total_contacted"] == before["total_contacted"] + 11
+    assert after["today_contacted"] == before["today_contacted"]
 
 
 def test_sample_shipped_does_not_auto_deliver_and_creates_logistics_task(client):

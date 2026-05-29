@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { ChevronDown, ChevronsLeft, ChevronsRight, Download, X } from 'lucide-react';
 import { useUiStore } from '@/stores/uiStore';
-import { portalMenu, type MenuEntry, type MenuItem } from './menus';
+import { getPortalMenu, type MenuEntry, type MenuItem } from './menus';
 import { cn } from '@/lib/cn';
 
 type MenuGroupEntry = Extract<MenuEntry, { children: MenuItem[] }>;
@@ -11,16 +11,35 @@ function isMenuGroup(entry: MenuEntry): entry is MenuGroupEntry {
   return 'children' in entry;
 }
 
+const sidebarCopy = {
+  zh: {
+    brand: 'X9 达人线索后台',
+    closeMenu: '关闭菜单',
+    downloadExtension: '下载插件',
+    collapseMenu: '收起菜单',
+    expandMenu: '展开菜单',
+  },
+  en: {
+    brand: 'X9 Creator Leads',
+    closeMenu: 'Close menu',
+    downloadExtension: 'Download extension',
+    collapseMenu: 'Collapse menu',
+    expandMenu: 'Expand menu',
+  },
+};
+
 export default function Sidebar() {
-  const { sidebarCollapsed, toggleSidebar, mobileDrawerOpen, closeMobileDrawer } = useUiStore();
+  const { sidebarCollapsed, toggleSidebar, mobileDrawerOpen, closeMobileDrawer, language } = useUiStore();
   const { pathname } = useLocation();
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const menu = useMemo(() => getPortalMenu(language), [language]);
+  const copy = sidebarCopy[language];
 
   const activeGroupKey = useMemo(
-    () => portalMenu.find(
+    () => menu.find(
       (entry) => isMenuGroup(entry) && entry.children.some((item) => pathname === item.to),
     )?.key,
-    [pathname],
+    [menu, pathname],
   );
 
   const toggleGroup = (key: string) => {
@@ -77,19 +96,19 @@ export default function Sidebar() {
               sidebarCollapsed && 'md:hidden',
             )}
           >
-            X9 达人线索后台
+            {copy.brand}
           </div>
           <button
             onClick={closeMobileDrawer}
             className="md:hidden text-muted hover:text-text"
-            aria-label="关闭菜单"
+            aria-label={copy.closeMenu}
           >
             <X size={18} />
           </button>
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 py-2">
-          {portalMenu.map((entry) => (
+          {menu.map((entry) => (
             isMenuGroup(entry) ? (
               <div key={entry.key} className="my-1">
                 <button
@@ -140,18 +159,18 @@ export default function Sidebar() {
           <a
             href="/api/local/extension/download"
             className="flex items-center gap-3 px-4 py-2.5 text-xs text-muted hover:text-text"
-            title="下载插件"
+            title={copy.downloadExtension}
           >
             <Download size={14} className="shrink-0" />
-            <span className={cn(sidebarCollapsed && 'md:hidden')}>下载插件</span>
+            <span className={cn(sidebarCollapsed && 'md:hidden')}>{copy.downloadExtension}</span>
           </a>
           <button
             onClick={toggleSidebar}
             className="hidden md:flex w-full h-10 items-center gap-2 px-4 text-xs text-muted hover:text-text border-t border-border"
-            title={sidebarCollapsed ? '展开菜单' : '收起菜单'}
+            title={sidebarCollapsed ? copy.expandMenu : copy.collapseMenu}
           >
             {sidebarCollapsed ? <ChevronsRight size={14} /> : <ChevronsLeft size={14} />}
-            <span className={cn(sidebarCollapsed && 'md:hidden')}>收起菜单</span>
+            <span className={cn(sidebarCollapsed && 'md:hidden')}>{copy.collapseMenu}</span>
           </button>
         </div>
       </aside>

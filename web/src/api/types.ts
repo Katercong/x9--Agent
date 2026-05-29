@@ -339,6 +339,7 @@ export interface DepartmentDashboardSummary {
   owner_counts: DepartmentDashboardOwnerRow[];
   bd_rows: DepartmentDashboardBdRow[];
   source_counts: DepartmentDashboardOwnerRow[];
+  processed_source_counts?: DepartmentDashboardOwnerRow[];
   source_row_counts?: DepartmentDashboardOwnerRow[];
   source_today_counts?: DepartmentDashboardOwnerRow[];
   source_recent_counts?: DepartmentDashboardOwnerRow[];
@@ -361,6 +362,8 @@ export interface UnifiedDashboardSummary {
   today_collected: number;
   today_duplicate_creators: number;
   total_recommended: number;
+  total_contacted: number;
+  today_contacted: number;
   pending_contact: number;
   pending_reply: number;
   communicating: number;
@@ -438,6 +441,7 @@ export interface AnalyticsEventCount {
 
 export interface AnalyticsTrendRow {
   date: string;
+  collected?: number;
   processed: number;
   recommended: number;
   sent: number;
@@ -452,6 +456,11 @@ export interface AnalyticsMemberRow {
   other_processed?: number;
   recommended?: number;
   assigned?: number;
+  total_contacted?: number;
+  bd_history_contacted?: number;
+  bd_history_confirmed?: number;
+  bd_history_samples?: number;
+  bd_history_videos?: number;
   sent?: number;
   pending_reply?: number;
   replied?: number;
@@ -484,6 +493,7 @@ export interface AnalyticsSummary {
     replied: number;
     sample_shipped: number;
     partnered: number;
+    total_contacted?: number;
     raw_observations_are_excluded: boolean;
     bd_history: {
       contacted: number;

@@ -28,6 +28,7 @@ SOURCE_TIKTOK_VIDEO = "tiktok_video"
 SOURCE_BD = "bd"
 SOURCE_OTHER = "other"
 SOURCE_TYPES = {SOURCE_TIKTOK_SHOP, SOURCE_TIKTOK_VIDEO, SOURCE_BD, SOURCE_OTHER}
+RAW_QUEUE_LEAD_STATUSES = ("shop_list_seen", "shop_queue_cleared")
 
 OUTREACH_EVENT_ORDER = [
     "recommended",
@@ -46,6 +47,20 @@ OUTREACH_EVENT_ORDER = [
     "ad_running",
     "dropped",
 ]
+CONTACTED_EVENT_TYPES = {
+    "sent",
+    "pending_reply",
+    "contacted",
+    "replied",
+    "communicating",
+    "confirmed",
+    "sample_shipped",
+    "sample_delivered",
+    "video_published",
+    "partnered",
+    "ad_authorized",
+    "ad_running",
+}
 
 EVENT_TO_STATUS = {
     "recommended": "prospect",
@@ -890,6 +905,37 @@ def cumulative_creator_totals(db: Session, department_code: str | None = None) -
     }
 
 
+def _raw_collected_trend(db: Session, department_code: str | None, day_keys: list[str]) -> dict[str, int]:
+    if not day_keys or not _table_exists(db, "raw_observations"):
+        return {}
+    params: dict[str, Any] = {
+        "start_date": day_keys[0],
+        "end_date": (date.fromisoformat(day_keys[-1]) + timedelta(days=1)).isoformat(),
+    }
+    date_expr = "DATE(NULLIF(CAST(collected_at AS TEXT), ''))"
+    clauses = [
+        f"{date_expr} >= :start_date",
+        f"{date_expr} < :end_date",
+    ]
+    for index, status in enumerate(RAW_QUEUE_LEAD_STATUSES):
+        key = f"queue_status_{index}"
+        params[key] = status
+        clauses.append(f"COALESCE(lead_status, '') != :{key}")
+    if department_code:
+        params["department_code"] = department_code
+        if department_code == DEFAULT_DEPARTMENT:
+            clauses.append("(department_code = :department_code OR department_code IS NULL OR department_code = '')")
+        else:
+            clauses.append("department_code = :department_code")
+    sql = f"""
+        SELECT {date_expr} AS day, COUNT(*) AS count
+        FROM raw_observations
+        WHERE {" AND ".join(clauses)}
+        GROUP BY day
+    """
+    return {str(day): int(count or 0) for day, count in db.execute(text(sql), params).all()}
+
+
 def analytics_summary(
     db: Session,
     *,
@@ -931,18 +977,45 @@ def analytics_summary(
     }:
         member_counts[member][f"{source}_processed"] += 1
     event_counts = Counter(e.event_type for e in events)
+    member_contacted_creators: dict[str, set[str]] = defaultdict(set)
     for e in events:
-        member_counts[e.actor_user_id or "unassigned"][e.event_type] += 1
+        member = e.actor_user_id or "unassigned"
+        member_counts[member][e.event_type] += 1
+        if e.event_type in CONTACTED_EVENT_TYPES and e.creator_id:
+            member_contacted_creators[member].add(e.creator_id)
+    for member, creator_ids in member_contacted_creators.items():
+        member_counts[member]["total_contacted"] += len(creator_ids)
     bd_totals = {
         "contacted": sum(row.contacted for row in bd_stats),
         "confirmed": sum(row.confirmed for row in bd_stats),
         "samples": sum(row.samples for row in bd_stats),
         "videos": sum(row.videos for row in bd_stats),
     }
+    for row in bd_stats:
+        member = str(row.owner_name or "unassigned").strip() or "unassigned"
+        member_counts[member]["bd_history_contacted"] += int(row.contacted or 0)
+        member_counts[member]["bd_history_confirmed"] += int(row.confirmed or 0)
+        member_counts[member]["bd_history_samples"] += int(row.samples or 0)
+        member_counts[member]["bd_history_videos"] += int(row.videos or 0)
+        member_counts[member]["total_contacted"] += int(row.contacted or 0)
+        member_counts[member]["confirmed"] += int(row.confirmed or 0)
+        member_counts[member]["sample_shipped"] += int(row.samples or 0)
+        member_counts[member]["video_published"] += int(row.videos or 0)
     cumulative = cumulative_creator_totals(db, dept)
     today = datetime.now().date()
     day_keys = [(today - timedelta(days=i)).isoformat() for i in range(max(1, min(days, 120)) - 1, -1, -1)]
-    trend = {key: {"date": key, "processed": 0, "recommended": 0, "sent": 0, "partnered": 0} for key in day_keys}
+    raw_collected_by_day = _raw_collected_trend(db, dept, day_keys)
+    trend = {
+        key: {
+            "date": key,
+            "collected": raw_collected_by_day.get(key, 0),
+            "processed": 0,
+            "recommended": 0,
+            "sent": 0,
+            "partnered": 0,
+        }
+        for key in day_keys
+    }
     for s in sources:
         day = (_as_datetime(s.last_seen_at or s.first_seen_at or s.created_at) or datetime.min).date().isoformat()
         if day in trend:
@@ -977,6 +1050,7 @@ def analytics_summary(
             "replied": event_counts.get("replied", 0),
             "sample_shipped": event_counts.get("sample_shipped", 0),
             "partnered": event_counts.get("partnered", 0),
+            "total_contacted": sum(len(ids) for ids in member_contacted_creators.values()) + bd_totals["contacted"],
             "raw_observations_are_excluded": True,
             "collection_channel_rows_total": cumulative["collection_channel_rows_total"],
             "business_with_bd_history_total": cumulative["collection_channel_rows_total"] + bd_totals["contacted"],

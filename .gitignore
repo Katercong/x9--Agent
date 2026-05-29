@@ -63,3 +63,22 @@ logs/
 *.out.log
 /web-user/dist/
 /web-user/.vite/
+
+# Generated frontend bundles. Rebuild from source; do not hand edit.
+/web-user/dist-deploy/
+/web-user/dist-root/
+/web/dist/
+/web/dist-deploy/
+/web/dist-root/
+/desktop/backend/ui/portal/
+/desktop/backend/ui/admin/
+/desktop/backend/ui/_react/
+/x9_creator_desktop_system/backend/ui/portal/
+/x9_creator_desktop_system/backend/ui/admin/
+/x9_creator_desktop_system/backend/ui/_react/
+
+# Runtime/local data and post-cleanup local scratch space.
+/x9_creator_desktop_system/data/
+/local/
+/archive/**/data/
+/archive/**/logs/

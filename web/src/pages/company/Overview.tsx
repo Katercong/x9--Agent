@@ -5,9 +5,8 @@ import { EChart } from '@/components/charts/EChart';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
-import { useCreators, useOutreach, useProducts, useStaff, useUnifiedDashboard, useAnalyticsCompany } from '@/hooks/useApi';
-import { trendByDay, groupByOwner, staffStats } from '@/lib/derive';
-import { chartPalette } from '@/lib/colors';
+import { useCreators, useOutreach, useProducts, useUnifiedDashboard, useAnalyticsCompany } from '@/hooks/useApi';
+import { trendByDay } from '@/lib/derive';
 import { formatDate } from '@/lib/format';
 
 interface RecentEvent {
@@ -30,7 +29,6 @@ export default function Overview() {
   const creators = useCreators({ limit: 10 });
   const outreach = useOutreach({ limit: 10, order_by: 'created_at:desc' });
   const products = useProducts({ limit: 1 });
-  const staff = useStaff({ limit: 10 });
   const unifiedDashboard = useUnifiedDashboard();
   const companyAnalytics = useAnalyticsCompany(30);
 
@@ -39,32 +37,19 @@ export default function Overview() {
 
   const creatorList = creators.data?.items ?? [];
   const outreachList = outreach.data?.items ?? [];
-  const productList = products.data?.items ?? [];
-  const staffList = staff.data?.items ?? [];
   const unifiedSummary = unifiedDashboard.data?.summary;
   const company = companyAnalytics.data;
-  const summary = company?.summary;
-  const sourceTotal = (company?.source_counts ?? []).reduce((sum, row) => sum + row.count, 0);
-
-  const totalContacted = staffStats(staffList).reduce((s, r) => s + r.contacted, 0);
 
   const trend30 = company?.trend?.length
     ? company.trend.map((d) => ({
         date: d.date.slice(5),
+        collected: d.collected ?? 0,
         processed: d.processed,
         recommended: d.recommended,
         sent: d.sent,
         partnered: d.partnered,
       }))
-    : trendByDay(creatorList as any, 30).map((d) => ({ date: d.date, processed: d.count, recommended: 0, sent: 0, partnered: 0 }));
-
-  const deptContrib = (company?.departments?.length ? company.departments : groupByOwner(creatorList as any, 8))
-    .slice(0, 8)
-    .map((o: any, i) => ({
-      name: o.department_code || o.name,
-      value: o.creators ?? o.count ?? 0,
-      itemStyle: { color: chartPalette.categorical[i % chartPalette.categorical.length] },
-    }));
+    : trendByDay(creatorList as any, 30).map((d) => ({ date: d.date, collected: 0, processed: d.count, recommended: 0, sent: 0, partnered: 0 }));
 
   // 近期事件(从 outreach 取最近的)
   const recentEvents: RecentEvent[] = outreachList.slice(0, 8).map((o) => {
@@ -87,11 +72,11 @@ export default function Overview() {
   const overviewKpis = [
     { label: '总发现', value: unifiedSummary?.total_discovered ?? 0, icon: Users, bg: '#e0e7ff', fg: '#4f46e5' },
     { label: '总采集', value: unifiedSummary?.total_collected ?? 0, icon: UserCheck, bg: '#dcfce7', fg: '#16a34a' },
-    { label: '今日发现', value: unifiedSummary?.today_discovered ?? 0, icon: ShoppingCart, bg: '#d1fae5', fg: '#16a34a' },
+    { label: '今日建联', value: unifiedSummary?.today_contacted ?? 0, icon: ShoppingCart, bg: '#d1fae5', fg: '#16a34a' },
     { label: '今日采集', value: unifiedSummary?.today_collected ?? 0, icon: Wallet, bg: '#cffafe', fg: '#0891b2' },
     { label: '今日重复达人', value: unifiedSummary?.today_duplicate_creators ?? 0, icon: UserPlus, bg: '#fee2e2', fg: '#dc2626' },
     { label: '总达人推荐', value: unifiedSummary?.total_recommended ?? 0, icon: TrendingUp, bg: '#fed7aa', fg: '#ea580c' },
-    { label: '待建联', value: unifiedSummary?.pending_contact ?? 0, icon: Building2, bg: '#ede9fe', fg: '#7c3aed' },
+    { label: '总建联', value: unifiedSummary?.total_contacted ?? 0, icon: Building2, bg: '#ede9fe', fg: '#7c3aed' },
     { label: '待回复', value: unifiedSummary?.pending_reply ?? 0, icon: Video, bg: '#fce7f3', fg: '#db2777' },
     { label: '沟通中', value: unifiedSummary?.communicating ?? 0, icon: ArrowUpRight, bg: '#fef3c7', fg: '#ca8a04' },
     { label: '广告投放中', value: unifiedSummary?.ad_running ?? 0, icon: AlertOctagon, bg: '#fee2e2', fg: '#dc2626' },
@@ -113,6 +98,7 @@ export default function Overview() {
     tooltip: { trigger: 'axis' },
     legend: { top: 4, textStyle: { fontSize: 11 } },
     series: [
+      { name: '总采集达人', type: 'line', data: trend30.map((d) => d.collected ?? 0), smooth: true, symbol: 'none', lineStyle: { color: '#0891b2', width: 2 } },
       {
         name: '处理入库', type: 'line', data: trend30.map((d) => d.processed), smooth: true, symbol: 'none',
         lineStyle: { color: '#3370ff', width: 2 },
@@ -125,15 +111,6 @@ export default function Overview() {
     ],
   };
 
-  const deptOption = {
-    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
-    legend: { bottom: 0, icon: 'circle', itemWidth: 8, textStyle: { fontSize: 10 } },
-    series: [{
-      type: 'pie', radius: ['45%', '70%'], center: ['50%', '42%'],
-      label: { show: false }, data: deptContrib,
-    }],
-  };
-
   return (
     <AsyncState loading={loading} error={error} height={400}>
       <div className="space-y-4">
@@ -143,12 +120,9 @@ export default function Overview() {
           ))}
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-          <ChartCard title="近 30 天达人新增" className="lg:col-span-2">
+        <div>
+          <ChartCard title="近 30 天达人新增">
             <EChart option={trendOption} height={280} />
-          </ChartCard>
-          <ChartCard title="对接人分布 Top 8">
-            <EChart option={deptOption} height={280} />
           </ChartCard>
         </div>
 

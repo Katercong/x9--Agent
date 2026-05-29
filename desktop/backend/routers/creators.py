@@ -98,6 +98,7 @@ _LOCAL_LIST_COLUMNS = (
     Creator.evidence_strength,
     Creator.fit_evidence_source_json,
     Creator.matched_keywords_json,
+    Creator.tiktok_shop_json,
 )
 
 
@@ -581,6 +582,34 @@ def _load_json_dict(value: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _compact_tiktok_shop_json(value: Any) -> str | None:
+    data = _load_json_dict(value)
+    if not data:
+        return None
+    keys = (
+        "gmv_raw",
+        "gmv",
+        "gpm_raw",
+        "gpm",
+        "avg_commission_rate_raw",
+        "commission_rate_raw",
+        "commission_rate",
+        "category_text",
+        "category",
+        "primary_category",
+        "followers_raw",
+        "items_sold_raw",
+        "products_raw",
+        "brand_collaborations_raw",
+        "detail_captured_at",
+        "detail_links_count",
+    )
+    compact = {key: data.get(key) for key in keys if data.get(key) not in (None, "", [], {})}
+    if data.get("detail_signal_lines"):
+        compact["detail_signal_lines"] = list(data.get("detail_signal_lines") or [])[:4]
+    return json.dumps(compact, ensure_ascii=False) if compact else None
+
+
 def _serialize_local_creator(c) -> dict[str, Any]:
     """Adapter for the by-tag endpoint that still returns SQLAlchemy Creator
     instances. Drops them through `_serialize` by converting attrs to a dict
@@ -705,7 +734,7 @@ def _local_creator_list_row(row: dict[str, Any]) -> dict[str, Any]:
             out[key] = value.isoformat()
     # List pages must not materialize large snapshots; details load one creator.
     out["profile_snapshot_json"] = None
-    out["tiktok_shop_json"] = None
+    out["tiktok_shop_json"] = _compact_tiktok_shop_json(out.get("tiktok_shop_json"))
     return out
 
 
