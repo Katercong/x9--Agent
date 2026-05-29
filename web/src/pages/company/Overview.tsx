@@ -5,6 +5,7 @@ import { EChart } from '@/components/charts/EChart';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
+import { OutreachProgressTable } from '@/components/dashboard/OutreachProgressTable';
 import { useCreators, useOutreach, useProducts, useUnifiedDashboard, useAnalyticsCompany } from '@/hooks/useApi';
 import { trendByDay } from '@/lib/derive';
 import { formatDate } from '@/lib/format';
@@ -39,6 +40,7 @@ export default function Overview() {
   const outreachList = outreach.data?.items ?? [];
   const unifiedSummary = unifiedDashboard.data?.summary;
   const company = companyAnalytics.data;
+  const progressRows = company?.members?.slice(0, 12) ?? [];
 
   const trend30 = company?.trend?.length
     ? company.trend.map((d) => ({
@@ -125,6 +127,8 @@ export default function Overview() {
             <EChart option={trendOption} height={280} />
           </ChartCard>
         </div>
+
+        <OutreachProgressTable rows={progressRows} />
 
         <div className="card">
           <div className="px-4 py-3 border-b border-line">

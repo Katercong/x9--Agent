@@ -16,12 +16,9 @@ import {
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
-import { PriorityBar } from '@/components/progress/PriorityBar';
-import { DataTable, type Column } from '@/components/table/DataTable';
 import { AsyncState } from '@/components/states/States';
-import { useDepartmentDashboardSummary, useStaff, useUnifiedDashboard } from '@/hooks/useApi';
-import { staffStats } from '@/lib/derive';
-import type { AnalyticsMemberRow } from '@/api/types';
+import { OutreachProgressTable } from '@/components/dashboard/OutreachProgressTable';
+import { useDepartmentDashboardSummary, useUnifiedDashboard } from '@/hooks/useApi';
 
 const topKpiIcons = [Users, UserCheck, Inbox, ThumbsUp, UserPlus, Clock, Handshake];
 const topKpiBg = ['#e0e7ff', '#dcfce7', '#d1fae5', '#cffafe', '#fee2e2', '#fed7aa', '#ede9fe'];
@@ -57,28 +54,6 @@ const stageColors: Record<string, string> = {
   dropped: '#ef4444',
 };
 
-type BdRow = ReturnType<typeof staffStats>[number];
-
-const bdColumns: Column<BdRow>[] = [
-  { key: 'owner', header: '负责人', cell: (r) => <span className="text-xs">{r.name}</span> },
-  { key: 'contacted', header: '已建联', align: 'right', cell: (r) => <span className="text-xs num">{r.contacted}</span> },
-  { key: 'confirmed', header: '已确认', align: 'right', cell: (r) => <span className="text-xs num">{r.confirmed}</span> },
-  { key: 'samples', header: '已寄样', align: 'right', cell: (r) => <span className="text-xs num">{r.samples}</span> },
-  { key: 'videos', header: '已发视频', align: 'right', cell: (r) => <span className="text-xs num">{r.videos}</span> },
-];
-
-const memberColumns: Column<AnalyticsMemberRow>[] = [
-  { key: 'member', header: '成员', cell: (r) => <span className="text-xs">{r.member || '未分配'}</span> },
-  { key: 'shop', header: 'Shop入库', align: 'right', cell: (r) => <span className="text-xs num">{r.tiktok_shop_processed ?? 0}</span> },
-  { key: 'video', header: '视频入库', align: 'right', cell: (r) => <span className="text-xs num">{r.tiktok_video_processed ?? 0}</span> },
-  { key: 'bd', header: 'BD入库', align: 'right', cell: (r) => <span className="text-xs num">{r.bd_processed ?? 0}</span> },
-  { key: 'recommended', header: '推荐', align: 'right', cell: (r) => <span className="text-xs num">{r.recommended ?? 0}</span> },
-  { key: 'total_contacted', header: '总建联', align: 'right', cell: (r) => <span className="text-xs num">{r.total_contacted ?? r.sent ?? 0}</span> },
-  { key: 'replied', header: '已回复', align: 'right', cell: (r) => <span className="text-xs num">{r.replied ?? 0}</span> },
-  { key: 'sample_shipped', header: '已寄样', align: 'right', cell: (r) => <span className="text-xs num">{r.sample_shipped ?? 0}</span> },
-  { key: 'partnered', header: '已合作', align: 'right', cell: (r) => <span className="text-xs num">{r.partnered ?? 0}</span> },
-];
-
 const sourceLabels: Record<string, string> = {
   tiktok_shop: 'TikTok Shop',
   tiktok_video: 'TikTok视频',
@@ -94,7 +69,6 @@ function formatDay(value: string) {
 export default function Dashboard() {
   const dashboardQ = useUnifiedDashboard();
   const legacyDashboardQ = useDepartmentDashboardSummary();
-  const staffQ = useStaff({ limit: 10 });
   const data = dashboardQ.data;
   const legacyData = legacyDashboardQ.data;
   const summary = data?.summary ?? {
@@ -119,14 +93,10 @@ export default function Dashboard() {
   const stageRows = legacyData?.stage_rows?.length ? legacyData.stage_rows : (data?.stage_rows ?? []);
   const analytics = legacyData?.analytics;
   const sourceCounts = Object.fromEntries(((legacyData?.processed_source_counts ?? analytics?.source_counts) ?? []).map((row) => [row.name, row.count]));
-  const memberRows = analytics?.members?.slice(0, 8) ?? [];
+  const memberRows = analytics?.members?.slice(0, 12) ?? [];
   const trend7 = legacyData?.trend_7d ?? [];
   const recent7 = trend7.reduce((sum, row) => sum + row.count, 0);
   const categoryCounts = legacyData?.category_counts?.length ? legacyData.category_counts : [{ name: '未填写', value: 0 }];
-  const ownerRows = (legacyData?.owner_counts ?? []).map((row) => ({ label: row.name, value: row.count }));
-  const bdRows = staffStats(staffQ.data?.items ?? [])
-    .sort((a, b) => b.contacted - a.contacted)
-    .slice(0, 8);
 
   const topRow = [
     { label: '总发现', value: summary.total_discovered, subLabel: '当前达人主队列总量', delta: null as number | null },
@@ -300,47 +270,7 @@ export default function Dashboard() {
           </ChartCard>
         </div>
 
-        <div className="card">
-          <div className="px-4 pt-3 pb-2">
-            <h3 className="text-sm font-semibold text-gray-800">成员入库与建联进度</h3>
-            <div className="text-xxs text-muted mt-0.5">只统计采集后处理入库、推荐和建联事件，不使用 raw 回传量作为达人数量</div>
-          </div>
-          <div className="px-2 pb-3">
-            <DataTable
-              columns={memberColumns}
-              data={memberRows}
-              rowKey={(r) => r.member}
-              emptyText="暂无成员维度处理数据"
-              compact
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-          <div className="card lg:col-span-1">
-            <div className="px-4 pt-3 pb-2">
-              <h3 className="text-sm font-semibold text-gray-800">对接人达人占比 Top 8</h3>
-            </div>
-            <div className="px-2 pb-3">
-              <PriorityBar rows={ownerRows} labelHeader="对接人" valueHeader="达人数" />
-            </div>
-          </div>
-          <div className="card lg:col-span-2">
-            <div className="px-4 pt-3 pb-2">
-              <h3 className="text-sm font-semibold text-gray-800">BD 历史跟进数据</h3>
-              <div className="text-xxs text-muted mt-0.5">来自 staff.note 月度统计，已并入上方全平台统计口径</div>
-            </div>
-            <div className="px-2 pb-3">
-              <DataTable
-                columns={bdColumns}
-                data={bdRows}
-                rowKey={(r) => r.name}
-                emptyText={staffQ.isLoading ? 'BD 数据加载中...' : staffQ.error ? 'BD 历史数据暂不可用' : '暂无 BD 历史数据'}
-                compact
-              />
-            </div>
-          </div>
-        </div>
+        <OutreachProgressTable rows={memberRows} />
       </div>
     </AsyncState>
   );

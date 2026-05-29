@@ -464,6 +464,7 @@ export interface AnalyticsMemberRow {
   sent?: number;
   pending_reply?: number;
   replied?: number;
+  confirmed?: number;
   sample_shipped?: number;
   sample_delivered?: number;
   partnered?: number;
