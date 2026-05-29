@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -39,6 +39,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models.creator import Creator
+from ..models.creator_outreach_event import CreatorOutreachEvent
 from ..models.creator_outreach_lock import CreatorOutreachLock
 from ..models.outreach_email import OutreachEmail
 from ..models.outreach_template import OutreachTemplate
@@ -77,6 +78,17 @@ from ..services.tk_script_service import (
     save_prompt as _save_tk_prompt,
 )
 from ..utils.id_utils import new_id
+from ..utils.current_status import (
+    STATUS_AD_RUNNING,
+    STATUS_AUTHORIZED,
+    STATUS_COMMUNICATING,
+    STATUS_CONTACTED,
+    STATUS_PENDING_FOLLOWUP,
+    STATUS_SAMPLE_DELIVERED,
+    STATUS_SAMPLE_SHIPPED,
+    STATUS_VIDEO_PUBLISHED,
+    normalize_current_status,
+)
 
 
 router = APIRouter(prefix="/api/local/outreach", tags=["outreach"])
@@ -168,6 +180,11 @@ class RollbackIn(BaseModel):
     """Restore the subject/body of one historical email into the current draft."""
 
     target_email_id: str
+
+
+class TrackingStatusIn(BaseModel):
+    current_status: str
+    note: str | None = Field(default=None, max_length=1000)
 
 
 class LockAcquireIn(BaseModel):
@@ -298,12 +315,18 @@ def _creator_summary(creator: Creator | dict[str, Any] | None) -> dict[str, Any]
             "creator_display_name": creator.get("display_name"),
             "creator_profile_url": creator.get("profile_url"),
             "creator_platform": creator.get("platform"),
+            "creator_email": creator.get("email"),
+            "current_status": creator.get("current_status"),
+            "owner_bd": creator.get("owner_bd"),
         }
     return {
         "creator_handle": creator.handle,
         "creator_display_name": creator.display_name,
         "creator_profile_url": creator.profile_url,
         "creator_platform": creator.platform,
+        "creator_email": creator.email,
+        "current_status": creator.current_status,
+        "owner_bd": creator.owner_bd,
     }
 
 
@@ -368,6 +391,129 @@ def _parse_archive_datetime(value: str | None, field_name: str) -> datetime | No
         return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"{field_name} must be ISO datetime or YYYY-MM-DD") from exc
+
+
+_TRACKING_STATUSES = (
+    STATUS_CONTACTED,
+    STATUS_PENDING_FOLLOWUP,
+    STATUS_COMMUNICATING,
+    STATUS_SAMPLE_SHIPPED,
+    STATUS_SAMPLE_DELIVERED,
+    STATUS_VIDEO_PUBLISHED,
+    STATUS_AUTHORIZED,
+    STATUS_AD_RUNNING,
+)
+
+_TRACKING_STATUS_TO_EVENT = {
+    STATUS_CONTACTED: "contacted",
+    STATUS_PENDING_FOLLOWUP: "pending_followup",
+    STATUS_COMMUNICATING: "communicating",
+    STATUS_SAMPLE_SHIPPED: "sample_shipped",
+    STATUS_SAMPLE_DELIVERED: "sample_delivered",
+    STATUS_VIDEO_PUBLISHED: "video_published",
+    STATUS_AUTHORIZED: "ad_authorized",
+    STATUS_AD_RUNNING: "ad_running",
+}
+
+
+def _tracking_status(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text or text.lower() == "all":
+        return None
+    alias = {
+        "follow-up": STATUS_PENDING_FOLLOWUP,
+        "follow_up": STATUS_PENDING_FOLLOWUP,
+        "sample-shipped": STATUS_SAMPLE_SHIPPED,
+        "sample_shipped": STATUS_SAMPLE_SHIPPED,
+        "sample-delivered": STATUS_SAMPLE_DELIVERED,
+        "sample_delivered": STATUS_SAMPLE_DELIVERED,
+        "video-published": STATUS_VIDEO_PUBLISHED,
+        "video_published": STATUS_VIDEO_PUBLISHED,
+        "authorized": STATUS_AUTHORIZED,
+        "ad-running": STATUS_AD_RUNNING,
+        "ad_running": STATUS_AD_RUNNING,
+    }.get(text.lower())
+    normalized = alias or normalize_current_status(text)
+    if normalized in _TRACKING_STATUSES:
+        return normalized
+    raise HTTPException(status_code=400, detail="invalid tracking status")
+
+
+def _event_metadata(event: CreatorOutreachEvent) -> dict[str, Any]:
+    if not event.metadata_json:
+        return {}
+    try:
+        value = json.loads(event.metadata_json)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _tracking_timestamp(value: Any) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, datetime):
+        return value.timestamp()
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _latest_activity_at(*values: Any) -> Any:
+    return max((value for value in values if value is not None), key=_tracking_timestamp, default=None)
+
+
+def _tracking_item(
+    *,
+    creator_id: str,
+    emails: list[OutreachEmail],
+    creator_summary: dict[str, Any] | None,
+    inbound_event: CreatorOutreachEvent | None,
+) -> dict[str, Any]:
+    latest_email = max(emails, key=lambda row: _tracking_timestamp(row.sent_at or row.created_at))
+    latest_outbound_at = latest_email.sent_at or latest_email.created_at
+    latest_inbound_at = inbound_event.event_at if inbound_event is not None else None
+    current_status = normalize_current_status((creator_summary or {}).get("current_status")) or STATUS_CONTACTED
+    needs_followup = bool(latest_inbound_at and (latest_outbound_at is None or _tracking_timestamp(latest_inbound_at) > _tracking_timestamp(latest_outbound_at)))
+    if current_status == STATUS_PENDING_FOLLOWUP:
+        needs_followup = True
+    elif needs_followup:
+        current_status = STATUS_PENDING_FOLLOWUP
+    metadata = _event_metadata(inbound_event) if inbound_event is not None else {}
+    latest_direction = "inbound" if needs_followup else "outbound"
+    latest_message_at = _latest_activity_at(latest_inbound_at, latest_outbound_at)
+    followup_due_at = latest_inbound_at if needs_followup else None
+    return {
+        "creator_id": creator_id,
+        **(creator_summary or {}),
+        "current_status": current_status,
+        "to_email": latest_email.to_email,
+        "from_email": latest_email.from_email,
+        "latest_email_id": latest_email.id,
+        "gmail_thread_id": latest_email.gmail_thread_id,
+        "latest_outbound_at": _iso(latest_outbound_at),
+        "latest_inbound_at": _iso(latest_inbound_at),
+        "latest_message_at": _iso(latest_message_at),
+        "latest_direction": latest_direction,
+        "needs_followup": needs_followup,
+        "email_count": len(emails),
+        "last_subject": metadata.get("subject") or latest_email.subject,
+        "last_preview": metadata.get("snippet") or metadata.get("preview") or _body_preview(latest_email.body, latest_email.body_format),
+        "owner_bd": (creator_summary or {}).get("owner_bd"),
+        "followup_due_at": _iso(followup_due_at),
+        "followup_age_hours": (
+            round((datetime.utcnow().timestamp() - _tracking_timestamp(latest_inbound_at)) / 3600, 1)
+            if latest_inbound_at is not None and needs_followup
+            else None
+        ),
+        "_latest_sort": _tracking_timestamp(latest_message_at),
+        "_overdue_contacted": (
+            current_status == STATUS_CONTACTED
+            and latest_outbound_at is not None
+            and _tracking_timestamp(latest_outbound_at) <= (datetime.utcnow() - timedelta(days=3)).timestamp()
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1042,6 +1188,7 @@ def send_draft(draft_id: str, body: SendIn, request: Request, db: Session = Depe
         creator = db.get(Creator, draft.creator_id)
         if creator is not None:
             actor_user_id = current_user.get("id") or current_user.get("identity")
+            previous_status = normalize_current_status(creator.current_status)
             event_metadata = {
                 "outreach_email_id": draft.id,
                 "gmail_message_id": draft.gmail_message_id,
@@ -1055,17 +1202,18 @@ def send_draft(draft_id: str, body: SendIn, request: Request, db: Session = Depe
                 owner_bd=creator.owner_bd,
                 metadata=event_metadata,
             )
-            create_outreach_event(
-                db,
-                creator,
-                event_type="pending_reply",
-                actor_user_id=actor_user_id,
-                owner_bd=creator.owner_bd,
-                metadata=event_metadata,
-            )
+            if previous_status == STATUS_PENDING_FOLLOWUP:
+                create_outreach_event(
+                    db,
+                    creator,
+                    event_type="communicating",
+                    actor_user_id=actor_user_id,
+                    owner_bd=creator.owner_bd,
+                    metadata=event_metadata,
+                )
         elif str(draft.creator_id).isdigit():
             try:
-                remote_creators.patch(draft.creator_id, current_status="\u5f85\u56de\u590d")
+                remote_creators.patch(draft.creator_id, current_status=STATUS_CONTACTED)
             except RemoteRepoError:
                 # The email has already been accepted by Gmail. Do not fail the
                 # send response only because the optional status sync failed.
@@ -1075,6 +1223,153 @@ def send_draft(draft_id: str, body: SendIn, request: Request, db: Session = Depe
     db.commit()
     db.refresh(draft)
     return _email_to_dict(draft)
+
+
+@router.get("/tracking")
+def list_outreach_tracking(
+    request: Request,
+    status: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    from_email: str | None = Query(default=None),
+    to_email: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> dict:
+    department_code = current_department_code(request)
+    target_status = _tracking_status(status)
+    filters = [OutreachEmail.status == "sent"]
+    where_department = department_where(OutreachEmail, department_code)
+    if where_department is not None:
+        filters.append(where_department)
+    if from_email:
+        filters.append(OutreachEmail.from_email.ilike(f"%{from_email.strip()}%"))
+    if to_email:
+        filters.append(OutreachEmail.to_email.ilike(f"%{to_email.strip()}%"))
+    sent_at = func.coalesce(OutreachEmail.sent_at, OutreachEmail.created_at)
+    start = _parse_archive_datetime(date_from, "date_from")
+    end = _parse_archive_datetime(date_to, "date_to")
+    if start is not None:
+        filters.append(sent_at >= start)
+    if end is not None:
+        filters.append(sent_at <= end)
+
+    sent_rows = list(
+        db.scalars(
+            select(OutreachEmail)
+            .where(*filters)
+            .order_by(OutreachEmail.creator_id, sent_at.desc(), OutreachEmail.created_at.desc())
+        ).all()
+    )
+    grouped: dict[str, list[OutreachEmail]] = {}
+    for email in sent_rows:
+        grouped.setdefault(str(email.creator_id), []).append(email)
+
+    creator_ids = list(grouped.keys())
+    creators = _creator_summary_map(db, creator_ids, department_code)
+    inbound_by_creator: dict[str, CreatorOutreachEvent] = {}
+    if creator_ids:
+        event_filters = [
+            CreatorOutreachEvent.creator_id.in_(creator_ids),
+            CreatorOutreachEvent.event_type.in_(("pending_followup", "pending_reply")),
+        ]
+        event_department = department_where(CreatorOutreachEvent, department_code)
+        if event_department is not None:
+            event_filters.append(event_department)
+        events = list(
+            db.scalars(
+                select(CreatorOutreachEvent)
+                .where(*event_filters)
+                .order_by(CreatorOutreachEvent.event_at.desc(), CreatorOutreachEvent.created_at.desc())
+            ).all()
+        )
+        for event in events:
+            inbound_by_creator.setdefault(str(event.creator_id), event)
+
+    needle = (q or "").strip().lower()
+    items: list[dict[str, Any]] = []
+    for creator_id, emails in grouped.items():
+        item = _tracking_item(
+            creator_id=creator_id,
+            emails=emails,
+            creator_summary=creators.get(creator_id),
+            inbound_event=inbound_by_creator.get(creator_id),
+        )
+        if target_status is not None and item.get("current_status") != target_status:
+            continue
+        if needle:
+            haystack = " ".join(
+                str(value or "")
+                for value in (
+                    item.get("creator_handle"),
+                    item.get("creator_display_name"),
+                    item.get("creator_email"),
+                    item.get("to_email"),
+                    item.get("from_email"),
+                    item.get("last_subject"),
+                    item.get("last_preview"),
+                    item.get("creator_id"),
+                )
+            ).lower()
+            if needle not in haystack:
+                continue
+        items.append(item)
+
+    items.sort(
+        key=lambda item: (
+            0 if item.get("needs_followup") else 1,
+            0 if item.get("_overdue_contacted") else 1,
+            -float(item.get("_latest_sort") or 0),
+        )
+    )
+    total = len(items)
+    page = items[offset:offset + limit]
+    for item in page:
+        item.pop("_latest_sort", None)
+        item.pop("_overdue_contacted", None)
+    return {"ok": True, "total": total, "limit": limit, "offset": offset, "items": page}
+
+
+@router.post("/tracking/{creator_id}/status")
+def update_outreach_tracking_status(
+    creator_id: str,
+    body: TrackingStatusIn,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    target_status = _tracking_status(body.current_status)
+    if target_status is None:
+        raise HTTPException(status_code=400, detail="current_status is required")
+    actor = getattr(request.state, "current_user", None) or {}
+    actor_user_id = actor.get("id") or actor.get("identity")
+    department_code = current_department_code(request)
+    event_type = _TRACKING_STATUS_TO_EVENT[target_status]
+    creator = db.get(Creator, creator_id)
+    if creator is not None:
+        if not row_in_department(creator, department_code):
+            raise HTTPException(status_code=404, detail="creator not found")
+        create_outreach_event(
+            db,
+            creator,
+            event_type=event_type,
+            actor_user_id=actor_user_id,
+            owner_bd=creator.owner_bd,
+            note=body.note,
+            metadata={"source": "email_tracking_system"},
+        )
+        db.commit()
+        db.refresh(creator)
+        return {"ok": True, "creator_id": creator.id, "current_status": creator.current_status}
+
+    if creator_id.isdigit():
+        try:
+            remote_creators.patch(creator_id, current_status=target_status)
+        except RemoteRepoError as exc:
+            raise HTTPException(status_code=502, detail=f"remote API unavailable: {exc}") from exc
+        return {"ok": True, "creator_id": creator_id, "current_status": target_status}
+    raise HTTPException(status_code=404, detail="creator not found")
 
 
 @router.get("/archive")

@@ -103,10 +103,10 @@ def create_pending_reply_followup(
         db,
         creator=creator,
         task_type="reply_followup_1",
-        due_at=now + timedelta(days=3),
+        due_at=now,
         owner_user_id=_owner_id(creator, actor_user_id),
-        priority=60,
-        reason="No reply after outreach; first follow-up is due.",
+        priority=90,
+        reason="Creator replied; follow up now.",
         metadata={
             "outreach_email_id": getattr(email, "id", None),
             "gmail_message_id": getattr(email, "gmail_message_id", None),
@@ -130,21 +130,21 @@ def apply_outreach_event_followups(
     normalized = str(event_type or "").strip().lower()
     owner_user_id = _owner_id(creator, actor_user_id)
 
-    if normalized == "pending_reply":
+    if normalized in {"pending_followup", "pending_reply", "replied"}:
         close_creator_tasks(db, creator_id=creator.id, task_types=("reply_followup_1", "reply_followup_2"))
         create_followup_task_once(
             db,
             creator=creator,
             task_type="reply_followup_1",
-            due_at=now + timedelta(days=3),
+            due_at=now,
             owner_user_id=owner_user_id,
-            priority=60,
-            reason="No reply after outreach; first follow-up is due.",
+            priority=90,
+            reason="Creator replied; follow up now.",
             metadata=metadata,
         )
         return
 
-    if normalized in {"replied", "communicating", "contacted"}:
+    if normalized in {"communicating", "contacted"}:
         close_creator_tasks(
             db,
             creator_id=creator.id,

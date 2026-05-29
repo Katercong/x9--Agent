@@ -74,7 +74,7 @@ export default function Workbench() {
 
   const taskRows = [
     {
-      label: '待回复',
+      label: '待跟进',
       value: Number(overview.pending_reply || 0),
       detail: '已触达但还未进入下一阶段',
       to: '/recommendations',
@@ -140,7 +140,7 @@ export default function Workbench() {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <ActionCard icon={Play} title="采集总览" desc="查看插件状态和采集任务" to="/collection" tone="#06b6d4" />
             <ActionCard icon={FileSpreadsheet} title="导入表格" desc="CSV / XLSX 批量入库" to="/collect-import" tone="#f59e0b" />
-            <ActionCard icon={Users} title="达人库" desc="推荐池和全部达人统一入口" to="/recommendations" tone="#22c55e" />
+            <ActionCard icon={Users} title="新达人推荐库" desc="只推荐未建联达人" to="/recommendations" tone="#22c55e" />
             <ActionCard icon={BarChart3} title="业务看板" desc="查看统一业务口径" to="/business" tone="#6366f1" />
           </div>
         </section>

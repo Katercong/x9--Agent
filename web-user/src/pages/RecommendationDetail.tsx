@@ -345,8 +345,8 @@ export default function RecommendationDetail() {
                   type="button"
                   onClick={() => navigate('/recommendations')}
                   className="btn btn-ghost !h-9 !w-9 !justify-center !px-0"
-                  aria-label="返回达人库"
-                  title="返回达人库"
+                  aria-label="返回新达人推荐库"
+                  title="返回新达人推荐库"
                 >
                   <ArrowLeft size={16} />
                 </button>

@@ -43,7 +43,7 @@ RECOMMENDED_STATUSES = {
     "brand_awareness_only",
     "manual_review_before_outreach",
 }
-BUSINESS_STATUS_ORDER = ("待建联", "已建联", "待回复", "已寄样", "视频已发布")
+BUSINESS_STATUS_ORDER = ("待建联", "已建联", "待跟进", "已寄样", "视频已发布")
 
 
 def require_super_admin(request: Request) -> dict[str, Any]:
@@ -161,7 +161,8 @@ def _top_owner_rows(rows: list[dict[str, Any]], limit: int = 12) -> list[dict[st
             "recommended": recommended,
             "pending_contact": status_counts.get("待建联", 0),
             "contacted": status_counts.get("已建联", 0),
-            "pending_reply": status_counts.get("待回复", 0),
+            "pending_followup": status_counts.get("待跟进", 0) + status_counts.get("待回复", 0),
+            "pending_reply": status_counts.get("待跟进", 0) + status_counts.get("待回复", 0),
             "sample_sent": status_counts.get("已寄样", 0),
             "video_published": status_counts.get("视频已发布", 0),
         })
@@ -277,7 +278,7 @@ def business_dashboard(request: Request, _user: dict = Depends(current_user), db
     recommended_rows = [row for row in rows if row.get("recommendation_status") in RECOMMENDED_STATUSES]
     current_status_counts = Counter(_clean_group_key(row.get("current_status")) for row in rows)
     priority_counts = Counter(_clean_group_key(row.get("outreach_priority")) for row in rows)
-    contacted_count = sum(current_status_counts.get(status, 0) for status in ("已建联", "待回复", "已寄样", "视频已发布"))
+    contacted_count = sum(current_status_counts.get(status, 0) for status in ("已建联", "待跟进", "待回复", "已寄样", "视频已发布"))
     recent_collection_count = sum(1 for row in rows if (_row_date(row) or datetime.min.date()) >= seven_days_ago)
     visible_departments = {department_code: DEPARTMENTS[department_code]} if department_code else DEPARTMENTS
     department_rows: dict[str, list[dict[str, Any]]] = {code: [] for code in visible_departments}
@@ -288,7 +289,7 @@ def business_dashboard(request: Request, _user: dict = Depends(current_user), db
         dept_rows = department_rows.get(code, [])
         dept_status_counts = Counter(_clean_group_key(row.get("current_status")) for row in dept_rows)
         dept_recommended = sum(1 for row in dept_rows if row.get("recommendation_status") in RECOMMENDED_STATUSES)
-        dept_contacted = sum(dept_status_counts.get(status, 0) for status in ("已建联", "待回复", "已寄样", "视频已发布"))
+        dept_contacted = sum(dept_status_counts.get(status, 0) for status in ("已建联", "待跟进", "待回复", "已寄样", "视频已发布"))
         department_items.append({
             "code": code,
             "name": meta["name"],
@@ -296,7 +297,8 @@ def business_dashboard(request: Request, _user: dict = Depends(current_user), db
             "recommended": dept_recommended,
             "contacted": dept_contacted,
             "pending_contact": dept_status_counts.get("待建联", 0),
-            "pending_reply": dept_status_counts.get("待回复", 0),
+            "pending_followup": dept_status_counts.get("待跟进", 0) + dept_status_counts.get("待回复", 0),
+            "pending_reply": dept_status_counts.get("待跟进", 0) + dept_status_counts.get("待回复", 0),
             "sample_sent": dept_status_counts.get("已寄样", 0),
             "video_published": dept_status_counts.get("视频已发布", 0),
         })
@@ -311,7 +313,8 @@ def business_dashboard(request: Request, _user: dict = Depends(current_user), db
             "unassigned_recommended": sum(1 for row in recommended_rows if not str(row.get("owner_bd") or "").strip()),
             "contacted": contacted_count,
             "pending_contact": current_status_counts.get("待建联", 0),
-            "pending_reply": current_status_counts.get("待回复", 0),
+            "pending_followup": current_status_counts.get("待跟进", 0) + current_status_counts.get("待回复", 0),
+            "pending_reply": current_status_counts.get("待跟进", 0) + current_status_counts.get("待回复", 0),
             "sample_sent": current_status_counts.get("已寄样", 0),
             "video_published": current_status_counts.get("视频已发布", 0),
             "recent_collections_7d": recent_collection_count,

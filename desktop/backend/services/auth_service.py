@@ -276,7 +276,19 @@ def user_to_dict(
 
 
 
-CONTACTED_CREATOR_STATUSES = {"已建联", "待回复", "已寄样", "视频已发布", "contacted", "replied", "sample_sent", "video_published"}
+CONTACTED_CREATOR_STATUSES = {
+    "已建联",
+    "待跟进",
+    "待回复",
+    "已寄样",
+    "视频已发布",
+    "contacted",
+    "pending_followup",
+    "pending_reply",
+    "replied",
+    "sample_sent",
+    "video_published",
+}
 PENDING_CONTACT_STATUSES = {"待建联", "pending_contact", "prospect"}
 
 

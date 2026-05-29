@@ -49,6 +49,7 @@ const overviewFg = [
 const stageColors: Record<string, string> = {
   prospect: '#94a3b8',
   contacted: '#60a5fa',
+  pending_followup: '#fbbf24',
   pending_reply: '#fbbf24',
   confirmed: '#3370ff',
   sample_shipped: '#8b5cf6',
@@ -130,7 +131,7 @@ export default function Business() {
     { label: '潜在线索', value: overviewCounts.prospect || 0 },
     { label: '已联系', value: overviewCounts.contacted || 0 },
     { label: '已确认', value: overviewCounts.confirmed || 0 },
-    { label: '待回复', value: overviewCounts.pending_reply || 0 },
+    { label: '待跟进', value: overviewCounts.pending_followup || overviewCounts.pending_reply || 0 },
     { label: '近 7 天新增', value: recent7 },
     { label: '已寄样', value: overviewCounts.sample_shipped || 0 },
     { label: '样品签收', value: overviewCounts.sample_delivered || 0 },

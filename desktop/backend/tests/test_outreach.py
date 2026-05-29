@@ -18,6 +18,8 @@ from fastapi.testclient import TestClient
 from x9_creator_desktop_system.backend.database.connection import SessionLocal
 from x9_creator_desktop_system.backend.main import app
 from x9_creator_desktop_system.backend.models.creator import Creator
+from x9_creator_desktop_system.backend.models.creator_outreach_event import CreatorOutreachEvent
+from x9_creator_desktop_system.backend.models.followup_task import FollowupTask
 from x9_creator_desktop_system.backend.models.gmail_account import GmailAccount
 from x9_creator_desktop_system.backend.models.creator_outreach_lock import CreatorOutreachLock
 from x9_creator_desktop_system.backend.models.outreach_email import OutreachEmail
@@ -25,12 +27,18 @@ from x9_creator_desktop_system.backend.models.outreach_template import OutreachT
 from x9_creator_desktop_system.backend.routers.creators import _fetch_outreach_signals
 from x9_creator_desktop_system.backend.services import auth_service, gmail_service
 from x9_creator_desktop_system.backend.services.ai_writer import _compact_context
+from x9_creator_desktop_system.backend.services.post_processing import create_outreach_event
 from x9_creator_desktop_system.backend.services.outreach_service import (
     build_context,
     generate_with_ai,
     generate_x9_care_keyword_script,
     pick_template,
     render_template,
+)
+from x9_creator_desktop_system.backend.utils.current_status import (
+    STATUS_CONTACTED,
+    STATUS_PENDING_CONTACT,
+    STATUS_PENDING_FOLLOWUP,
 )
 from desktop.backend.services import gmail_service as desktop_gmail_service
 
@@ -70,6 +78,8 @@ def sample_creator():
     with SessionLocal() as session:
         session.query(OutreachEmail).filter_by(creator_id=creator_id).delete()
         session.query(CreatorOutreachLock).filter_by(creator_id=creator_id).delete()
+        session.query(FollowupTask).filter_by(creator_id=creator_id).delete()
+        session.query(CreatorOutreachEvent).filter_by(creator_id=creator_id).delete()
         c = session.get(Creator, creator_id)
         if c is not None:
             session.delete(c)
@@ -315,9 +325,9 @@ def test_create_draft_then_patch_then_send(client, sample_creator):
     current_user = client.get("/api/local/auth/me").json()["user"]
     assert mock_send.call_args.kwargs["user_id"] == current_user["id"]
     assert mock_send.call_args.kwargs["include_shared"] is False
-    # creator current_status should now wait for a reply.
+    # creator current_status should now mean the outreach email has been sent.
     creator_after = client.get(f"/api/local/creators/{sample_creator}").json()
-    assert creator_after["current_status"] == "待回复"
+    assert creator_after["current_status"] == "已建联"
 
 
 def test_send_without_authorization_marks_failed(client, sample_creator):
@@ -338,6 +348,44 @@ def test_send_without_authorization_marks_failed(client, sample_creator):
     drafts = client.get(f"/api/local/outreach/drafts?creator_id={sample_creator}").json()
     matching = [d for d in drafts["items"] if d["id"] == draft_id]
     assert matching and matching[0]["status"] == "failed"
+
+
+def test_send_after_inbound_followup_moves_creator_to_communicating(client, sample_creator):
+    with SessionLocal() as session:
+        creator = session.get(Creator, sample_creator)
+        create_outreach_event(
+            session,
+            creator,
+            event_type="pending_followup",
+            actor_user_id="gmail_sync",
+            metadata={"gmail_thread_id": "thread_followup"},
+        )
+        session.commit()
+
+    _acquire_lock(client, sample_creator)
+    create = client.post("/api/local/outreach/draft", json={"creator_id": sample_creator})
+    assert create.status_code == 200, create.text
+    draft_id = create.json()["id"]
+
+    fake_send = {"message_id": "reply_msg", "thread_id": "thread_followup", "from_email": "me@x9.com"}
+    with patch.object(gmail_service, "send_email", return_value=fake_send):
+        send_r = client.post(
+            f"/api/local/outreach/send/{draft_id}",
+            json={"confirm": True, "update_creator_status": True},
+        )
+    assert send_r.status_code == 200, send_r.text
+
+    with SessionLocal() as session:
+        creator_after = session.get(Creator, sample_creator)
+        assert creator_after.current_status == "沟通中"
+        open_tasks = (
+            session.query(FollowupTask)
+            .filter(FollowupTask.creator_id == sample_creator)
+            .filter(FollowupTask.task_type == "reply_followup_1")
+            .filter(FollowupTask.status.in_(("open", "pending")))
+            .count()
+        )
+        assert open_tasks == 0
 
 
 def test_history_endpoint(client, sample_creator):
@@ -478,6 +526,220 @@ def test_outreach_archive_is_sent_only_and_department_scoped():
                 session.query(OutreachEmail).filter_by(id=row_id).delete()
             for cid in (creator_id, foreign_creator_id):
                 row = session.get(Creator, cid)
+                if row is not None:
+                    session.delete(row)
+            session.commit()
+
+
+def test_creator_list_uncontacted_filters_out_contacted_and_sent():
+    keep_id = "creator_new_reco_uncontacted"
+    contacted_id = "creator_new_reco_contacted"
+    followup_id = "creator_new_reco_followup"
+    sent_id = "creator_new_reco_sent"
+    sent_email_id = "creator_new_reco_sent_email"
+    creator_ids = (keep_id, contacted_id, followup_id, sent_id)
+    with SessionLocal() as session:
+        session.query(OutreachEmail).filter_by(id=sent_email_id).delete()
+        for creator_id in creator_ids:
+            existing = session.get(Creator, creator_id)
+            if existing is not None:
+                session.delete(existing)
+        session.add_all(
+            [
+                Creator(
+                    id=keep_id,
+                    platform="tiktok",
+                    handle="new_reco_uncontacted",
+                    display_name="New Reco Uncontacted",
+                    department_code="cross_border",
+                    email="new-reco-uncontacted@example.com",
+                    has_email=1,
+                    recommendation_status="recommended",
+                    current_status=STATUS_PENDING_CONTACT,
+                    collected_at=datetime(2026, 5, 23, 10, 0, 0),
+                ),
+                Creator(
+                    id=contacted_id,
+                    platform="tiktok",
+                    handle="new_reco_contacted",
+                    display_name="New Reco Contacted",
+                    department_code="cross_border",
+                    email="new-reco-contacted@example.com",
+                    has_email=1,
+                    recommendation_status="recommended",
+                    current_status=STATUS_CONTACTED,
+                    collected_at=datetime(2026, 5, 23, 11, 0, 0),
+                ),
+                Creator(
+                    id=sent_id,
+                    platform="tiktok",
+                    handle="new_reco_sent",
+                    display_name="New Reco Sent",
+                    department_code="cross_border",
+                    email="new-reco-sent@example.com",
+                    has_email=1,
+                    recommendation_status="recommended",
+                    current_status=STATUS_PENDING_CONTACT,
+                    collected_at=datetime(2026, 5, 23, 12, 0, 0),
+                ),
+                Creator(
+                    id=followup_id,
+                    platform="tiktok",
+                    handle="new_reco_followup",
+                    display_name="New Reco Followup",
+                    department_code="cross_border",
+                    email="new-reco-followup@example.com",
+                    has_email=1,
+                    recommendation_status="recommended",
+                    current_status=STATUS_PENDING_FOLLOWUP,
+                    collected_at=datetime(2026, 5, 23, 12, 30, 0),
+                ),
+            ]
+        )
+        session.add(
+            OutreachEmail(
+                id=sent_email_id,
+                department_code="cross_border",
+                creator_id=sent_id,
+                to_email="new-reco-sent@example.com",
+                from_email="bd@example.com",
+                subject="Already sent",
+                body="body",
+                status="sent",
+                sent_at=datetime(2026, 5, 23, 13, 0, 0),
+            )
+        )
+        session.commit()
+
+    client = _user_client("new_recommendations_reader")
+    try:
+        response = client.get("/api/local/creators?handle_contains=new_reco_&uncontacted=true&outreach_sent=false&limit=20")
+        assert response.status_code == 200, response.text
+        handles = [item["handle"] for item in response.json()["items"]]
+        assert handles == ["new_reco_uncontacted"]
+
+        implicit_unsent = client.get("/api/local/creators?handle_contains=new_reco_&uncontacted=true&limit=20")
+        assert implicit_unsent.status_code == 200, implicit_unsent.text
+        implicit_handles = [item["handle"] for item in implicit_unsent.json()["items"]]
+        assert implicit_handles == ["new_reco_uncontacted"]
+
+        recommended = client.get(
+            "/api/local/creators/recommended?uncontacted=true&outreach_sent=false&limit=20"
+        )
+        assert recommended.status_code == 200, recommended.text
+        recommended_handles = [
+            item["handle"]
+            for item in recommended.json()["items"]
+            if item["handle"].startswith("new_reco_")
+        ]
+        assert recommended_handles == ["new_reco_uncontacted"]
+    finally:
+        with SessionLocal() as session:
+            session.query(OutreachEmail).filter_by(id=sent_email_id).delete()
+            for creator_id in creator_ids:
+                row = session.get(Creator, creator_id)
+                if row is not None:
+                    session.delete(row)
+            session.commit()
+
+
+def test_outreach_tracking_prioritizes_pending_followup_and_filters_status():
+    contacted_creator_id = "creator_tracking_contacted"
+    followup_creator_id = "creator_tracking_followup"
+    sent_contacted_id = "tracking_sent_contacted"
+    sent_followup_id = "tracking_sent_followup"
+    inbound_event_id = "tracking_pending_followup_event"
+    with SessionLocal() as session:
+        for row_id in (sent_contacted_id, sent_followup_id):
+            session.query(OutreachEmail).filter_by(id=row_id).delete()
+        session.query(CreatorOutreachEvent).filter_by(id=inbound_event_id).delete()
+        for creator_id in (contacted_creator_id, followup_creator_id):
+            existing = session.get(Creator, creator_id)
+            if existing is not None:
+                session.delete(existing)
+        session.add_all(
+            [
+                Creator(
+                    id=contacted_creator_id,
+                    platform="tiktok",
+                    handle="tracking_contacted",
+                    display_name="Tracking Contacted",
+                    department_code="cross_border",
+                    email="contacted@example.com",
+                    has_email=1,
+                    current_status="已建联",
+                ),
+                Creator(
+                    id=followup_creator_id,
+                    platform="tiktok",
+                    handle="tracking_followup",
+                    display_name="Tracking Followup",
+                    department_code="cross_border",
+                    email="followup@example.com",
+                    has_email=1,
+                    current_status="待跟进",
+                ),
+            ]
+        )
+        session.add_all(
+            [
+                OutreachEmail(
+                    id=sent_contacted_id,
+                    department_code="cross_border",
+                    creator_id=contacted_creator_id,
+                    to_email="contacted@example.com",
+                    from_email="bd@example.com",
+                    subject="Contacted subject",
+                    body="contacted body",
+                    status="sent",
+                    sent_at=datetime(2026, 5, 20, 10, 0, 0),
+                ),
+                OutreachEmail(
+                    id=sent_followup_id,
+                    department_code="cross_border",
+                    creator_id=followup_creator_id,
+                    to_email="followup@example.com",
+                    from_email="bd@example.com",
+                    subject="Followup subject",
+                    body="followup body",
+                    status="sent",
+                    sent_at=datetime(2026, 5, 21, 10, 0, 0),
+                    gmail_thread_id="tracking_thread",
+                ),
+            ]
+        )
+        session.add(
+            CreatorOutreachEvent(
+                id=inbound_event_id,
+                creator_id=followup_creator_id,
+                department_code="cross_border",
+                event_type="pending_followup",
+                metadata_json='{"snippet":"Creator replied from Gmail"}',
+                event_at=datetime(2026, 5, 22, 10, 0, 0),
+            )
+        )
+        session.commit()
+
+    client = _user_client("tracking_reader")
+    try:
+        listed = client.get("/api/local/outreach/tracking").json()
+        ids = [item["creator_id"] for item in listed["items"]]
+        assert ids[0] == followup_creator_id
+        followup = listed["items"][0]
+        assert followup["current_status"] == "待跟进"
+        assert followup["needs_followup"] is True
+        assert followup["latest_direction"] == "inbound"
+
+        contacted = client.get("/api/local/outreach/tracking?status=已建联").json()
+        assert contacted_creator_id in [item["creator_id"] for item in contacted["items"]]
+        assert followup_creator_id not in [item["creator_id"] for item in contacted["items"]]
+    finally:
+        with SessionLocal() as session:
+            for row_id in (sent_contacted_id, sent_followup_id):
+                session.query(OutreachEmail).filter_by(id=row_id).delete()
+            session.query(CreatorOutreachEvent).filter_by(id=inbound_event_id).delete()
+            for creator_id in (contacted_creator_id, followup_creator_id):
+                row = session.get(Creator, creator_id)
                 if row is not None:
                     session.delete(row)
             session.commit()

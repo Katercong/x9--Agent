@@ -5,7 +5,7 @@ import type {
   AssistantInfo, AssistantReply, User, ListResp,
   ExtensionCommand, ExtensionSession, CollectorObservation,
   OutreachTemplate, PreviewResult, OutreachDraft, GmailAccount, GmailStatus, OutreachHistoryItem,
-  CreatorOutreachLock, OutreachArchiveItem, OutreachArchiveDetail,
+  CreatorOutreachLock, OutreachArchiveItem, OutreachArchiveDetail, OutreachTrackingItem,
   ReviewTaskUpdate, TkPrompt, TkScriptResult, ProductAsset,
 } from './types';
 
@@ -102,6 +102,13 @@ export const endpoints = {
     api.get<ListResp<OutreachArchiveItem>>('/outreach/archive', params),
   outreachArchiveDetail: (id: string) =>
     api.get<{ ok: boolean; item: OutreachArchiveDetail }>(`/outreach/archive/${encodeURIComponent(id)}`),
+  outreachTracking: (params?: Record<string, unknown>) =>
+    api.get<ListResp<OutreachTrackingItem>>('/outreach/tracking', params),
+  patchOutreachTrackingStatus: (creator_id: string | number, body: { current_status: string; note?: string }) =>
+    api.post<{ ok: boolean; creator_id: string; current_status: string }>(
+      `/outreach/tracking/${encodeURIComponent(String(creator_id))}/status`,
+      body,
+    ),
 
   generateTkScript: (creator_id: string | number, body: {
     commission: number;

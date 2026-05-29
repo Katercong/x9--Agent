@@ -10,7 +10,7 @@ import type { Creator, TkStrategy } from '@/api/types';
 const COMMISSION_OPTIONS = [20];
 
 const STRATEGY_META: Record<TkStrategy, { label: string; desc: string; icon: typeof Zap }> = {
-  template: { label: '最终规则', desc: '按固定顺序生成：X9品牌、四个系列、内容兴趣、合作、20%佣金、期待回复', icon: Zap },
+  template: { label: '最终规则', desc: '按固定顺序生成：X9品牌、四个系列、内容兴趣、合作、20%佣金、等待对方回复', icon: Zap },
   hybrid:   { label: '规则生成', desc: '仍按最终规则输出，不允许改结构', icon: Sparkles },
   ai:       { label: '规则生成', desc: '仍按最终规则输出，不允许自由发挥', icon: Sparkles },
 };

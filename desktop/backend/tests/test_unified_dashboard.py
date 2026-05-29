@@ -64,8 +64,9 @@ def test_unified_dashboard_kpis_and_state_projection(client):
     marker = datetime.now().strftime("%Y%m%d%H%M%S%f")
     stages = [
         ("pending_contact", None),
-        ("pending_reply", "pending_reply"),
-        ("communicating", "replied"),
+        ("contacted", "sent"),
+        ("pending_followup", "pending_followup"),
+        ("communicating", "communicating"),
         ("sample_shipped", "sample_shipped"),
         ("sample_delivered", "sample_delivered"),
         ("video_published", "video_published"),
@@ -95,15 +96,19 @@ def test_unified_dashboard_kpis_and_state_projection(client):
         session.commit()
 
     after = _summary(client)
-    assert after["total_discovered"] == before["total_discovered"] + 10
+    expected_discovered = len(stages) + 2
+    expected_recommended = len(stages)
+    expected_contacted = sum(1 for key, _ in stages if key not in {"pending_contact"})
+    assert after["total_discovered"] == before["total_discovered"] + expected_discovered
     assert after["total_collected"] == before["total_collected"] + 1
     assert after["today_discovered"] == before["today_discovered"] + 1
     assert after["today_collected"] == before["today_collected"] + 1
-    assert after["total_recommended"] == before["total_recommended"] + 8
-    assert after["total_contacted"] == before["total_contacted"] + 7
-    assert after["today_contacted"] == before["today_contacted"] + 7
+    assert after["total_recommended"] == before["total_recommended"] + expected_recommended
+    assert after["total_contacted"] == before["total_contacted"] + expected_contacted
+    assert after["today_contacted"] == before["today_contacted"] + expected_contacted
     for key, _event_type in stages:
         assert after[key] == before[key] + 1
+    assert after["pending_reply"] == after["pending_followup"]
 
 
 def test_today_duplicate_creators_counts_repeat_sources(client):
@@ -194,7 +199,7 @@ def test_sample_shipped_does_not_auto_deliver_and_creates_logistics_task(client)
         assert task.status == "open"
 
 
-def test_gmail_inbound_reply_moves_pending_reply_to_communicating(client):
+def test_gmail_inbound_reply_moves_contacted_to_pending_followup(client):
     marker = datetime.now().strftime("%Y%m%d%H%M%S%f")
 
     with SessionLocal() as session:
@@ -218,14 +223,14 @@ def test_gmail_inbound_reply_moves_pending_reply_to_communicating(client):
         create_outreach_event(
             session,
             creator,
-            event_type="pending_reply",
+            event_type="sent",
             actor_user_id="test_admin",
             metadata={"outreach_email_id": email.id, "gmail_thread_id": email.gmail_thread_id},
         )
         session.commit()
 
     before = _summary(client)
-    assert before["pending_reply"] >= 1
+    assert before["contacted"] >= 1
 
     with SessionLocal() as session:
         result = record_inbound_reply(
@@ -238,7 +243,7 @@ def test_gmail_inbound_reply_moves_pending_reply_to_communicating(client):
         session.commit()
         creator_after = session.get(Creator, result["creator_id"])
         assert creator_after is not None
-        assert creator_after.current_status == "沟通中"
+        assert creator_after.current_status == "待跟进"
         open_reply_tasks = (
             session.query(FollowupTask)
             .filter(FollowupTask.creator_id == result["creator_id"])
@@ -246,10 +251,11 @@ def test_gmail_inbound_reply_moves_pending_reply_to_communicating(client):
             .filter(FollowupTask.status.in_(("open", "pending")))
             .count()
         )
-        assert open_reply_tasks == 0
+        assert open_reply_tasks == 1
 
     after = _summary(client)
-    assert after["communicating"] == before["communicating"] + 1
+    assert after["pending_followup"] == before["pending_followup"] + 1
+    assert after["pending_reply"] == after["pending_followup"]
 
 
 def test_unified_dashboard_department_scope():

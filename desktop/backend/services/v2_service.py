@@ -33,8 +33,8 @@ from sqlalchemy.orm import Session
 # 7 stages of the main pipeline funnel.
 STAGE_ORDER = [
     "prospect",         # 潜在线索
-    "contacted",        # 已联系
-    "pending_reply",    # 待回复
+    "contacted",        # 已建联
+    "pending_followup", # 待跟进
     "confirmed",        # 已确认
     "sample_shipped",   # 已寄样
     "sample_delivered", # 样品签收
@@ -45,8 +45,8 @@ STAGE_ORDER = [
 ]
 STAGE_LABEL = {
     "prospect": "潜在线索",
-    "contacted": "已联系",
-    "pending_reply": "待回复",
+    "contacted": "已建联",
+    "pending_followup": "待跟进",
     "confirmed": "已确认",
     "sample_shipped": "已寄样",
     "sample_delivered": "样品签收",
@@ -64,7 +64,8 @@ _STATUS_ALIASES = {
     # CN
     "待建联": "prospect", "未建联": "prospect", "潜在线索": "prospect",
     "已建联": "contacted", "已联系": "contacted",
-    "待回复": "pending_reply", "等待回复": "pending_reply",
+    "待跟进": "pending_followup", "待回复": "pending_followup", "等待回复": "pending_followup",
+    "pending_reply": "pending_followup",
     "已确认": "confirmed", "确认合作": "confirmed",
     "已寄样": "sample_shipped", "已发样": "sample_shipped",
     "样品签收": "sample_delivered", "已签收": "sample_delivered",
@@ -244,7 +245,7 @@ def compute_health(creator: dict[str, Any], today: date | None = None) -> dict[s
         return {"color": "grey", "reason": "无联系记录"}
 
     days = (today - last_contact).days
-    if stage in {"contacted", "pending_reply"} and days > 7:
+    if stage in {"contacted", "pending_followup"} and days > 7:
         return {"color": "yellow", "reason": f"已联系 {days} 天无推进"}
     if stage == "sample_shipped" and days > 14:
         return {"color": "yellow", "reason": f"寄样 {days} 天未签收"}
@@ -377,7 +378,7 @@ def _department_breakdown(creators: list[dict], today: date) -> list[dict]:
         if d in day_index:
             bucket["by_day_7"][day_index[d]] += 1
         stage = _norm_stage(c.get("current_status"))
-        if stage in {"contacted", "pending_reply", "confirmed", "sample_shipped"}:
+        if stage in {"contacted", "pending_followup", "confirmed", "sample_shipped"}:
             bucket["contacted"] += 1
         if stage in {"video_published", "ad_authorized", "ad_running"}:
             bucket["video_published"] += 1
@@ -486,7 +487,7 @@ def get_me(db: Session, user: dict[str, Any] | None) -> dict[str, Any]:
         d = _to_date(c.get("last_contact_date")) or _to_date(c.get("updated_at"))
         if d and d >= week_start:
             stage = _norm_stage(c.get("current_status"))
-            if stage in {"contacted", "pending_reply"}:
+            if stage in {"contacted", "pending_followup"}:
                 weekly["contacted"] += 1
             elif stage in {"sample_shipped", "sample_delivered"}:
                 weekly["sample_shipped"] += 1
@@ -623,7 +624,7 @@ def get_creators_unified(
             return _norm_stage(c.get("current_status")) in {"prospect", None}
         if tab == "contacted":
             return _norm_stage(c.get("current_status")) in {
-                "contacted", "pending_reply", "confirmed",
+                "contacted", "pending_followup", "confirmed",
                 "sample_shipped", "sample_delivered",
             }
         if tab == "active":

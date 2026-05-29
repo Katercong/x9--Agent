@@ -33,6 +33,7 @@ from ..services.post_processing import create_outreach_event
 from ..services.remote_creators import RemoteRepoError
 from ..services.tag_engine import find_creators_by_tags
 from ..utils.contact_methods import CONTACT_CHANNEL_TERMS, contact_types_for, extract_contact_methods
+from ..utils.current_status import STATUS_PENDING_CONTACT, normalize_current_status
 from ..utils.json_utils import loads_json_list
 from ..utils.source_classify import ALL_SOURCES, classify_source
 
@@ -487,6 +488,42 @@ def _fetch_outreach_signals(creator_ids: Iterable[str]) -> dict[str, dict]:
     return out
 
 
+def _apply_outreach_sent_filter(rows: list[dict], outreach_sent: bool | None, department_code: str | None) -> list[dict]:
+    if outreach_sent is None:
+        return rows
+    ids = [cid for cid in (_creator_id_key(row.get("id")) for row in rows) if cid]
+    if not ids:
+        return rows if outreach_sent is False else []
+    with SessionLocal() as db:
+        stmt = (
+            select(OutreachEmail.creator_id)
+            .where(OutreachEmail.creator_id.in_(ids))
+            .where(OutreachEmail.status == "sent")
+            .group_by(OutreachEmail.creator_id)
+        )
+        where_department = department_where(OutreachEmail, department_code)
+        if where_department is not None:
+            stmt = stmt.where(where_department)
+        sent_ids = {
+            str(cid)
+            for cid, in db.execute(stmt).all()
+        }
+    if outreach_sent:
+        return [row for row in rows if _creator_id_key(row.get("id")) in sent_ids]
+    return [row for row in rows if _creator_id_key(row.get("id")) not in sent_ids]
+
+
+def _apply_uncontacted_filter(rows: list[dict], uncontacted: bool | None) -> list[dict]:
+    if uncontacted is None:
+        return rows
+    if not uncontacted:
+        return rows
+    return [
+        row for row in rows
+        if (normalize_current_status(row.get("current_status")) or STATUS_PENDING_CONTACT) == STATUS_PENDING_CONTACT
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Serialization (now from dicts instead of Creator instances)
 # ---------------------------------------------------------------------------
@@ -855,6 +892,8 @@ def list_all(
     collected_date: str | None = Query(default=None),
     collected_from: str | None = Query(default=None),
     collected_to: str | None = Query(default=None),
+    uncontacted: bool | None = Query(default=None),
+    outreach_sent: bool | None = Query(default=None),
     sort_by: str | None = Query(default="recommended"),
 ) -> dict:
     if source and source not in {"all", *ALL_SOURCES}:
@@ -893,6 +932,9 @@ def list_all(
         collected_start=collected_start,
         collected_end=collected_end,
     )
+    rows = _apply_uncontacted_filter(rows, uncontacted)
+    effective_outreach_sent = False if uncontacted is True and outreach_sent is None else outreach_sent
+    rows = _apply_outreach_sent_filter(rows, effective_outreach_sent, department_code)
     rows = _apply_sort(rows, sort_by)
     rows, lock_summaries = _apply_outreach_lock_visibility(rows, current_user)
     page = rows[offset:offset + limit]
@@ -908,6 +950,8 @@ def list_recommended(
     collected_date: str | None = Query(default=None),
     collected_from: str | None = Query(default=None),
     collected_to: str | None = Query(default=None),
+    uncontacted: bool | None = Query(default=None),
+    outreach_sent: bool | None = Query(default=None),
 ) -> dict:
     if source and source not in {"all", *ALL_SOURCES}:
         raise HTTPException(status_code=400, detail="source must be all, tiktok_shop, x9_leads, table_import or other")
@@ -935,6 +979,9 @@ def list_recommended(
             min_fit_score=None, max_fit_score=None,
             collected_start=collected_start, collected_end=collected_end,
         )
+    rows = _apply_uncontacted_filter(rows, uncontacted)
+    effective_outreach_sent = False if uncontacted is True and outreach_sent is None else outreach_sent
+    rows = _apply_outreach_sent_filter(rows, effective_outreach_sent, department_code)
     # Sort: collected_at desc, outreach_priority asc, recommendation_score desc
     rows = sorted(rows, key=lambda r: -_i(r, "recommendation_score"))
     rows = sorted(rows, key=_priority_rank_value)

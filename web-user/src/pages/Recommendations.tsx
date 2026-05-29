@@ -8,7 +8,7 @@ import {
 import { AsyncState } from '@/components/states/States';
 import { OutreachDrawer } from '@/components/outreach/OutreachDrawer';
 import { PaginationControls } from '@/components/PaginationControls';
-import { useAcquireOutreachLock, useBusinessDashboard, useCreators, useRecommended } from '@/hooks/useApi';
+import { useAcquireOutreachLock, useCreators, useRecommended } from '@/hooks/useApi';
 import { formatCompact, maskEmail } from '@/lib/format';
 import { pickItems, type Creator, type CreatorOutreachLock } from '@/api/types';
 
@@ -28,6 +28,7 @@ type ActiveFilterBadge = { key: string; label: string; onClear: () => void };
 type CreatorTag = { label: string; tone?: 'shop' | 'good' | 'warn' | 'muted' };
 
 const PAGE_SIZE = 10;
+const NEW_CREATOR_FETCH_LIMIT = 1000;
 
 const SOURCE_META: Record<Exclude<SourceFilter, 'all'>, { label: string; color: string }> = {
   tiktok_shop: { label: 'TikTok Shop', color: '#ff3b63' },
@@ -215,6 +216,24 @@ function valueList(...values: unknown[]) {
   return out;
 }
 
+function displayStatus(value?: string | null) {
+  const text = String(value || '').trim();
+  if (!text) return '待建联';
+  const key = text.toLowerCase().replace(/[-\s]+/g, '_');
+  if (text === '未建联' || text === '待联系' || key === 'to_be_contacted' || key === 'pending_contact' || key === 'prospect' || key === 'recommended') return '待建联';
+  if (text === '\u5f85\u56de\u590d' || text === '\u7b49\u5f85\u56de\u590d' || key === 'pending_reply' || key === 'pending_followup' || key === 'pending_follow_up' || key === 'needs_followup' || key === 'needs_follow_up') return '待跟进';
+  return text;
+}
+
+function outreachStatusValue(creator: Creator) {
+  return displayStatus(creator.current_status);
+}
+
+function isNewRecommendationCreator(creator: Creator) {
+  const sentCount = Number(creator.outreach_count ?? 0);
+  return outreachStatusValue(creator) === '待建联' && sentCount <= 0 && !creator.last_outreach_at;
+}
+
 function uniqueOptions(items: Creator[], getValues: (creator: Creator) => unknown | unknown[], limit = 24): SelectOption[] {
   const seen = new Set<string>();
   const options: SelectOption[] = [];
@@ -368,7 +387,7 @@ function RecommendationCard({
   const tone = scoreTone(creator.recommendation_score);
   const tags = tagsFor(creator);
   const priority = creator.outreach_priority || creator.priority_level || 'P?';
-  const status = creator.recommendation_status || creator.current_status || '待处理';
+  const status = outreachStatusValue(creator);
   const source = sourceMeta(creator);
   const gmv = shopValue(creator, 'gmv_raw', 'gmv');
   const gpm = shopValue(creator, 'gpm_raw', 'gpm');
@@ -557,22 +576,24 @@ export default function Recommendations() {
                 ? 'micro'
                 : 'recommended';
   const offset = page * PAGE_SIZE;
-  const queryParams = { limit: PAGE_SIZE, ...sourceParams, ...dateParams };
-  const recommendedQ = useRecommended(queryParams);
-  const creatorsQ = useCreators({ ...queryParams, offset, sort_by: backendSortBy });
-  const businessQ = useBusinessDashboard();
+  const queryParams = { limit: NEW_CREATOR_FETCH_LIMIT, ...sourceParams, ...dateParams };
+  const newCreatorParams = { ...queryParams, uncontacted: true, outreach_sent: false };
+  const recommendedQ = useRecommended(newCreatorParams);
+  const creatorsQ = useCreators({ ...newCreatorParams, sort_by: backendSortBy });
   const activeQ = creatorsQ;
   const items = pickItems<Creator>(activeQ.data as any);
   const recommendedItems = pickItems<Creator>(recommendedQ.data as any);
   const allItems = pickItems<Creator>(creatorsQ.data as any);
+  const newRecommendedItems = useMemo(() => recommendedItems.filter(isNewRecommendationCreator), [recommendedItems]);
+  const newAllItems = useMemo(() => allItems.filter(isNewRecommendationCreator), [allItems]);
 
   const optionItems = useMemo(() => {
     const seen = new Map<string, Creator>();
-    [...allItems, ...recommendedItems].forEach((creator) => {
+    [...newAllItems, ...newRecommendedItems].forEach((creator) => {
       seen.set(String(creator.id ?? `${creator.source || ''}:${creator.handle || ''}`), creator);
     });
     return [...seen.values()];
-  }, [allItems, recommendedItems]);
+  }, [newAllItems, newRecommendedItems]);
   const productOptions = useMemo(
     () => uniqueOptions(optionItems, (creator) => [
       creator.primary_product_category,
@@ -587,7 +608,7 @@ export default function Recommendations() {
     [optionItems],
   );
   const statusOptions = useMemo(
-    () => uniqueOptions(optionItems, (creator) => [creator.current_status, creator.recommendation_status]),
+    () => uniqueOptions(optionItems, outreachStatusValue),
     [optionItems],
   );
 
@@ -598,6 +619,7 @@ export default function Recommendations() {
   const filtered = useMemo(() => {
     const text = q.trim().toLowerCase();
     const rows = items.filter((creator) => {
+      if (!isNewRecommendationCreator(creator)) return false;
       const hay = [
         creator.handle,
         creator.display_name,
@@ -646,11 +668,12 @@ export default function Recommendations() {
         ...(creator.positive_tags || []),
       ).includes(productFilter)) return false;
       if (collabFilter !== 'all' && creator.recommended_collab_type !== collabFilter) return false;
-      if (statusFilter !== 'all' && !valueList(creator.current_status, creator.recommendation_status).includes(statusFilter)) return false;
+      if (statusFilter !== 'all' && outreachStatusValue(creator) !== statusFilter) return false;
       return true;
     });
     return sortCreators(rows, sort);
   }, [collabFilter, contact, dateRange, items, maxFollowers, minFollowers, ownerFilter, priority, productFilter, q, reviewFilter, scoreFilter, sort, source, statusFilter]);
+  const pagedItems = filtered.slice(offset, offset + PAGE_SIZE);
 
   const resetFilters = () => {
     setSource('all');
@@ -685,17 +708,14 @@ export default function Recommendations() {
     sort !== 'recommended',
   ].filter(Boolean).length;
 
-  const highScore = recommendedItems.filter((c) => (c.recommendation_score ?? 0) >= 80).length;
-  const needReview = recommendedItems.filter((c) => c.review_required || c.risk_summary).length;
-  const contactable = allItems.filter(hasContact).length;
-  const localTodayAdded = allItems.filter((c) => isToday(c.collected_at || c.created_at)).length;
-  const recommendedTotal = (recommendedQ.data as any)?.total ?? recommendedItems.length;
-  const endpointAllTotal = (creatorsQ.data as any)?.total ?? allItems.length;
-  const summary = businessQ.data?.summary || {};
-  const summaryAllTotal = Number(summary.total_creators);
-  const allTotal = source === 'all' && Number.isFinite(summaryAllTotal) ? summaryAllTotal : endpointAllTotal;
-  const summaryToday = Number(summary.today_new_creators ?? summary.today_collected);
-  const todayAdded = source === 'all' && Number.isFinite(summaryToday) ? summaryToday : localTodayAdded;
+  const highScore = newRecommendedItems.filter((c) => (c.recommendation_score ?? 0) >= 80).length;
+  const needReview = newRecommendedItems.filter((c) => c.review_required || c.risk_summary).length;
+  const contactable = newAllItems.filter(hasContact).length;
+  const localTodayAdded = newAllItems.filter((c) => isToday(c.collected_at || c.created_at)).length;
+  const recommendedTotal = newRecommendedItems.length;
+  const endpointAllTotal = filtered.length;
+  const allTotal = newAllItems.length;
+  const todayAdded = localTodayAdded;
   const activeSourceLabel = SOURCE_FILTERS.find((item) => item.key === source)?.label || '全部来源';
   const activeFilterBadges: ActiveFilterBadge[] = [
     source !== 'all' && { key: 'source', label: `来源: ${activeSourceLabel}`, onClear: () => setSource('all') },
@@ -713,7 +733,7 @@ export default function Recommendations() {
     ownerFilter !== 'all' && { key: 'owner', label: `归属: ${optionLabel(OWNER_FILTERS, ownerFilter)}`, onClear: () => setOwnerFilter('all') },
     productFilter !== 'all' && { key: 'product', label: `品类: ${productFilter}`, onClear: () => setProductFilter('all') },
     collabFilter !== 'all' && { key: 'collab', label: `合作: ${collabFilter}`, onClear: () => setCollabFilter('all') },
-    statusFilter !== 'all' && { key: 'status', label: `状态: ${statusFilter}`, onClear: () => setStatusFilter('all') },
+    statusFilter !== 'all' && { key: 'status', label: `状态: ${displayStatus(statusFilter)}`, onClear: () => setStatusFilter('all') },
     sort !== 'recommended' && { key: 'sort', label: `排序: ${optionLabel(SORT_FILTERS, sort)}`, onClear: () => setSort('recommended') },
   ].filter(Boolean) as ActiveFilterBadge[];
 
@@ -738,17 +758,17 @@ export default function Recommendations() {
         <div className="grid gap-3 border-b border-border p-3 xl:grid-cols-[220px_minmax(0,1fr)]">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="chip text-xxs"><Sparkles size={12} /> 达人库</span>
+              <span className="chip text-xxs"><Sparkles size={12} /> 新达人推荐库</span>
               <span className="rounded-full bg-accent/10 px-2 py-1 text-[11px] font-semibold text-accent">
-                {filtered.length} / {formatCompact(endpointAllTotal)}
+                {pagedItems.length} / {formatCompact(endpointAllTotal)}
               </span>
             </div>
-            <h2 className="mt-2 text-lg font-black leading-tight text-text">推荐达人作战台</h2>
+            <h2 className="mt-2 text-lg font-black leading-tight text-text">新达人推荐库</h2>
             <div className="mt-1 text-xs text-muted">当前来源：{activeSourceLabel}</div>
           </div>
           <div className="grid grid-cols-3 gap-2 md:grid-cols-6">
             {[
-              { label: '全部达人', value: formatCompact(allTotal), icon: Users },
+              { label: '新达人', value: formatCompact(allTotal), icon: Users },
               { label: '推荐池', value: formatCompact(recommendedTotal), icon: Sparkles },
               { label: '可联系', value: contactable, icon: Mail },
               { label: '今日入库', value: todayAdded, icon: CalendarDays },
@@ -921,16 +941,16 @@ export default function Recommendations() {
         page={page}
         pageSize={PAGE_SIZE}
         total={endpointAllTotal}
-        currentCount={items.length}
+        currentCount={pagedItems.length}
         loading={activeQ.isFetching}
         onPageChange={setPage}
       />
 
       <AsyncState loading={activeQ.isLoading} error={activeQ.error} isEmpty={filtered.length === 0} emptyMessage="暂无符合条件的达人" height={320}>
         <div className="grid gap-3">
-          {filtered.map((creator) => (
+          {pagedItems.map((creator, index) => (
             <RecommendationCard
-              key={creator.id}
+              key={`${String(creator.id ?? 'creator')}:${sourceKey(creator)}:${creator.handle || 'handle'}:${offset + index}`}
               creator={creator}
               onOpen={(c) => navigate(`/recommendations/${encodeURIComponent(String(c.id))}`)}
               onMail={openOutreach}

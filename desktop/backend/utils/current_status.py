@@ -3,58 +3,93 @@ from __future__ import annotations
 from typing import Any
 
 
-CURRENT_STATUS_VALUES = ("待建联", "已建联", "待回复", "沟通中", "已寄样", "样品签收", "视频已发布", "已授权", "广告投放中")
+STATUS_PENDING_CONTACT = "待建联"
+STATUS_CONTACTED = "已建联"
+STATUS_PENDING_FOLLOWUP = "待跟进"
+STATUS_COMMUNICATING = "沟通中"
+STATUS_SAMPLE_SHIPPED = "已寄样"
+STATUS_SAMPLE_DELIVERED = "样品签收"
+STATUS_VIDEO_PUBLISHED = "视频已发布"
+STATUS_AUTHORIZED = "已授权"
+STATUS_AD_RUNNING = "广告投放中"
+
+CURRENT_STATUS_VALUES = (
+    STATUS_PENDING_CONTACT,
+    STATUS_CONTACTED,
+    STATUS_PENDING_FOLLOWUP,
+    STATUS_COMMUNICATING,
+    STATUS_SAMPLE_SHIPPED,
+    STATUS_SAMPLE_DELIVERED,
+    STATUS_VIDEO_PUBLISHED,
+    STATUS_AUTHORIZED,
+    STATUS_AD_RUNNING,
+)
 
 _STATUS_ALIASES = {
-    "待建联": "待建联",
-    "未建联": "待建联",
-    "待联系": "待建联",
-    "待触达": "待建联",
-    "to_be_contacted": "待建联",
-    "pending_contact": "待建联",
-    "已建联": "已建联",
-    "建联": "已建联",
-    "已联系": "已建联",
-    "已触达": "已建联",
-    "contacted": "已建联",
-    "outreached": "已建联",
-    "待回复": "待回复",
-    "等待回复": "待回复",
-    "待回": "待回复",
-    "未回复": "待回复",
-    "pending_reply": "待回复",
-    "awaiting_reply": "待回复",
-    "waiting_reply": "待回复",
-    "沟通中": "沟通中",
-    "已回复": "沟通中",
-    "已确认": "沟通中",
-    "确认合作": "沟通中",
-    "communicating": "沟通中",
-    "replied": "沟通中",
-    "confirmed": "沟通中",
-    "视频已发布": "视频已发布",
-    "已发布视频": "视频已发布",
-    "已发布": "视频已发布",
-    "video_published": "视频已发布",
-    "published": "视频已发布",
-    "已寄样": "已寄样",
-    "寄样": "已寄样",
-    "已发样": "已寄样",
-    "样品已寄": "已寄样",
-    "sample_sent": "已寄样",
-    "sent_sample": "已寄样",
-    "sampled": "已寄样",
-    "样品签收": "样品签收",
-    "已签收": "样品签收",
-    "sample_delivered": "样品签收",
-    "delivered": "样品签收",
-    "已授权": "已授权",
-    "广告授权": "已授权",
-    "ad_authorized": "已授权",
-    "authorized": "已授权",
-    "广告投放中": "广告投放中",
-    "ad_running": "广告投放中",
-    "running": "广告投放中",
+    "待建联": STATUS_PENDING_CONTACT,
+    "未建联": STATUS_PENDING_CONTACT,
+    "待联系": STATUS_PENDING_CONTACT,
+    "待触达": STATUS_PENDING_CONTACT,
+    "to_be_contacted": STATUS_PENDING_CONTACT,
+    "pending_contact": STATUS_PENDING_CONTACT,
+    "prospect": STATUS_PENDING_CONTACT,
+    "recommended": STATUS_PENDING_CONTACT,
+    "已建联": STATUS_CONTACTED,
+    "建联": STATUS_CONTACTED,
+    "已联系": STATUS_CONTACTED,
+    "已触达": STATUS_CONTACTED,
+    "contacted": STATUS_CONTACTED,
+    "outreached": STATUS_CONTACTED,
+    "sent": STATUS_CONTACTED,
+    "email_sent": STATUS_CONTACTED,
+    "待跟进": STATUS_PENDING_FOLLOWUP,
+    "需跟进": STATUS_PENDING_FOLLOWUP,
+    "待回复": STATUS_PENDING_FOLLOWUP,
+    "等待回复": STATUS_PENDING_FOLLOWUP,
+    "待回": STATUS_PENDING_FOLLOWUP,
+    "未回复": STATUS_PENDING_FOLLOWUP,
+    "已回复": STATUS_PENDING_FOLLOWUP,
+    "pending_followup": STATUS_PENDING_FOLLOWUP,
+    "pending_follow_up": STATUS_PENDING_FOLLOWUP,
+    "needs_followup": STATUS_PENDING_FOLLOWUP,
+    "needs_follow_up": STATUS_PENDING_FOLLOWUP,
+    "pending_reply": STATUS_PENDING_FOLLOWUP,
+    "awaiting_reply": STATUS_PENDING_FOLLOWUP,
+    "waiting_reply": STATUS_PENDING_FOLLOWUP,
+    "reply_received": STATUS_PENDING_FOLLOWUP,
+    "inbound_reply": STATUS_PENDING_FOLLOWUP,
+    "replied": STATUS_PENDING_FOLLOWUP,
+    "沟通中": STATUS_COMMUNICATING,
+    "已确认": STATUS_COMMUNICATING,
+    "确认合作": STATUS_COMMUNICATING,
+    "communicating": STATUS_COMMUNICATING,
+    "confirmed": STATUS_COMMUNICATING,
+    "已寄样": STATUS_SAMPLE_SHIPPED,
+    "寄样": STATUS_SAMPLE_SHIPPED,
+    "已发样": STATUS_SAMPLE_SHIPPED,
+    "样品已寄": STATUS_SAMPLE_SHIPPED,
+    "sample_sent": STATUS_SAMPLE_SHIPPED,
+    "sent_sample": STATUS_SAMPLE_SHIPPED,
+    "sample_shipped": STATUS_SAMPLE_SHIPPED,
+    "sampled": STATUS_SAMPLE_SHIPPED,
+    "样品签收": STATUS_SAMPLE_DELIVERED,
+    "已签收": STATUS_SAMPLE_DELIVERED,
+    "sample_delivered": STATUS_SAMPLE_DELIVERED,
+    "delivered": STATUS_SAMPLE_DELIVERED,
+    "视频已发布": STATUS_VIDEO_PUBLISHED,
+    "已发布视频": STATUS_VIDEO_PUBLISHED,
+    "已发视频": STATUS_VIDEO_PUBLISHED,
+    "已发布": STATUS_VIDEO_PUBLISHED,
+    "video_published": STATUS_VIDEO_PUBLISHED,
+    "published": STATUS_VIDEO_PUBLISHED,
+    "已授权": STATUS_AUTHORIZED,
+    "广告授权": STATUS_AUTHORIZED,
+    "ad_authorized": STATUS_AUTHORIZED,
+    "authorized": STATUS_AUTHORIZED,
+    "partnered": STATUS_AUTHORIZED,
+    "广告投放中": STATUS_AD_RUNNING,
+    "ad_running": STATUS_AD_RUNNING,
+    "running": STATUS_AD_RUNNING,
 }
 
 
@@ -62,7 +97,7 @@ def normalize_current_status(value: Any) -> str | None:
     text = str(value or "").strip()
     if not text:
         return None
-    text = text.strip("。.;；,，")
+    text = text.strip("。;；，,")
     key = "_".join(text.lower().replace("-", "_").split())
     compact_key = key.replace("_", "")
     return _STATUS_ALIASES.get(key) or _STATUS_ALIASES.get(compact_key) or text

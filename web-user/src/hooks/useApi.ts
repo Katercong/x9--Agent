@@ -189,6 +189,20 @@ export function useOutreachArchiveDetail(id?: string | null) {
   });
 }
 
+export function useOutreachTracking(params?: Params) {
+  return useQuery({
+    queryKey: ['outreach', 'tracking', params],
+    queryFn: () => endpoints.outreachTracking(params),
+  });
+}
+
+export function usePatchOutreachTrackingStatus() {
+  return useMutation({
+    mutationFn: ({ creator_id, ...body }: { creator_id: string | number; current_status: string; note?: string }) =>
+      endpoints.patchOutreachTrackingStatus(creator_id, body),
+  });
+}
+
 export function useGenerateTkScript() {
   return useMutation({
     mutationFn: ({ creator_id, ...body }: { creator_id: string | number; commission: number; strategy?: string; custom_prompt?: string; prompt_id?: string; product_asset_id?: string }) =>

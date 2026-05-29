@@ -432,6 +432,31 @@ export interface OutreachArchiveDetail extends OutreachArchiveItem {
   updated_at?: string | null;
 }
 
+export interface OutreachTrackingItem {
+  creator_id: string;
+  creator_handle?: string | null;
+  creator_display_name?: string | null;
+  creator_profile_url?: string | null;
+  creator_platform?: string | null;
+  creator_email?: string | null;
+  current_status: string;
+  to_email?: string | null;
+  from_email?: string | null;
+  latest_email_id?: string | null;
+  gmail_thread_id?: string | null;
+  latest_outbound_at?: string | null;
+  latest_inbound_at?: string | null;
+  latest_message_at?: string | null;
+  latest_direction?: 'inbound' | 'outbound' | string;
+  needs_followup?: boolean;
+  email_count?: number;
+  last_subject?: string | null;
+  last_preview?: string | null;
+  owner_bd?: string | null;
+  followup_due_at?: string | null;
+  followup_age_hours?: number | null;
+}
+
 export interface GmailAccount {
   id: string;
   email: string;

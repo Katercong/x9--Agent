@@ -31,8 +31,8 @@ _SIMPLE_HANDLE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 STAGE_META: dict[str, dict[str, Any]] = {
     "prospect": {"label": "潜在线索", "rank": 10},
-    "contacted": {"label": "已联系", "rank": 20},
-    "pending_reply": {"label": "待回复", "rank": 25},
+    "contacted": {"label": "已建联", "rank": 20},
+    "pending_followup": {"label": "待跟进", "rank": 25},
     "confirmed": {"label": "已确认", "rank": 30},
     "sample_shipped": {"label": "已寄样", "rank": 40},
     "sample_delivered": {"label": "样品签收", "rank": 50},
@@ -60,12 +60,18 @@ _STAGE_ALIASES = {
     "建联": "contacted",
     "已联系": "contacted",
     "已触达": "contacted",
-    "pending_reply": "pending_reply",
-    "awaiting_reply": "pending_reply",
-    "waiting_reply": "pending_reply",
-    "待回复": "pending_reply",
-    "等待回复": "pending_reply",
-    "未回复": "pending_reply",
+    "pending_followup": "pending_followup",
+    "pending_follow_up": "pending_followup",
+    "needs_followup": "pending_followup",
+    "pending_reply": "pending_followup",
+    "awaiting_reply": "pending_followup",
+    "waiting_reply": "pending_followup",
+    "待跟进": "pending_followup",
+    "待回复": "pending_followup",
+    "等待回复": "pending_followup",
+    "未回复": "pending_followup",
+    "replied": "pending_followup",
+    "已回复": "pending_followup",
     "confirmed": "confirmed",
     "已确认": "confirmed",
     "确认合作": "confirmed",
@@ -741,7 +747,7 @@ def _build_summary(department_code: str | None) -> dict[str, Any]:
         if isinstance(fact.get("first_seen"), date) and fact["first_seen"] == today
     )
 
-    reached_keys = {"contacted", "pending_reply", "confirmed", "sample_shipped", "sample_delivered", "video_published", "ad_authorized", "ad_running"}
+    reached_keys = {"contacted", "pending_followup", "confirmed", "sample_shipped", "sample_delivered", "video_published", "ad_authorized", "ad_running"}
     live_reached = sum(stage_counts.get(key, 0) for key in reached_keys)
     live_confirmed = _stage_rank_total(stage_counts, STAGE_META["confirmed"]["rank"])
     live_samples = _stage_rank_total(stage_counts, STAGE_META["sample_shipped"]["rank"])
@@ -758,10 +764,12 @@ def _build_summary(department_code: str | None) -> dict[str, Any]:
     business_total = collection_channel_total
     stage_total = unique_creator_total + bd_history_creators
 
+    pending_followup_count = stage_counts.get("pending_followup", 0) + stage_counts.get("pending_reply", 0)
     overview_counts = {
         "prospect": max(stage_total - contacted_total - dropped_total, 0),
         "contacted": contacted_total,
-        "pending_reply": stage_counts.get("pending_reply", 0),
+        "pending_followup": pending_followup_count,
+        "pending_reply": pending_followup_count,
         "confirmed": confirmed_total,
         "sample_shipped": samples_total,
         "sample_delivered": stage_counts.get("sample_delivered", 0),
@@ -772,8 +780,8 @@ def _build_summary(department_code: str | None) -> dict[str, Any]:
     }
     stage_display_counts = {
         "prospect": overview_counts["prospect"],
-        "contacted": max(contacted_total - confirmed_total - overview_counts["pending_reply"], 0),
-        "pending_reply": overview_counts["pending_reply"],
+        "contacted": max(contacted_total - confirmed_total - overview_counts["pending_followup"], 0),
+        "pending_followup": overview_counts["pending_followup"],
         "confirmed": max(confirmed_total - samples_total, 0),
         "sample_shipped": max(samples_total - videos_total, 0),
         "sample_delivered": overview_counts["sample_delivered"],
@@ -886,14 +894,16 @@ def _build_legacy_summary_from_analytics(db, department_code: str | None) -> dic
     category_counts = Counter(str(c.primary_product_category or "未填写").strip() or "未填写" for c in creators)
     owner_counts = Counter(str(c.owner_bd or "未分配").strip() or "未分配" for c in creators)
 
-    contacted = sum(event_counts.get(key, 0) for key in ("sent", "pending_reply", "replied", "sample_shipped", "sample_delivered", "partnered", "video_published"))
-    confirmed = event_counts.get("replied", 0) + event_counts.get("sample_shipped", 0) + event_counts.get("sample_delivered", 0) + event_counts.get("partnered", 0) + event_counts.get("video_published", 0)
+    pending_followup_count = event_counts.get("pending_followup", 0) + event_counts.get("pending_reply", 0) + event_counts.get("replied", 0)
+    contacted = sum(event_counts.get(key, 0) for key in ("sent", "pending_followup", "pending_reply", "replied", "communicating", "sample_shipped", "sample_delivered", "partnered", "video_published"))
+    confirmed = event_counts.get("communicating", 0) + event_counts.get("sample_shipped", 0) + event_counts.get("sample_delivered", 0) + event_counts.get("partnered", 0) + event_counts.get("video_published", 0)
     samples = event_counts.get("sample_shipped", 0) + event_counts.get("sample_delivered", 0)
     videos = event_counts.get("video_published", 0)
     stage_counts = {
         "prospect": max(summary["processed_creators"] - contacted - event_counts.get("dropped", 0), 0),
-        "contacted": contacted,
-        "pending_reply": event_counts.get("pending_reply", 0),
+        "contacted": event_counts.get("sent", 0) + event_counts.get("contacted", 0),
+        "pending_followup": pending_followup_count,
+        "pending_reply": pending_followup_count,
         "confirmed": confirmed,
         "sample_shipped": samples,
         "sample_delivered": event_counts.get("sample_delivered", 0),
