@@ -17,7 +17,7 @@ import { KpiCard } from '@/components/kpi/KpiCard';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { EChart } from '@/components/charts/EChart';
 import { AsyncState } from '@/components/states/States';
-import { OutreachProgressTable } from '@/components/dashboard/OutreachProgressTable';
+import { OutreachStatsTable } from '@/components/dashboard/OutreachStatsTable';
 import { useDepartmentDashboardSummary, useUnifiedDashboard } from '@/hooks/useApi';
 
 const topKpiIcons = [Users, UserCheck, Inbox, ThumbsUp, UserPlus, Clock, Handshake];
@@ -270,7 +270,7 @@ export default function Dashboard() {
           </ChartCard>
         </div>
 
-        <OutreachProgressTable rows={memberRows} />
+        <OutreachStatsTable rows={memberRows} />
       </div>
     </AsyncState>
   );

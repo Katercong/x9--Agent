@@ -10,37 +10,19 @@ function memberLabel(value: string) {
   return value;
 }
 
-function ContactProgress({ value, max }: { value: number; max: number }) {
-  const ratio = max > 0 ? value / max : 0;
-  const pct = max > 0 ? Math.max(3, Math.min(100, Math.round(ratio * 100))) : 0;
-
-  return (
-    <div className="min-w-[150px]">
-      <div className="mb-1 flex items-center justify-end gap-2">
-        <span className="text-xs font-semibold num text-gray-900">{value}</span>
-        <span className="text-[10px] text-muted">{max > 0 ? `${Math.round(ratio * 100)}%` : '0%'}</span>
-      </div>
-      <div className="h-1.5 rounded-full bg-blue-50">
-        <div className="h-1.5 rounded-full bg-[#3370ff]" style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
-
-interface OutreachProgressTableProps {
+interface OutreachStatsTableProps {
   rows: AnalyticsMemberRow[];
   title?: string;
   subtitle?: string;
   emptyText?: string;
 }
 
-export function OutreachProgressTable({
+export function OutreachStatsTable({
   rows,
-  title = '达人建联进度数据',
-  subtitle = '合并成员入库、推荐、建联事件和 BD 历史跟进；总建联进度条按当前 Top 对接人相对占比展示。',
-  emptyText = '暂无达人建联进度数据',
-}: OutreachProgressTableProps) {
-  const maxContacted = Math.max(0, ...rows.map((row) => countOf(row.total_contacted ?? row.sent)));
+  title = '达人建联统计数据',
+  subtitle = '只统计成员入库、推荐、建联事件和 BD 历史跟进数量；不按个人职责展示进度或完成率。',
+  emptyText = '暂无达人建联统计数据',
+}: OutreachStatsTableProps) {
   const columns: Column<AnalyticsMemberRow>[] = [
     {
       key: 'member',
@@ -54,10 +36,9 @@ export function OutreachProgressTable({
     { key: 'recommended', header: '推荐', align: 'right', cell: (r) => <span className="text-xs num">{countOf(r.recommended)}</span> },
     {
       key: 'total_contacted',
-      header: '总建联进度',
+      header: '总建联',
       align: 'right',
-      width: '190px',
-      cell: (r) => <ContactProgress value={countOf(r.total_contacted ?? r.sent)} max={maxContacted} />,
+      cell: (r) => <span className="text-xs font-semibold num text-gray-900">{countOf(r.total_contacted ?? r.sent)}</span>,
     },
     { key: 'confirmed', header: '已确认', align: 'right', cell: (r) => <span className="text-xs num">{countOf(r.confirmed)}</span> },
     { key: 'replied', header: '已回复', align: 'right', cell: (r) => <span className="text-xs num">{countOf(r.replied)}</span> },

@@ -5,7 +5,7 @@ import { EChart } from '@/components/charts/EChart';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
-import { OutreachProgressTable } from '@/components/dashboard/OutreachProgressTable';
+import { OutreachStatsTable } from '@/components/dashboard/OutreachStatsTable';
 import { useCreators, useOutreach, useProducts, useUnifiedDashboard, useAnalyticsCompany } from '@/hooks/useApi';
 import { trendByDay } from '@/lib/derive';
 import { formatDate } from '@/lib/format';
@@ -128,7 +128,7 @@ export default function Overview() {
           </ChartCard>
         </div>
 
-        <OutreachProgressTable rows={progressRows} />
+        <OutreachStatsTable rows={progressRows} />
 
         <div className="card">
           <div className="px-4 py-3 border-b border-line">
