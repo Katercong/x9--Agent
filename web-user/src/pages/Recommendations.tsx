@@ -8,7 +8,7 @@ import {
 import { AsyncState } from '@/components/states/States';
 import { OutreachDrawer } from '@/components/outreach/OutreachDrawer';
 import { PaginationControls } from '@/components/PaginationControls';
-import { useAcquireOutreachLock, useCreators, useRecommended } from '@/hooks/useApi';
+import { useAcquireOutreachLock, useCreators } from '@/hooks/useApi';
 import { formatCompact, maskEmail } from '@/lib/format';
 import { pickItems, type Creator, type CreatorOutreachLock } from '@/api/types';
 
@@ -28,7 +28,6 @@ type ActiveFilterBadge = { key: string; label: string; onClear: () => void };
 type CreatorTag = { label: string; tone?: 'shop' | 'good' | 'warn' | 'muted' };
 
 const PAGE_SIZE = 10;
-const NEW_CREATOR_FETCH_LIMIT = 1000;
 
 const SOURCE_META: Record<Exclude<SourceFilter, 'all'>, { label: string; color: string }> = {
   tiktok_shop: { label: 'TikTok Shop', color: '#ff3b63' },
@@ -576,24 +575,20 @@ export default function Recommendations() {
                 ? 'micro'
                 : 'recommended';
   const offset = page * PAGE_SIZE;
-  const queryParams = { limit: NEW_CREATOR_FETCH_LIMIT, ...sourceParams, ...dateParams };
+  const queryParams = { limit: PAGE_SIZE, ...sourceParams, ...dateParams };
   const newCreatorParams = { ...queryParams, uncontacted: true, outreach_sent: false };
-  const recommendedQ = useRecommended(newCreatorParams);
-  const creatorsQ = useCreators({ ...newCreatorParams, sort_by: backendSortBy });
+  const creatorsQ = useCreators({ ...newCreatorParams, offset, sort_by: backendSortBy });
   const activeQ = creatorsQ;
   const items = pickItems<Creator>(activeQ.data as any);
-  const recommendedItems = pickItems<Creator>(recommendedQ.data as any);
-  const allItems = pickItems<Creator>(creatorsQ.data as any);
-  const newRecommendedItems = useMemo(() => recommendedItems.filter(isNewRecommendationCreator), [recommendedItems]);
-  const newAllItems = useMemo(() => allItems.filter(isNewRecommendationCreator), [allItems]);
+  const newAllItems = useMemo(() => items.filter(isNewRecommendationCreator), [items]);
 
   const optionItems = useMemo(() => {
     const seen = new Map<string, Creator>();
-    [...newAllItems, ...newRecommendedItems].forEach((creator) => {
+    newAllItems.forEach((creator) => {
       seen.set(String(creator.id ?? `${creator.source || ''}:${creator.handle || ''}`), creator);
     });
     return [...seen.values()];
-  }, [newAllItems, newRecommendedItems]);
+  }, [newAllItems]);
   const productOptions = useMemo(
     () => uniqueOptions(optionItems, (creator) => [
       creator.primary_product_category,
@@ -618,8 +613,7 @@ export default function Recommendations() {
 
   const filtered = useMemo(() => {
     const text = q.trim().toLowerCase();
-    const rows = items.filter((creator) => {
-      if (!isNewRecommendationCreator(creator)) return false;
+    const rows = newAllItems.filter((creator) => {
       const hay = [
         creator.handle,
         creator.display_name,
@@ -672,8 +666,8 @@ export default function Recommendations() {
       return true;
     });
     return sortCreators(rows, sort);
-  }, [collabFilter, contact, dateRange, items, maxFollowers, minFollowers, ownerFilter, priority, productFilter, q, reviewFilter, scoreFilter, sort, source, statusFilter]);
-  const pagedItems = filtered.slice(offset, offset + PAGE_SIZE);
+  }, [collabFilter, contact, dateRange, maxFollowers, minFollowers, newAllItems, ownerFilter, priority, productFilter, q, reviewFilter, scoreFilter, sort, source, statusFilter]);
+  const pagedItems = filtered;
 
   const resetFilters = () => {
     setSource('all');
@@ -708,13 +702,13 @@ export default function Recommendations() {
     sort !== 'recommended',
   ].filter(Boolean).length;
 
-  const highScore = newRecommendedItems.filter((c) => (c.recommendation_score ?? 0) >= 80).length;
-  const needReview = newRecommendedItems.filter((c) => c.review_required || c.risk_summary).length;
+  const highScore = newAllItems.filter((c) => (c.recommendation_score ?? 0) >= 80).length;
+  const needReview = newAllItems.filter((c) => c.review_required || c.risk_summary).length;
   const contactable = newAllItems.filter(hasContact).length;
   const localTodayAdded = newAllItems.filter((c) => isToday(c.collected_at || c.created_at)).length;
-  const recommendedTotal = newRecommendedItems.length;
-  const endpointAllTotal = filtered.length;
-  const allTotal = newAllItems.length;
+  const recommendedTotal = newAllItems.filter((c) => valueList(c.recommendation_status).length > 0).length;
+  const endpointAllTotal = (creatorsQ.data as any)?.total ?? newAllItems.length;
+  const allTotal = endpointAllTotal;
   const todayAdded = localTodayAdded;
   const activeSourceLabel = SOURCE_FILTERS.find((item) => item.key === source)?.label || '全部来源';
   const activeFilterBadges: ActiveFilterBadge[] = [
