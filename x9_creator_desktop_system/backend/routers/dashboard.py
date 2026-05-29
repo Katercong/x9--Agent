@@ -944,7 +944,7 @@ def _build_legacy_summary_from_analytics(db, department_code: str | None) -> dic
             for key in STAGE_ORDER
         ],
         "trend_7d": [
-            {"date": row["date"], "count": row.get("processed", 0)}
+            {"date": row["date"], "count": row.get("collected", 0)}
             for row in trend[-7:]
         ],
         "category_counts": [{"name": name, "value": value} for name, value in category_counts.most_common(8)],

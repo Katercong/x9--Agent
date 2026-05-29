@@ -29,6 +29,11 @@ def _today_trend(payload: dict) -> dict:
     return next(row for row in payload["analytics"]["trend"] if row["date"] == today)
 
 
+def _today_dashboard_trend(payload: dict) -> dict:
+    today = datetime.now().date().isoformat()
+    return next(row for row in payload["trend_7d"] if row["date"] == today)
+
+
 def test_business_summary_counts_cumulative_creator_rows(client):
     before = _summary(client)
     marker = datetime.now().strftime("%Y%m%d%H%M%S%f")
@@ -158,6 +163,7 @@ def test_company_analytics_trend_includes_total_collected_excluding_queue(client
 
     after = _dashboard(client)
     assert _today_trend(after)["collected"] == _today_trend(before).get("collected", 0) + 1
+    assert _today_dashboard_trend(after)["count"] == _today_dashboard_trend(before).get("count", 0) + 1
 
 
 def test_dashboard_recent_events_include_unified_outreach_events(client):
