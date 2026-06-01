@@ -612,14 +612,19 @@ def portal_index_redirect() -> RedirectResponse:
 
 
 @app.get("/portal/")
-def portal_index() -> FileResponse:
+def portal_index() -> Response:
     if not (PORTAL_DIR / "index.html").exists():
-        return FileResponse(UI_DIR / "login.html", headers=NO_STORE_HEADERS)
+        return Response(
+            "Portal frontend is not built. Run: cd web-user && npm run build:deploy && npm run deploy",
+            status_code=503,
+            media_type="text/plain; charset=utf-8",
+            headers=NO_STORE_HEADERS,
+        )
     return FileResponse(PORTAL_DIR / "index.html", headers=NO_STORE_HEADERS)
 
 
 @app.get("/portal/{full_path:path}")
-def portal_spa(full_path: str) -> FileResponse:
+def portal_spa(full_path: str) -> Response:
     """SPA fallback for the React portal — serve real files when present,
     otherwise return index.html so React Router can handle the route."""
     if PORTAL_DIR.exists():
@@ -629,7 +634,12 @@ def portal_spa(full_path: str) -> FileResponse:
         index = PORTAL_DIR / "index.html"
         if index.exists():
             return FileResponse(index, headers=NO_STORE_HEADERS)
-    return FileResponse(UI_DIR / "login.html", headers=NO_STORE_HEADERS)
+    return Response(
+        "Portal frontend is not built. Run: cd web-user && npm run build:deploy && npm run deploy",
+        status_code=503,
+        media_type="text/plain; charset=utf-8",
+        headers=NO_STORE_HEADERS,
+    )
 
 
 # ============================================================

@@ -427,6 +427,24 @@
         return safeNextFor(user) || homeFor(user);
       }
 
+      function normalizePath(path) {
+        if (!path) return "/";
+        return path.length > 1 ? path.replace(/\/+$/, "") : path;
+      }
+
+      function goToUserHome(user) {
+        const target = redirectFor(user);
+        const current = normalizePath(window.location.pathname);
+        const next = normalizePath(new URL(target, window.location.origin).pathname);
+        if (current === next && !current.startsWith("/login")) {
+          setStatus("已登录，但当前地址没有加载到工作台前端。请让技术同事重新构建 web-user 并部署 portal。", "danger");
+          const button = document.getElementById("login-button");
+          if (button) button.disabled = false;
+          return;
+        }
+        window.location.href = target;
+      }
+
       async function postJson(path, body) {
         const response = await fetch(`${API}${path}`, {
           method: "POST",
@@ -451,7 +469,7 @@
             username: document.getElementById("login-username").value.trim(),
             password: document.getElementById("login-password").value,
           });
-          window.location.href = redirectFor(payload.user || {});
+          goToUserHome(payload.user || {});
         } catch (err) {
           setStatus(err.message, "danger");
           button.disabled = false;
@@ -481,7 +499,7 @@
       });
 
       fetch(`${API}/auth/me`).then((r) => r.json()).then((payload) => {
-        if (payload.logged_in && payload.user) window.location.href = redirectFor(payload.user);
+        if (payload.logged_in && payload.user) goToUserHome(payload.user);
       }).catch(() => undefined);
     </script>
   </body>
