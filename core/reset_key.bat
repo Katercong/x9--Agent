@@ -5,9 +5,21 @@ REM   - You can't log into the web UI any more
 REM   - You want to rotate a key
 
 setlocal
-set PY=C:\Users\Administrator\AppData\Local\Programs\Python\Python311\python.exe
 set HERE=%~dp0
 cd /d "%HERE%"
+
+set "PY=python"
+if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
+if not exist ".venv\Scripts\python.exe" (
+    py -3.11 --version >NUL 2>NUL
+    if not errorlevel 1 set "PY=py -3.11"
+)
+%PY% --version >NUL 2>NUL
+if errorlevel 1 (
+    echo [ERROR] Python 3.11 not found. Install Python or add python.exe to PATH.
+    pause
+    exit /b 1
+)
 
 if "%~1"=="" (
     echo Usage:
@@ -15,12 +27,12 @@ if "%~1"=="" (
     echo     reset_key.bat ^<username^> --add    add another key without revoking
     echo     reset_key.bat --list              list all users
     echo.
-    "%PY%" scripts\reset_user_key.py --list
+    %PY% scripts\reset_user_key.py --list
     pause
     exit /b 0
 )
 
-"%PY%" scripts\reset_user_key.py %*
+%PY% scripts\reset_user_key.py %*
 echo.
 echo Press any key to close...
 pause >/dev/null
