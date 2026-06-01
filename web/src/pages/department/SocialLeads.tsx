@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Heart } from 'lucide-react';
+import { Heart, ExternalLink } from 'lucide-react';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
 import { PaginationControls } from '@/components/PaginationControls';
@@ -61,6 +61,15 @@ export default function SocialLeads() {
     { key: 'level', header: '意向级别', cell: (r) => (r.fit_level ? <Pill tone={LEVEL_TONE[r.fit_level] || 'muted'}>{r.fit_level}</Pill> : <span className="text-xs text-muted">未判定</span>) },
     { key: 'decision', header: 'GPT 判定', cell: (r) => <span className="text-xs text-gray-700">{DECISION_LABELS[r.decision || ''] || r.decision || '—'}</span> },
     { key: 'intent', header: '意图类型', cell: (r) => <span className="text-xs text-gray-700">{INTENT_LABELS[r.intent_type || ''] || r.intent_type || '—'}</span> },
+    {
+      key: 'profile',
+      header: '主页',
+      cell: (r) => (r.profile_url ? (
+        <a href={r.profile_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1 text-xs text-blue-700 hover:underline">
+          <ExternalLink size={12} /> 打开
+        </a>
+      ) : <span className="text-xs text-muted">—</span>),
+    },
   ];
 
   return (
@@ -102,7 +111,13 @@ export default function SocialLeads() {
           emptyMessage="还没有社媒线索（采集打通后自动填充）"
           height={320}
         >
-          <DataTable columns={columns} data={items} rowKey={(r) => r.id} emptyText="暂无数据" />
+          <DataTable
+            columns={columns}
+            data={items}
+            rowKey={(r) => r.id}
+            emptyText="暂无数据"
+            onRowClick={(r) => { if (r.profile_url) window.open(r.profile_url, '_blank', 'noopener'); }}
+          />
           <PaginationControls page={page} pageSize={PAGE_SIZE} total={total} currentCount={items.length} loading={query.isFetching} onPageChange={setPage} />
         </AsyncState>
       </div>

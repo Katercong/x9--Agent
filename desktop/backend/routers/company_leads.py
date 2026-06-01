@@ -13,7 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models.company_lead import CompanyLead
+from ..models.company_lead import CompanyLead, CompanyObservation
 from ..models.talent_lead import TalentLead
 from ..services.company_lead_service import ingest_company, ingest_talent
 from ..services.departments import current_department_code, department_where
@@ -46,6 +46,7 @@ def _company_dict(lead: CompanyLead) -> dict[str, Any]:
         "size_range": lead.size_range,
         "city": lead.city,
         "province": lead.province,
+        "company_address": lead.company_address,
         "company_description": lead.company_description,
         "tier": lead.tier,
         "score": lead.score,
@@ -54,13 +55,20 @@ def _company_dict(lead: CompanyLead) -> dict[str, Any]:
         "next_action": lead.next_action,
         "us_market": int(lead.us_market_flag or 0),
         "excluded": int(lead.excluded or 0),
+        "excluded_reason": lead.excluded_reason,
         "lead_tags": _json_list(lead.lead_tags),
+        "raw_jd_titles": _json_list(lead.raw_jd_titles),
+        "search_keywords": lead.search_keywords,
         "score_reason": lead.score_reason,
+        "llm_score_status": lead.llm_score_status,
+        "llm_score_reason": lead.llm_score_reason,
         "llm_score_suggestion": lead.llm_score_suggestion,
         "contact_name": lead.contact_name,
+        "contact_title": lead.contact_title,
         "contact_email": lead.contact_email,
         "contact_phone": lead.contact_phone,
         "hr_wechat": lead.hr_wechat,
+        "contact_source": lead.contact_source,
         "status": lead.status,
         "owner_bd": lead.owner_bd,
         "notes": lead.notes,
@@ -77,6 +85,7 @@ def _talent_dict(lead: TalentLead) -> dict[str, Any]:
         "city": lead.city,
         "experience": lead.experience,
         "education": lead.education,
+        "major": lead.major,
         "salary_expectation": lead.salary_expectation,
         "tier": lead.tier,
         "score": lead.score,
@@ -84,6 +93,10 @@ def _talent_dict(lead: TalentLead) -> dict[str, Any]:
         "next_action": lead.next_action,
         "lead_tags": _json_list(lead.lead_tags),
         "score_reason": lead.score_reason,
+        "llm_score_suggestion": lead.llm_score_suggestion,
+        "raw_summary": lead.raw_summary,
+        "source_url": lead.source_url,
+        "resume_download_url": lead.resume_download_url,
         "contact_email": lead.contact_email,
         "contact_phone": lead.contact_phone,
         "wechat": lead.wechat,
@@ -91,6 +104,25 @@ def _talent_dict(lead: TalentLead) -> dict[str, Any]:
         "notes": lead.notes,
         "created_at": _iso(lead.created_at),
     }
+
+
+def _company_source_urls(db: Session, lead_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    """Source page URLs (51job / zhaopin / qzrc) captured for this company,
+    newest first. These are the clickable links shown in the detail panel."""
+    rows = db.execute(
+        select(CompanyObservation.source_url, CompanyObservation.platform, CompanyObservation.scraped_at)
+        .where(CompanyObservation.company_lead_id == lead_id, CompanyObservation.source_url.isnot(None))
+        .order_by(CompanyObservation.scraped_at.desc())
+        .limit(limit)
+    ).all()
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for url, platform, scraped_at in rows:
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        out.append({"url": url, "platform": platform, "scraped_at": _iso(scraped_at)})
+    return out
 
 
 # ---------------- ingest (scraper / extension) ----------------
@@ -193,6 +225,26 @@ def list_talents(
 
 _COMPANY_PATCH_FIELDS = {"status", "owner_bd", "notes", "contact_email", "contact_phone", "hr_wechat"}
 _TALENT_PATCH_FIELDS = {"status", "notes", "contact_email", "contact_phone", "wechat"}
+
+
+# ---------------- detail (click a row) ----------------
+
+@router.get("/company-leads/{lead_id}")
+def get_company_lead(lead_id: str, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    lead = db.get(CompanyLead, lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="not found")
+    item = _company_dict(lead)
+    item["source_urls"] = _company_source_urls(db, lead.id)
+    return {"ok": True, "item": item}
+
+
+@router.get("/talents/{lead_id}")
+def get_talent(lead_id: str, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    lead = db.get(TalentLead, lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return {"ok": True, "item": _talent_dict(lead)}
 
 
 @router.patch("/company-leads/{lead_id}")

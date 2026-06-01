@@ -5,6 +5,7 @@ import { Pill } from '@/components/Pill';
 import { PaginationControls } from '@/components/PaginationControls';
 import { AsyncState } from '@/components/states/States';
 import { useTalentLeads, type TalentLeadItem } from '@/api/foreignTrade';
+import LeadDetailDrawer from './LeadDetailDrawer';
 
 const PAGE_SIZE = 20;
 
@@ -21,6 +22,7 @@ export default function TalentLeads() {
   const [status, setStatus] = useState('');
   const [q, setQ] = useState('');
   const [qInput, setQInput] = useState('');
+  const [detailId, setDetailId] = useState<string | null>(null);
   const query = useTalentLeads({ tier: tier || undefined, status: status || undefined, q: q || undefined, limit: PAGE_SIZE, offset: page * PAGE_SIZE });
   const items = query.data?.items ?? [];
   const total = query.data?.total ?? 0;
@@ -83,10 +85,12 @@ export default function TalentLeads() {
           emptyMessage="还没有跨境人才线索（采集打通后自动填充）"
           height={320}
         >
-          <DataTable columns={columns} data={items} rowKey={(r) => r.id} emptyText="暂无数据" />
+          <DataTable columns={columns} data={items} rowKey={(r) => r.id} emptyText="暂无数据" onRowClick={(r) => setDetailId(r.id)} />
           <PaginationControls page={page} pageSize={PAGE_SIZE} total={total} currentCount={items.length} loading={query.isFetching} onPageChange={setPage} />
         </AsyncState>
       </div>
+
+      <LeadDetailDrawer kind="talent" id={detailId} onClose={() => setDetailId(null)} />
     </div>
   );
 }

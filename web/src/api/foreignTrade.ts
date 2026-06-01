@@ -121,6 +121,25 @@ export interface CompanyLeadItem {
   owner_bd: string | null;
   notes: string | null;
   created_at: string | null;
+  // present on detail (GET /company-leads/{id}); optional on list rows
+  company_address?: string | null;
+  excluded_reason?: string | null;
+  raw_jd_titles?: string[];
+  search_keywords?: string | null;
+  llm_score_status?: string | null;
+  llm_score_reason?: string | null;
+  contact_title?: string | null;
+  contact_source?: string | null;
+}
+
+export interface SourceUrl {
+  url: string;
+  platform: string | null;
+  scraped_at: string | null;
+}
+
+export interface CompanyLeadDetail extends CompanyLeadItem {
+  source_urls: SourceUrl[];
 }
 
 export interface TalentLeadItem {
@@ -131,6 +150,7 @@ export interface TalentLeadItem {
   city: string | null;
   experience: string | null;
   education: string | null;
+  major?: string | null;
   salary_expectation: string | null;
   tier: string | null;
   score: number;
@@ -138,6 +158,10 @@ export interface TalentLeadItem {
   next_action: string | null;
   lead_tags: string[];
   score_reason: string | null;
+  llm_score_suggestion?: string | null;
+  raw_summary?: string | null;
+  source_url?: string | null;
+  resume_download_url?: string | null;
   contact_email: string | null;
   contact_phone: string | null;
   wechat: string | null;
@@ -181,6 +205,23 @@ export function useTalentLeads(params: { tier?: string; status?: string; q?: str
         offset: params.offset ?? 0,
       }),
     refetchInterval: 60_000,
+  });
+}
+
+// 行点击详情：公司客户拿源页链接，人才拿简历/源页链接
+export function useCompanyLeadDetail(id: string | null) {
+  return useQuery({
+    enabled: !!id,
+    queryKey: ['foreign-trade', 'company-lead', id],
+    queryFn: () => api.get<{ ok: boolean; item: CompanyLeadDetail }>(`/api/local/company-leads/${id}`),
+  });
+}
+
+export function useTalentLeadDetail(id: string | null) {
+  return useQuery({
+    enabled: !!id,
+    queryKey: ['foreign-trade', 'talent-lead', id],
+    queryFn: () => api.get<{ ok: boolean; item: TalentLeadItem }>(`/api/local/talents/${id}`),
   });
 }
 
