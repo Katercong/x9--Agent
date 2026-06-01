@@ -33,7 +33,6 @@ if not "%FOUND%"=="" (
 
 echo [restart_desktop] Starting new backend with /portal/* routes...
 set X9_NO_BROWSER=1
-set X9_CORE_API_AUTH_DISABLED=1
 
 REM Foreground uvicorn (this window stays open until Ctrl+C).
 "%PY%" -m uvicorn desktop.backend.main:app --host 127.0.0.1 --port %PORT%
