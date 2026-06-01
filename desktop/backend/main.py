@@ -573,9 +573,9 @@ def workspace_page(department_slug: str):
     if department_slug not in SLUG_TO_CODE:
         return FileResponse(UI_DIR / "login.html", headers=NO_STORE_HEADERS)
     # Merged: the legacy vanilla workspace UI is superseded by the React
-    # portal. Old /workspace/{slug}/ links now land on the portal dashboard
+    # portal. Old /workspace/{slug}/ links now land on the portal home
     # (department scope comes from the session, not the slug).
-    return RedirectResponse(url="/portal/dashboard", status_code=307)
+    return RedirectResponse(url="/portal/", status_code=303)
 
 
 @app.get("/ui/app.js")

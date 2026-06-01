@@ -13,7 +13,7 @@ export default function AppShell() {
     if (location.pathname !== '/') return;
     const role = meQ.data?.user?.role;
     const adminHome =
-      role === 'super_admin' ? '/a/monitor' :
+      role === 'super_admin' ? '/a/dashboard' :
       role === 'company_admin' ? '/c/overview' :
       role === 'department_admin' ? '/d/dashboard' :
       '';

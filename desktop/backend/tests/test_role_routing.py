@@ -43,6 +43,15 @@ def test_department_user_root_goes_to_portal() -> None:
     assert response.headers["location"] == "/portal/"
 
 
+def test_legacy_workspace_goes_to_portal_home() -> None:
+    client = _client_for_role("route_member_workspace", "department_user")
+
+    response = client.get("/workspace/foreign-trade/", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/portal/"
+
+
 def test_super_admin_root_goes_to_workbench_dashboard() -> None:
     client = _client_for_role("route_super_admin_root", "super_admin")
 
