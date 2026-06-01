@@ -105,8 +105,16 @@ def test_foreign_trade_extension_download_embeds_ft_actor_config():
     assert "x9-foreign-trade-extension.zip" in response.headers["content-disposition"]
     with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
         names = set(zf.namelist())
+        douyin_runner = zf.read("social/douyin_runner.js").decode("utf-8")
+        xhs_runner = zf.read("social/xhs_runner.js").decode("utf-8")
     assert "ft_actor.js" in names
     assert "social/sidepanel.html" in names
+    assert "social/douyin_content.js" in names
+    assert "social/xhs_content.js" in names
+    assert 'files: ["social/douyin_content.js"]' in douyin_runner
+    assert 'files: ["social/xhs_content.js"]' in xhs_runner
+    assert 'files: ["douyin_content.js"]' not in douyin_runner
+    assert 'files: ["xhs_content.js"]' not in xhs_runner
     config = _ft_actor_config_from_zip(response.content)
     assert config["department_code"] == "foreign_trade"
     assert config["actor_user_id"] == user_id

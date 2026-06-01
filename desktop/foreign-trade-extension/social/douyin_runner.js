@@ -21,7 +21,7 @@
   const RESULT_STORAGE_KEY = "x9_douyin_last_result";
   const INGEST_ENDPOINT_KEY = "x9_douyin_ingest_endpoint";
   const INGEST_UPLOAD_STORAGE_KEY = "x9_douyin_last_ingest_upload";
-  const DEFAULT_INGEST_ENDPOINT = "http://127.0.0.1:18766/api/douyin/ingest";
+  const DEFAULT_INGEST_ENDPOINT = "https://usx9.us/api/douyin/ingest";
 
   const DEFAULT_STATE = {
     status: "idle",
@@ -255,14 +255,14 @@
           } catch (_) {}
         },
       });
-      await chrome.scripting.executeScript({ target: { tabId }, files: ["douyin_content.js"] });
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["social/douyin_content.js"] });
       return;
     }
     try {
       await chrome.tabs.sendMessage(tabId, { type: "DOUYIN_PING" });
       return;
     } catch (_) {
-      await chrome.scripting.executeScript({ target: { tabId }, files: ["douyin_content.js"] });
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["social/douyin_content.js"] });
     }
   }
 
@@ -867,7 +867,7 @@
 
   async function uploadSnapshot(snapshot) {
     const stored = await chrome.storage.local.get([INGEST_ENDPOINT_KEY]).catch(() => ({}));
-    const endpoint = String(stored[INGEST_ENDPOINT_KEY] || DEFAULT_INGEST_ENDPOINT).trim();
+    const endpoint = normalizeIngestEndpoint(stored[INGEST_ENDPOINT_KEY]);
     if (!endpoint) return null;
     const uploading = {
       ok: null,
@@ -933,6 +933,21 @@
         user: users[0] || null
       }
     });
+  }
+
+  function normalizeIngestEndpoint(value) {
+    const raw = String(value || "").trim();
+    if (!raw || /127\.0\.0\.1:18766|localhost:18766/i.test(raw)) return DEFAULT_INGEST_ENDPOINT;
+    try {
+      const url = new URL(raw);
+      if (url.protocol === "https:" && (url.hostname === "usx9.us" || url.hostname.endsWith(".usx9.us"))) {
+        return raw;
+      }
+      if (/^(127\.0\.0\.1|localhost)$/.test(url.hostname) && url.port === "8000") {
+        return raw;
+      }
+    } catch (_) {}
+    return DEFAULT_INGEST_ENDPOINT;
   }
 
   function collectedProfileCount() {
