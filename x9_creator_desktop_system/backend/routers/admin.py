@@ -30,6 +30,14 @@ from ..services.departments import (
     filter_rows_for_department,
     require_admin,
 )
+from ..utils.current_status import (
+    STATUS_CONTACTED,
+    STATUS_PENDING_CONTACT,
+    STATUS_PENDING_FOLLOWUP,
+    STATUS_SAMPLE_SHIPPED,
+    STATUS_VIDEO_PUBLISHED,
+    normalize_current_status,
+)
 
 
 router = APIRouter(prefix="/api/local/admin", tags=["admin"])
@@ -43,7 +51,13 @@ RECOMMENDED_STATUSES = {
     "brand_awareness_only",
     "manual_review_before_outreach",
 }
-BUSINESS_STATUS_ORDER = ("待建联", "已建联", "待回复", "已寄样", "视频已发布")
+BUSINESS_STATUS_ORDER = (
+    STATUS_PENDING_CONTACT,
+    STATUS_CONTACTED,
+    STATUS_PENDING_FOLLOWUP,
+    STATUS_SAMPLE_SHIPPED,
+    STATUS_VIDEO_PUBLISHED,
+)
 
 
 def require_super_admin(request: Request) -> dict[str, Any]:
@@ -114,6 +128,17 @@ def _clean_group_key(value: Any, fallback: str = "未填写") -> str:
     return text or fallback
 
 
+def _status_counts(rows: list[dict[str, Any]]) -> Counter[str]:
+    return Counter(
+        normalize_current_status(row.get("current_status")) or _clean_group_key(row.get("current_status"))
+        for row in rows
+    )
+
+
+def _count_statuses(counts: Counter[str], *statuses: str) -> int:
+    return sum(int(counts.get(status, 0) or 0) for status in statuses)
+
+
 def _count_by(rows: list[dict[str, Any]], key: str, *, fallback: str = "未填写") -> list[dict[str, Any]]:
     counts = Counter(_clean_group_key(row.get(key), fallback) for row in rows)
     return [
@@ -153,17 +178,17 @@ def _top_owner_rows(rows: list[dict[str, Any]], limit: int = 12) -> list[dict[st
         grouped.setdefault(owner, []).append(row)
     items = []
     for owner, owner_rows in grouped.items():
-        status_counts = Counter(_clean_group_key(row.get("current_status")) for row in owner_rows)
+        status_counts = _status_counts(owner_rows)
         recommended = sum(1 for row in owner_rows if row.get("recommendation_status") in RECOMMENDED_STATUSES)
         items.append({
             "owner": owner,
             "creator_count": len(owner_rows),
             "recommended": recommended,
-            "pending_contact": status_counts.get("待建联", 0),
-            "contacted": status_counts.get("已建联", 0),
-            "pending_reply": status_counts.get("待回复", 0),
-            "sample_sent": status_counts.get("已寄样", 0),
-            "video_published": status_counts.get("视频已发布", 0),
+            "pending_contact": status_counts.get(STATUS_PENDING_CONTACT, 0),
+            "contacted": status_counts.get(STATUS_CONTACTED, 0),
+            "pending_reply": status_counts.get(STATUS_PENDING_FOLLOWUP, 0),
+            "sample_sent": status_counts.get(STATUS_SAMPLE_SHIPPED, 0),
+            "video_published": status_counts.get(STATUS_VIDEO_PUBLISHED, 0),
         })
     items.sort(key=lambda item: (-item["recommended"], -item["creator_count"], item["owner"]))
     return items[:limit]
@@ -275,9 +300,15 @@ def business_dashboard(request: Request, _user: dict = Depends(current_user), db
     today = datetime.now().date()
     seven_days_ago = today - timedelta(days=6)
     recommended_rows = [row for row in rows if row.get("recommendation_status") in RECOMMENDED_STATUSES]
-    current_status_counts = Counter(_clean_group_key(row.get("current_status")) for row in rows)
+    current_status_counts = _status_counts(rows)
     priority_counts = Counter(_clean_group_key(row.get("outreach_priority")) for row in rows)
-    contacted_count = sum(current_status_counts.get(status, 0) for status in ("已建联", "待回复", "已寄样", "视频已发布"))
+    contacted_count = _count_statuses(
+        current_status_counts,
+        STATUS_CONTACTED,
+        STATUS_PENDING_FOLLOWUP,
+        STATUS_SAMPLE_SHIPPED,
+        STATUS_VIDEO_PUBLISHED,
+    )
     recent_collection_count = sum(1 for row in rows if (_row_date(row) or datetime.min.date()) >= seven_days_ago)
     visible_departments = {department_code: DEPARTMENTS[department_code]} if department_code else DEPARTMENTS
     department_rows: dict[str, list[dict[str, Any]]] = {code: [] for code in visible_departments}
@@ -286,19 +317,25 @@ def business_dashboard(request: Request, _user: dict = Depends(current_user), db
     department_items = []
     for code, meta in visible_departments.items():
         dept_rows = department_rows.get(code, [])
-        dept_status_counts = Counter(_clean_group_key(row.get("current_status")) for row in dept_rows)
+        dept_status_counts = _status_counts(dept_rows)
         dept_recommended = sum(1 for row in dept_rows if row.get("recommendation_status") in RECOMMENDED_STATUSES)
-        dept_contacted = sum(dept_status_counts.get(status, 0) for status in ("已建联", "待回复", "已寄样", "视频已发布"))
+        dept_contacted = _count_statuses(
+            dept_status_counts,
+            STATUS_CONTACTED,
+            STATUS_PENDING_FOLLOWUP,
+            STATUS_SAMPLE_SHIPPED,
+            STATUS_VIDEO_PUBLISHED,
+        )
         department_items.append({
             "code": code,
             "name": meta["name"],
             "creator_count": len(dept_rows),
             "recommended": dept_recommended,
             "contacted": dept_contacted,
-            "pending_contact": dept_status_counts.get("待建联", 0),
-            "pending_reply": dept_status_counts.get("待回复", 0),
-            "sample_sent": dept_status_counts.get("已寄样", 0),
-            "video_published": dept_status_counts.get("视频已发布", 0),
+            "pending_contact": dept_status_counts.get(STATUS_PENDING_CONTACT, 0),
+            "pending_reply": dept_status_counts.get(STATUS_PENDING_FOLLOWUP, 0),
+            "sample_sent": dept_status_counts.get(STATUS_SAMPLE_SHIPPED, 0),
+            "video_published": dept_status_counts.get(STATUS_VIDEO_PUBLISHED, 0),
         })
     return {
         "ok": True,
@@ -310,10 +347,10 @@ def business_dashboard(request: Request, _user: dict = Depends(current_user), db
             "assigned": sum(1 for row in rows if str(row.get("owner_bd") or "").strip()),
             "unassigned_recommended": sum(1 for row in recommended_rows if not str(row.get("owner_bd") or "").strip()),
             "contacted": contacted_count,
-            "pending_contact": current_status_counts.get("待建联", 0),
-            "pending_reply": current_status_counts.get("待回复", 0),
-            "sample_sent": current_status_counts.get("已寄样", 0),
-            "video_published": current_status_counts.get("视频已发布", 0),
+            "pending_contact": current_status_counts.get(STATUS_PENDING_CONTACT, 0),
+            "pending_reply": current_status_counts.get(STATUS_PENDING_FOLLOWUP, 0),
+            "sample_sent": current_status_counts.get(STATUS_SAMPLE_SHIPPED, 0),
+            "video_published": current_status_counts.get(STATUS_VIDEO_PUBLISHED, 0),
             "recent_collections_7d": recent_collection_count,
             "outreach_drafts": _outreach_count(db, department_code, "draft"),
             "outreach_sent": _outreach_count(db, department_code, "sent"),

@@ -1,26 +1,9 @@
-import { useEffect } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
-import { useMe } from '@/hooks/useApi';
+import { Outlet } from 'react-router-dom';
 import { GmailOAuthFeedback } from '@/components/outreach/GmailOAuthFeedback';
 import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 
 export default function AppShell() {
-  const meQ = useMe();
-  const location = useLocation();
-
-  useEffect(() => {
-    if (location.pathname !== '/') return;
-    const role = meQ.data?.user?.role;
-    const adminHome =
-      role === 'super_admin' ? '/a/monitor' :
-      role === 'company_admin' ? '/c/overview' :
-      role === 'department_admin' ? '/d/dashboard' :
-      '';
-    if (!adminHome) return;
-    window.location.replace(adminHome + (location.search || ''));
-  }, [location.pathname, location.search, meQ.data?.user?.role]);
-
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'rgb(var(--bg))' }}>
       <GmailOAuthFeedback />

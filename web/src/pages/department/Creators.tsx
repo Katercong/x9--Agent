@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Users, Activity, Clock, UserPlus, Search, Plus, Download } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { DataTable, type Column } from '@/components/table/DataTable';
@@ -7,6 +7,7 @@ import { TierPill, StatusPill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
 import { useCreators } from '@/hooks/useApi';
 import { formatCompact, formatCurrency, formatDate } from '@/lib/format';
+import { isActiveCreator, isPendingContactCreator, isRecentCreator } from '@/lib/creatorMetrics';
 import type { Creator } from '@/api/types';
 
 const columns: Column<Creator>[] = [
@@ -45,6 +46,7 @@ const columns: Column<Creator>[] = [
 ];
 
 const PAGE_SIZE = 10;
+const KPI_FETCH_LIMIT = 10000;
 
 export default function Creators() {
   const [q, setQ] = useState('');
@@ -52,23 +54,36 @@ export default function Creators() {
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(0);
 
-  const params: Record<string, unknown> = { limit: PAGE_SIZE, offset: page * PAGE_SIZE };
-  if (q) params.q = q;
-  if (tier) params.tier = tier;
-  if (status) params.current_status = status;
+  const filterParams = useMemo(() => {
+    const next: Record<string, unknown> = {};
+    if (q) next.q = q;
+    if (tier) next.tier = tier;
+    if (status) next.current_status = status;
+    return next;
+  }, [q, tier, status]);
+
+  const params = useMemo(
+    () => ({ ...filterParams, limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
+    [filterParams, page],
+  );
+  const kpiParams = useMemo(
+    () => ({ ...filterParams, limit: KPI_FETCH_LIMIT, offset: 0 }),
+    [filterParams],
+  );
 
   const { data, isLoading, error } = useCreators(params);
+  const { data: kpiData } = useCreators(kpiParams);
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+  const kpiItems = kpiData?.items ?? items;
 
   useEffect(() => {
     setPage(0);
   }, [q, tier, status]);
 
-  // local KPI calcs
-  const active = items.filter((c) => c.current_status && !['prospect', 'dropped'].includes(c.current_status)).length;
-  const prospect = items.filter((c) => c.current_status === 'prospect').length;
-  const recent30 = items.filter((c) => c.created_at && (new Date().getTime() - new Date(c.created_at).getTime() < 30 * 24 * 3600_000)).length;
+  const active = kpiItems.filter((c) => isActiveCreator(c.current_status)).length;
+  const prospect = kpiItems.filter((c) => isPendingContactCreator(c.current_status)).length;
+  const recent30 = kpiItems.filter((c) => isRecentCreator(c.created_at, 30)).length;
 
   return (
     <div className="space-y-4">

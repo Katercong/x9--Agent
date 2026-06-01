@@ -703,10 +703,7 @@ export default function Recommendations() {
   ].filter(Boolean).length;
 
   const highScore = newAllItems.filter((c) => (c.recommendation_score ?? 0) >= 80).length;
-  const needReview = newAllItems.filter((c) => c.review_required || c.risk_summary).length;
-  const contactable = newAllItems.filter(hasContact).length;
   const localTodayAdded = newAllItems.filter((c) => isToday(c.collected_at || c.created_at)).length;
-  const recommendedTotal = newAllItems.filter((c) => valueList(c.recommendation_status).length > 0).length;
   const endpointAllTotal = (creatorsQ.data as any)?.total ?? newAllItems.length;
   const allTotal = endpointAllTotal;
   const todayAdded = localTodayAdded;
@@ -760,14 +757,11 @@ export default function Recommendations() {
             <h2 className="mt-2 text-lg font-black leading-tight text-text">新达人推荐库</h2>
             <div className="mt-1 text-xs text-muted">当前来源：{activeSourceLabel}</div>
           </div>
-          <div className="grid grid-cols-3 gap-2 md:grid-cols-6">
+          <div className="grid grid-cols-3 gap-2">
             {[
               { label: '新达人', value: formatCompact(allTotal), icon: Users },
-              { label: '推荐池', value: formatCompact(recommendedTotal), icon: Sparkles },
-              { label: '可联系', value: contactable, icon: Mail },
               { label: '今日入库', value: todayAdded, icon: CalendarDays },
               { label: '高分 ≥80', value: highScore, icon: Star },
-              { label: '需复核', value: needReview, icon: ShieldAlert },
             ].map((kpi) => {
               const Icon = kpi.icon;
               return (

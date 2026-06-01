@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Users, Trophy, Activity, Globe } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { ChartCard } from '@/components/charts/ChartCard';
@@ -10,20 +10,32 @@ import { AsyncState } from '@/components/states/States';
 import { useCreators } from '@/hooks/useApi';
 import { groupByTier, groupByCountry } from '@/lib/derive';
 import { formatCompact } from '@/lib/format';
+import { countHeadTierCreators, isActiveCreator } from '@/lib/creatorMetrics';
 import type { Creator } from '@/api/types';
 
 const PAGE_SIZE = 10;
+const KPI_FETCH_LIMIT = 10000;
 
 export default function Creators() {
   const [page, setPage] = useState(0);
-  const { data, isLoading, error } = useCreators({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, order_by: 'followers', desc: true });
+  const tableParams = useMemo(
+    () => ({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, order_by: 'followers', desc: true }),
+    [page],
+  );
+  const kpiParams = useMemo(
+    () => ({ limit: KPI_FETCH_LIMIT, offset: 0, order_by: 'followers', desc: true }),
+    [],
+  );
+  const { data, isLoading, error } = useCreators(tableParams);
+  const { data: kpiData } = useCreators(kpiParams);
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+  const kpiItems = kpiData?.items ?? items;
 
-  const tierDist = groupByTier(items);
-  const countryDist = groupByCountry(items, 9);
-  const active = items.filter((c) => c.current_status && !['prospect', 'dropped'].includes(c.current_status)).length;
-  const high = tierDist.filter((d) => d.name === 'S 级' || d.name === 'A 级').reduce((s, d) => s + d.value, 0);
+  const tierDist = groupByTier(kpiItems);
+  const countryDist = groupByCountry(kpiItems, 9);
+  const active = kpiItems.filter((c) => isActiveCreator(c.current_status)).length;
+  const high = countHeadTierCreators(kpiItems);
 
   const topCreators = [...items]
     .filter((c) => c.followers !== null)

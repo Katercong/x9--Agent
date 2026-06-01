@@ -227,12 +227,6 @@ async def require_dashboard_login(request, call_next):
             allowed = role == "department_admin" if spa_role == "department" else role == spa_role
             if not allowed:
                 return RedirectResponse(url=_home_for_user(user), status_code=303)
-    if (
-        path in {"/portal", "/portal/"}
-        and user
-        and user.get("role") in {"super_admin", "company_admin", "department_admin"}
-    ):
-        return RedirectResponse(url=_home_for_user(user), status_code=303)
     response = await call_next(request)
     # Write the log asynchronously — fire-and-forget so the response goes out
     # immediately. Previously this ran inline + did a 7-day DELETE on every
