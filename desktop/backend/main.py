@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from datetime import datetime, timedelta
 
@@ -44,6 +45,9 @@ from .services.departments import SLUG_TO_CODE
 
 app = FastAPI(title=settings.app_name, version=settings.system_version)
 NO_STORE_HEADERS = {"Cache-Control": "no-store, max-age=0"}
+PUBLIC_BASE_URL = (os.getenv("X9_PUBLIC_BASE_URL") or "https://usx9.us").rstrip("/")
+CANONICAL_HOST_REDIRECT = (os.getenv("X9_CANONICAL_HOST_REDIRECT") or "").lower() in {"1", "true", "yes", "on"}
+LOCAL_BROWSER_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 app.add_middleware(
     CORSMiddleware,
@@ -199,8 +203,29 @@ def _resolve_user_cached(token: str | None):
     return user
 
 
+def _should_redirect_to_public_host(request: Request) -> bool:
+    if not CANONICAL_HOST_REDIRECT:
+        return False
+    if request.method not in {"GET", "HEAD"}:
+        return False
+    path = request.url.path
+    if path == "/health" or path.startswith(("/api/", "/api-local/")):
+        return False
+    host = (request.url.hostname or "").lower()
+    if host not in LOCAL_BROWSER_HOSTS:
+        return False
+    accept = request.headers.get("accept", "")
+    return not accept or "text/html" in accept or "*/*" in accept
+
+
 @app.middleware("http")
 async def require_dashboard_login(request, call_next):
+    if _should_redirect_to_public_host(request):
+        target = f"{PUBLIC_BASE_URL}{request.url.path}"
+        if request.url.query:
+            target = f"{target}?{request.url.query}"
+        return RedirectResponse(url=target, status_code=307)
+
     path = request.url.path
     started_at = time.perf_counter()
     user = None
@@ -217,6 +242,12 @@ async def require_dashboard_login(request, call_next):
 
     if path.startswith(("/api/v1", "/api/v2")) and user is None:
         return JSONResponse({"ok": False, "detail": "login required"}, status_code=401)
+
+    if (path == "/portal" or path.startswith("/portal/")) and not path.startswith("/portal/assets/"):
+        if user is None:
+            return RedirectResponse(url="/login?next=" + str(request.url.path), status_code=303)
+        if user.get("role") != "department_user":
+            return RedirectResponse(url=_home_for_user(user), status_code=303)
 
     spa_role = _admin_spa_role(path)
     if spa_role:

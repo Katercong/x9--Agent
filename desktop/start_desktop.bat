@@ -7,4 +7,6 @@ cd /d "%HERE%\.."
 
 py -3.11 -m desktop.backend.migrations.001_init
 start "" "https://usx9.us/portal/"
+set X9_PUBLIC_BASE_URL=https://usx9.us
+set X9_CANONICAL_HOST_REDIRECT=1
 py -3.11 -m uvicorn desktop.backend.main:app --host 127.0.0.1 --port 8000
