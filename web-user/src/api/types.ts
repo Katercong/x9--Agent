@@ -1,14 +1,20 @@
 // 后端响应类型 — 镜像 desktop/backend 的 schema
 
 export interface CurrentUser {
-  id: number;
+  id: string | number;
   username: string;
   display_name: string | null;
   email: string | null;
   role: string;
+  base_role?: string;
   department_code: string | null;
+  department_name?: string | null;
   entry_scope?: string | null;
-  active: number;
+  active?: number;
+  is_active?: boolean;
+  must_change_password?: boolean;
+  can_manage_users?: boolean;
+  can_reset_password?: boolean;
 }
 
 export interface AuthMe {

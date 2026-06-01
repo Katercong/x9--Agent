@@ -1,10 +1,18 @@
-import { useQuery, useMutation, type UseQueryOptions } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
 import { endpoints } from '@/api/endpoints';
 
 type Params = Record<string, unknown> | undefined;
 
 export function useMe() {
   return useQuery({ queryKey: ['me'], queryFn: () => endpoints.me() });
+}
+
+export function useChangePassword() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { old_password: string; new_password: string }) => endpoints.changePassword(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['me'] }),
+  });
 }
 
 export function useAppStatus() {

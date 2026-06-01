@@ -925,15 +925,6 @@ export default function Recommendations() {
         </div>
       </div>
 
-      <PaginationControls
-        page={page}
-        pageSize={PAGE_SIZE}
-        total={endpointAllTotal}
-        currentCount={pagedItems.length}
-        loading={activeQ.isFetching}
-        onPageChange={setPage}
-      />
-
       <AsyncState loading={activeQ.isLoading} error={activeQ.error} isEmpty={filtered.length === 0} emptyMessage="暂无符合条件的达人" height={320}>
         <div className="grid gap-3">
           {pagedItems.map((creator, index) => (
@@ -947,6 +938,15 @@ export default function Recommendations() {
           ))}
         </div>
       </AsyncState>
+
+      <PaginationControls
+        page={page}
+        pageSize={PAGE_SIZE}
+        total={endpointAllTotal}
+        currentCount={pagedItems.length}
+        loading={activeQ.isFetching}
+        onPageChange={setPage}
+      />
 
       <OutreachDrawer
         creator={drawerCreator}

@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, ShieldCheck, UserCheck, UserX, Clock, Pencil, X, BarChart3 } from 'lucide-react';
+import { Plus, ShieldCheck, UserCheck, UserX, Clock, Pencil, X, BarChart3, KeyRound } from 'lucide-react';
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
 import { useAuthUsers } from '@/hooks/useApi';
 import { authApi, type AuthUserRow } from '@/api/authClient';
+import { useRoleStore } from '@/stores/roleStore';
 
 const ROLE_OPTIONS = [
   { v: 'super_admin', l: '超级管理员' },
@@ -218,10 +219,94 @@ function EditUserModal({ user, onClose, onSaved }: { user: AuthUserRow; onClose:
   );
 }
 
+function ResetPasswordModal({ user, onClose, onSaved }: { user: AuthUserRow; onClose: () => void; onSaved: () => void }) {
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [mustChange, setMustChange] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save() {
+    setErr(null);
+    if (password.length < 6) {
+      setErr('新密码至少 6 位');
+      return;
+    }
+    if (password !== confirm) {
+      setErr('两次输入的新密码不一致');
+      return;
+    }
+    setSaving(true);
+    try {
+      await authApi.resetPassword(user.id, password, mustChange);
+      onSaved();
+      onClose();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden />
+      <div className="relative card w-full max-w-md">
+        <div className="px-4 py-3 border-b border-line flex items-center gap-2">
+          <KeyRound size={16} className="text-muted" />
+          <h3 className="text-sm font-semibold text-gray-800">重置密码 · @{user.username}</h3>
+          <button className="ml-auto text-muted hover:text-gray-700" onClick={onClose} aria-label="关闭"><X size={16} /></button>
+        </div>
+        <div className="p-4 space-y-3">
+          <label className="block">
+            <span className="text-xxs text-muted">新密码</span>
+            <input
+              type="password"
+              className="mt-1 w-full text-xs border border-line rounded px-2 py-1.5"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="至少 6 位字符"
+              autoFocus
+            />
+          </label>
+          <label className="block">
+            <span className="text-xxs text-muted">确认新密码</span>
+            <input
+              type="password"
+              className="mt-1 w-full text-xs border border-line rounded px-2 py-1.5"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+            />
+          </label>
+          <label className="flex items-center gap-2 text-xs text-gray-700">
+            <input
+              type="checkbox"
+              checked={mustChange}
+              onChange={(e) => setMustChange(e.target.checked)}
+              className="h-4 w-4 rounded border-line"
+            />
+            <span>下次登录要求该用户修改密码</span>
+          </label>
+          {err && <div className="text-xxs text-red-600">重置失败：{err}</div>}
+        </div>
+        <div className="px-4 py-3 border-t border-line flex items-center justify-end gap-2">
+          <button className="chip text-xs" onClick={onClose}>取消</button>
+          <button className="btn btn-primary text-xs disabled:opacity-50" disabled={saving} onClick={save}>
+            <KeyRound size={12} />{saving ? '重置中…' : '重置密码'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AllUsers() {
   const { data, isLoading, error, refetch } = useAuthUsers();
   const [editing, setEditing] = useState<AuthUserRow | null>(null);
+  const [resetting, setResetting] = useState<AuthUserRow | null>(null);
+  const currentUser = useRoleStore((state) => state.currentUser);
   const users = data?.items ?? [];
+  const canResetPassword = currentUser?.role === 'super_admin';
   const columns: Column<AuthUserRow>[] = [
     {
       key: 'user', header: '用户',
@@ -291,6 +376,9 @@ function AllUsers() {
             <BarChart3 size={12} />详情
           </Link>
           <button className="chip text-xxs" onClick={() => setEditing(r)}><Pencil size={12} />编辑</button>
+          {canResetPassword && (
+            <button className="chip text-xxs" onClick={() => setResetting(r)}><KeyRound size={12} />重置密码</button>
+          )}
         </div>
       ),
     },
@@ -313,6 +401,13 @@ function AllUsers() {
         <EditUserModal
           user={editing}
           onClose={() => setEditing(null)}
+          onSaved={() => refetch()}
+        />
+      )}
+      {resetting && (
+        <ResetPasswordModal
+          user={resetting}
+          onClose={() => setResetting(null)}
           onSaved={() => refetch()}
         />
       )}

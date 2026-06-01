@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
-import { ChevronDown, Briefcase, Building, Shield, LogIn, LogOut, Loader2 } from 'lucide-react';
+import { ChevronDown, Briefcase, Building, Shield, LogIn, LogOut, Loader2, KeyRound, X } from 'lucide-react';
 import {
   useRoleStore, backendRoleLabel,
   type Role,
 } from '@/stores/roleStore';
-import { useLogout } from '@/hooks/useAuth';
+import { useChangePassword, useLogout } from '@/hooks/useAuth';
 
 const roleIcon: Record<Role, typeof Briefcase> = {
   company: Briefcase,
@@ -21,6 +21,7 @@ const roleColor: Record<Role, string> = {
 export default function RoleSwitcher() {
   const { currentRole, currentUser } = useRoleStore();
   const [open, setOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const logout = useLogout();
 
@@ -96,14 +97,26 @@ export default function RoleSwitcher() {
 
           <div className="border-t border-line">
             {currentUser ? (
-              <button
-                onClick={handleLogout}
-                disabled={logout.isPending}
-                className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-soft text-left transition-colors text-xs text-bad disabled:opacity-50"
-              >
-                {logout.isPending ? <Loader2 size={14} className="animate-spin" /> : <LogOut size={14} />}
-                <span>退出登录</span>
-              </button>
+              <>
+                <button
+                  onClick={() => {
+                    setOpen(false);
+                    setPasswordOpen(true);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-soft text-left transition-colors text-xs text-gray-700"
+                >
+                  <KeyRound size={14} />
+                  <span>修改密码</span>
+                </button>
+                <button
+                  onClick={handleLogout}
+                  disabled={logout.isPending}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-soft text-left transition-colors text-xs text-bad disabled:opacity-50"
+                >
+                  {logout.isPending ? <Loader2 size={14} className="animate-spin" /> : <LogOut size={14} />}
+                  <span>退出登录</span>
+                </button>
+              </>
             ) : (
               <button
                 onClick={handleLogin}
@@ -116,6 +129,109 @@ export default function RoleSwitcher() {
           </div>
         </div>
       )}
+      {passwordOpen && (
+        <ChangeOwnPasswordModal
+          onClose={() => setPasswordOpen(false)}
+        />
+      )}
     </div>
+  );
+}
+
+function ChangeOwnPasswordModal({
+  onClose,
+}: {
+  onClose: () => void;
+}) {
+  const changePassword = useChangePassword();
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  async function save() {
+    setErr(null);
+    setSaved(false);
+    if (!oldPassword) {
+      setErr('请输入当前密码');
+      return;
+    }
+    if (newPassword.length < 6) {
+      setErr('新密码至少 6 位');
+      return;
+    }
+    if (newPassword === oldPassword) {
+      setErr('新密码不能和当前密码相同');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setErr('两次输入的新密码不一致');
+      return;
+    }
+    try {
+      await changePassword.mutateAsync({ oldPassword, newPassword });
+      setSaved(true);
+      window.setTimeout(onClose, 700);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden />
+      <div className="relative card w-full max-w-md">
+        <div className="px-4 py-3 border-b border-line flex items-center gap-2">
+          <KeyRound size={16} className="text-muted" />
+          <div>
+            <h3 className="text-sm font-semibold text-gray-800">修改密码</h3>
+            <div className="text-xxs text-muted">更新当前登录账号的密码</div>
+          </div>
+          <button className="ml-auto text-muted hover:text-gray-700" onClick={onClose} aria-label="关闭"><X size={16} /></button>
+        </div>
+        <div className="p-4 space-y-3">
+          <PasswordInput label="当前密码" value={oldPassword} onChange={setOldPassword} autoFocus />
+          <PasswordInput label="新密码" value={newPassword} onChange={setNewPassword} placeholder="至少 6 位字符" />
+          <PasswordInput label="确认新密码" value={confirmPassword} onChange={setConfirmPassword} />
+          {err && <div className="text-xxs text-red-600">修改失败：{err}</div>}
+          {saved && <div className="text-xxs text-green-700">密码已更新</div>}
+        </div>
+        <div className="px-4 py-3 border-t border-line flex items-center justify-end gap-2">
+          <button className="chip text-xs" onClick={onClose}>取消</button>
+          <button className="btn btn-primary text-xs disabled:opacity-50" disabled={changePassword.isPending || saved} onClick={save}>
+            <KeyRound size={12} />{changePassword.isPending ? '保存中…' : '保存密码'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PasswordInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+  autoFocus,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  autoFocus?: boolean;
+}) {
+  return (
+    <label className="block">
+      <span className="text-xxs text-muted">{label}</span>
+      <input
+        type="password"
+        className="mt-1 w-full text-xs border border-line rounded px-2 py-1.5"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+      />
+    </label>
   );
 }

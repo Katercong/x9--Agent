@@ -88,6 +88,11 @@ export const authApi = {
       body: JSON.stringify({ username, password }),
     }),
   logout: () => authFetch<{ ok: boolean }>('/logout', { method: 'POST' }),
+  changePassword: (oldPassword: string, newPassword: string) =>
+    authFetch<{ ok: boolean; user: CurrentUser }>('/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+    }),
 
   // Desktop-backend user management (registration approval lives here).
   users: () => authFetch<{ ok: boolean; items: AuthUserRow[] }>('/users'),
@@ -108,5 +113,10 @@ export const authApi = {
     authFetch<{ ok: boolean; user: AuthUserRow }>(`/users/${encodeURIComponent(key)}`, {
       method: 'PATCH',
       body: JSON.stringify(body),
+    }),
+  resetPassword: (key: string, newPassword: string, mustChangePassword = false) =>
+    authFetch<{ ok: boolean; user: AuthUserRow }>(`/users/${encodeURIComponent(key)}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ new_password: newPassword, must_change_password: mustChangePassword }),
     }),
 };

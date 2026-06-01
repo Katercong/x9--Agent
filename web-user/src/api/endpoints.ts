@@ -13,6 +13,8 @@ export const endpoints = {
   // Auth
   me: () => api.get<AuthMe>('/auth/me'),
   logout: () => api.post<{ ok: boolean }>('/auth/logout'),
+  changePassword: (body: { old_password: string; new_password: string }) =>
+    api.post<{ ok: boolean; user: AuthMe['user'] }>('/auth/change-password', body),
   users: () => api.get<ListResp<User>>('/auth/users'),
 
   // App / DB

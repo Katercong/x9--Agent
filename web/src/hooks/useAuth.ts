@@ -1,4 +1,4 @@
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { authApi } from '@/api/authClient';
 import type { AuthMeResponse } from '@/api/types';
 
@@ -69,6 +69,18 @@ export function useLogout() {
       // the just-logged-out user from localStorage.
       writeCachedAuthMe(null);
       return result;
+    },
+  });
+}
+
+export function useChangePassword() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ oldPassword, newPassword }: { oldPassword: string; newPassword: string }) =>
+      authApi.changePassword(oldPassword, newPassword),
+    onSuccess: async () => {
+      localStorage.removeItem(CACHE_KEY);
+      await qc.invalidateQueries({ queryKey: AUTH_KEY });
     },
   });
 }
