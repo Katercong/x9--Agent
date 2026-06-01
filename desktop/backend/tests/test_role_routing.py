@@ -43,6 +43,15 @@ def test_department_user_root_goes_to_portal() -> None:
     assert response.headers["location"] == "/portal/"
 
 
+def test_super_admin_root_goes_to_workbench_dashboard() -> None:
+    client = _client_for_role("route_super_admin_root", "super_admin")
+
+    response = client.get("/", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/a/dashboard"
+
+
 def test_department_admin_can_enter_department_admin_spa() -> None:
     client = _client_for_role("route_department_admin", "department_admin")
 

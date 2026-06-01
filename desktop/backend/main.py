@@ -146,7 +146,7 @@ def _admin_spa_role(path: str) -> str | None:
 def _home_for_user(user: dict) -> str:
     role = user.get("role")
     if role == "super_admin":
-        return "/a/monitor"
+        return "/a/dashboard"
     if role == "company_admin":
         return "/c/overview"
     if role == "department_admin":

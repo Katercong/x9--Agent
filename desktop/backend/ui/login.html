@@ -405,7 +405,7 @@
 
       function homeFor(user) {
         if (user.entry_scope === "admin") {
-          if (user.role === "super_admin") return "/a/monitor";
+          if (user.role === "super_admin") return "/a/dashboard";
           if (user.role === "company_admin") return "/c/overview";
           if (user.role === "department_admin") return "/d/dashboard";
         }
