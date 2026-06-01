@@ -15,8 +15,8 @@ if (Test-Path -LiteralPath $configPath) {
   }
 }
 $mode = if ($env:COMPANYLEADS_MODE) { $env:COMPANYLEADS_MODE } else { "server" }
-$backendUrl = if ($env:COMPANYLEADS_BACKEND_URL) { $env:COMPANYLEADS_BACKEND_URL.TrimEnd("/") } else { "http://127.0.0.1:8002" }
-$backendPort = if ($env:COMPANYLEADS_BACKEND_PORT) { [int]$env:COMPANYLEADS_BACKEND_PORT } else { 8002 }
+$backendUrl = if ($env:COMPANYLEADS_BACKEND_URL) { $env:COMPANYLEADS_BACKEND_URL.TrimEnd("/") } else { "http://127.0.0.1:8000" }
+$backendPort = if ($env:COMPANYLEADS_BACKEND_PORT) { [int]$env:COMPANYLEADS_BACKEND_PORT } else { 8000 }
 $localPython = Join-Path $env:LOCALAPPDATA "CompanyLeads\.venv\Scripts\python.exe"
 $python = if ($env:COMPANYLEADS_PYTHON) {
   $env:COMPANYLEADS_PYTHON
@@ -60,7 +60,7 @@ if (Test-Path -LiteralPath $cdpRuntimePath) {
   }
 }
 
-if ($mode -eq "client" -and $backendUrl -ne "http://127.0.0.1:8002") {
+if ($mode -eq "client") {
   Write-Host "Client mode: using central backend $backendUrl"
 } elseif (Test-LocalPortListening -Port $backendPort) {
   Write-Host "CompanyLeads backend already running on $backendUrl"

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+import hashlib
 from typing import Any, Iterable, TypedDict
 
 import httpx
 
 
-DEFAULT_BACKEND_BASE = "http://127.0.0.1:8002"
+DEFAULT_BACKEND_BASE = "http://127.0.0.1:8000"
 
 
 def backend_base() -> str:
@@ -272,12 +273,33 @@ def push_one(entry: dict[str, Any], *, dry_run: bool, backend_url: str | None = 
 
 
 def talent_identity_key(entry: dict[str, Any]) -> str:
+    platform = str(entry.get("platform") or "")
+    content_fingerprint = "|".join(
+        str(entry.get(key) or "").strip()
+        for key in (
+            "name_masked",
+            "desired_title",
+            "city",
+            "experience",
+            "education",
+            "major",
+            "salary_expectation",
+            "raw_summary",
+        )
+        if str(entry.get(key) or "").strip()
+    )
+    content_key = (
+        hashlib.sha1(content_fingerprint.encode("utf-8")).hexdigest()[:16]
+        if content_fingerprint else ""
+    )
     stable_id = (
         entry.get("platform_resume_id")
+        or (content_key if platform == "zhaopin_resume" else "")
         or entry.get("source_url")
+        or content_key
         or f"{entry.get('name_masked', '')}:{entry.get('desired_title', '')}"
     )
-    return f"{entry.get('platform', '')}:{stable_id}"
+    return f"{platform}:{stable_id}"
 
 
 def dedupe_talents(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

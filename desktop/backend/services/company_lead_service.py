@@ -398,7 +398,7 @@ def ingest_talent(db: Session, data: dict[str, Any], department_code: str | None
     lead: TalentLead | None = None
     if resume_id:
         lead = db.query(TalentLead).filter_by(platform=platform, platform_resume_id=resume_id).first()
-    if lead is None and not resume_id and name_masked and desired_title:
+    if lead is None and platform != "zhaopin_resume" and not resume_id and name_masked and desired_title:
         lead = db.query(TalentLead).filter_by(
             platform=platform, name_masked=name_masked, desired_title=desired_title
         ).first()

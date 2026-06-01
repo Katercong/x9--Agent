@@ -3,7 +3,7 @@ import subprocess, sys, os
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 host = os.environ.get("COMPANYLEADS_BACKEND_HOST", "127.0.0.1")
-port = os.environ.get("COMPANYLEADS_BACKEND_PORT", "8002")
+port = os.environ.get("COMPANYLEADS_BACKEND_PORT", "8000")
 subprocess.run([
     sys.executable, "-m", "uvicorn",
     "backend.main:app",

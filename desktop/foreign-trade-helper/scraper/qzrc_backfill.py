@@ -40,7 +40,7 @@ from qzrc_scraper import (
     enrich_qzrc_company, rnd_delay, _company_detail_cache,
 )
 
-BACKEND_BASE = os.getenv("COMPANYLEADS_BACKEND_URL", "http://127.0.0.1:8002").strip().rstrip("/")
+BACKEND_BASE = os.getenv("COMPANYLEADS_BACKEND_URL", "http://127.0.0.1:8000").strip().rstrip("/")
 
 
 def api_headers() -> dict[str, str]:

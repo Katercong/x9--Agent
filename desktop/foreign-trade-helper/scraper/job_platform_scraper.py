@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import random
@@ -2512,6 +2513,13 @@ def _zp_talent_entry(candidate: dict, raw_data: dict, keyword: str) -> dict:
     }
 
 
+def _stable_talent_resume_id(prefix: str, *values: str) -> str:
+    text = "|".join(clean(str(value or "")) for value in values if clean(str(value or "")))
+    if not text:
+        return ""
+    return f"{prefix}_{hashlib.sha1(text.encode('utf-8')).hexdigest()[:16]}"
+
+
 def _zp_talent_text_for_filter(item: dict, title: str, summary: str, major: str, experience: str) -> str:
     return _norm_value([
         title,
@@ -2539,6 +2547,9 @@ def parse_zhaopin_resume_items(items: list[dict], *, fallback_url: str = "", key
         summary = _zp_pick(item, *_ZP_RESUME_SUMMARY)[:2000]
         major = _zp_pick(item, *_ZP_RESUME_MAJOR)
         experience = _zp_pick(item, *_ZP_RESUME_EXP)
+        city = _zp_pick(item, *_ZP_RESUME_CITY)
+        education = _zp_pick(item, *_ZP_RESUME_EDU)
+        salary = _zp_pick(item, *_ZP_RESUME_SALARY)
         filter_text = _zp_talent_text_for_filter(item, title, summary, major, experience)
         if filter_text and not has_crossborder([filter_text]):
             continue
@@ -2547,15 +2558,26 @@ def parse_zhaopin_resume_items(items: list[dict], *, fallback_url: str = "", key
             source_url = urljoin("https://rd6.zhaopin.com/", detail)
         else:
             source_url = fallback_url or "https://rd6.zhaopin.com/"
+        rid = rid or _stable_talent_resume_id(
+            "zhaopin_resume",
+            name,
+            title,
+            city,
+            experience,
+            education,
+            major,
+            salary,
+            summary,
+        )
         out.append(_zp_talent_entry({
             "platform_resume_id": rid,
             "name_masked": name,
             "desired_title": title,
-            "city": _zp_pick(item, *_ZP_RESUME_CITY),
+            "city": city,
             "experience": experience,
-            "education": _zp_pick(item, *_ZP_RESUME_EDU),
+            "education": education,
             "major": major,
-            "salary_expectation": _zp_pick(item, *_ZP_RESUME_SALARY),
+            "salary_expectation": salary,
             "source_url": source_url,
             "raw_summary": summary,
         }, item, keyword))
@@ -2886,14 +2908,30 @@ def parse_zhaopin_talent_dom_text(text: str, keyword: str, source_url: str) -> d
     salary = re.search(r"(?:\d+(?:\.\d+)?\s*[Kk千]\s*-\s*\d+(?:\.\d+)?\s*[Kk千万]?|\d+\s*-\s*\d+\s*[Kk千万]?|面议|期望薪资[:：]?\s*[^|，,。]{2,20})", normalized)
     if not (name or title or experience or education):
         return None
+    name_value = name.group(1) if name else ""
+    title_value = title.group(1) if title else ""
+    city_value = city.group(0) if city else ""
+    experience_value = experience.group(0) if experience else ""
+    education_value = education.group(0) if education else ""
+    salary_value = salary.group(0) if salary else ""
+    resume_id = _job51_resume_id(source_url) or _stable_talent_resume_id(
+        "zhaopin_resume",
+        name_value,
+        title_value,
+        city_value,
+        experience_value,
+        education_value,
+        salary_value,
+        normalized[:2000],
+    )
     return _zp_talent_entry({
-        "platform_resume_id": _job51_resume_id(source_url),
-        "name_masked": name.group(1) if name else "",
-        "desired_title": title.group(1) if title else "",
-        "city": city.group(0) if city else "",
-        "experience": experience.group(0) if experience else "",
-        "education": education.group(0) if education else "",
-        "salary_expectation": salary.group(0) if salary else "",
+        "platform_resume_id": resume_id,
+        "name_masked": name_value,
+        "desired_title": title_value,
+        "city": city_value,
+        "experience": experience_value,
+        "education": education_value,
+        "salary_expectation": salary_value,
         "source_url": source_url,
         "raw_summary": normalized[:2000],
     }, {"keyword": keyword, "card_text": normalized[:1200], "source_url": source_url}, keyword)
@@ -2939,7 +2977,7 @@ async def parse_zhaopin_talent_dom(page, keyword: str) -> list[dict]:
         index = int(card.get("index") or 0)
         text = card.get("text") or ""
         href = card.get("href") or ""
-        source_url = urljoin(page.url, href) if href else f"{page.url}#zhaopin-talent-{index}"
+        source_url = urljoin(page.url, href) if href else page.url
         entry = parse_zhaopin_talent_dom_text(text, keyword, source_url)
         if entry:
             entries.append(entry)

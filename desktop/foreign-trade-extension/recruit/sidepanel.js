@@ -407,9 +407,9 @@ async function openDashboard() {
   } catch (err) {
     try {
       const cfg = await nativeMessage('helper.getClientConfig');
-      window.open(cfg.config?.backendUrl || 'http://127.0.0.1:8002', '_blank');
+      window.open(cfg.config?.backendUrl || 'http://127.0.0.1:8000', '_blank');
     } catch {
-      window.open('http://127.0.0.1:8002', '_blank');
+      window.open('http://127.0.0.1:8000', '_blank');
     }
   }
 }

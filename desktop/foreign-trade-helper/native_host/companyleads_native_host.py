@@ -17,6 +17,7 @@ from typing import Any
 
 HOST_NAME = "com.companyleads.helper"
 REQUIRED_HELPER_VERSION = "1.1.1"
+DEFAULT_BACKEND_URL = "http://127.0.0.1:8000"
 APP_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "CompanyLeads"
 CONFIG_PATH = APP_DIR / "config.json"
 
@@ -49,7 +50,7 @@ def load_config() -> dict[str, Any]:
     root = Path(__file__).resolve().parents[1]
     return {
         "root": str(root),
-        "backendUrl": "http://127.0.0.1:8002",
+        "backendUrl": DEFAULT_BACKEND_URL,
         "helperUrl": "http://127.0.0.1:8765",
     }
 
@@ -237,11 +238,17 @@ def open_url_in_cdp(cdp_url: str, url: str) -> bool:
 def get_status(config: dict[str, Any]) -> dict[str, Any]:
     root = Path(config["root"])
     helper_url = config.get("helperUrl", "http://127.0.0.1:8765")
-    backend_url = config.get("backendUrl", "http://127.0.0.1:8002")
+    backend_url = config.get("backendUrl", DEFAULT_BACKEND_URL)
     helper_health = http_json(helper_url.rstrip("/") + "/health", timeout=1)
     headers = api_headers(config)
-    backend_health = http_json_with_headers(backend_url.rstrip("/") + "/api/stats", headers, timeout=1)
-    system_status = http_json_with_headers(backend_url.rstrip("/") + "/api/system/status", headers, timeout=1)
+    backend_health = (
+        http_json_with_headers(backend_url.rstrip("/") + "/api/stats", headers, timeout=1)
+        or http_json_with_headers(backend_url.rstrip("/") + "/health", headers, timeout=1)
+    )
+    system_status = (
+        http_json_with_headers(backend_url.rstrip("/") + "/api/system/status", headers, timeout=1)
+        or backend_health
+    )
     runtime = runtime_status(root)
     cdp_url = runtime.get("url") or ""
     cdp_ready = bool(cdp_url and http_json(str(cdp_url).rstrip("/") + "/json/version", timeout=1))
@@ -297,7 +304,7 @@ def open_chrome(config: dict[str, Any], payload: dict[str, Any] | None) -> dict[
 
 def open_dashboard(config: dict[str, Any]) -> dict[str, Any]:
     status = ensure_started(config)
-    backend_url = status.get("backendUrl") or config.get("backendUrl", "http://127.0.0.1:8002")
+    backend_url = status.get("backendUrl") or config.get("backendUrl", DEFAULT_BACKEND_URL)
     if os.name == "nt":
         os.startfile(str(backend_url))  # type: ignore[attr-defined]
     return status
@@ -326,7 +333,7 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
             "ok": True,
             "host": HOST_NAME,
             "config": {
-                "backendUrl": str(config.get("backendUrl", "http://127.0.0.1:8002")).rstrip("/"),
+                "backendUrl": str(config.get("backendUrl", DEFAULT_BACKEND_URL)).rstrip("/"),
                 "apiToken": str(config.get("apiToken") or ""),
                 "mode": config.get("mode", "server"),
             },

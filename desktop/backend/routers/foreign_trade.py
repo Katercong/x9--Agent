@@ -60,10 +60,21 @@ DECISION_LABELS = {
 
 PLATFORM_LABELS = {
     "51job": "前程无忧",
+    "51job_talent": "前程无忧",
     "zhaopin": "智联招聘",
+    "zhaopin_resume": "智联招聘",
     "qzrc": "大泉州人才网",
+    "qzrc_job": "大泉州人才网",
+    "qzrc_resume": "大泉州人才网",
     "xhs": "小红书",
     "douyin": "抖音",
+}
+
+PLATFORM_ALIASES = {
+    "51job_talent": "51job",
+    "zhaopin_resume": "zhaopin",
+    "qzrc_job": "qzrc",
+    "qzrc_resume": "qzrc",
 }
 
 # Recruitment platforms feed the "jobs" source; table imports use this marker.
@@ -129,6 +140,11 @@ def _rows(order: tuple[str, ...], labels: dict[str, str], counts: dict[str, int]
     ]
 
 
+def _platform_key(value: str) -> str:
+    key = str(value or "").strip()
+    return PLATFORM_ALIASES.get(key, key)
+
+
 @router.get("/dashboard")
 def foreign_trade_dashboard(
     request: Request,
@@ -163,7 +179,8 @@ def _build_dashboard(db: Session, department_code: str | None) -> dict[str, Any]
     for bucket in (company_platform, talent_platform, social_platform):
         for key, count in bucket.items():
             if key:
-                platform_counts[key] = platform_counts.get(key, 0) + count
+                platform_key = _platform_key(key)
+                platform_counts[platform_key] = platform_counts.get(platform_key, 0) + count
 
     us_market = _count(db, CompanyLead, department_code, CompanyLead.us_market_flag == 1)
     contacted = sum(status_counts.get(k, 0) for k in ("contacted", "replied", "signed"))
