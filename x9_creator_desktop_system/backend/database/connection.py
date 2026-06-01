@@ -221,8 +221,12 @@ def _ensure_schema_columns() -> None:
         _ensure_column(conn, "creators", "lead_status", "VARCHAR(40)")
         _ensure_column(conn, "creators", "tiktok_shop_json", "TEXT")
         _ensure_column(conn, "creators", "profile_snapshot_json", "TEXT")
+        _ensure_column(conn, "raw_observations", "lead_status", "VARCHAR(40)")
+        _ensure_column(conn, "raw_observations", "process_status", "VARCHAR(40)")
         _ensure_index(conn, "ix_creators_source", "creators", "source")
         _ensure_index(conn, "ix_creators_lead_status", "creators", "lead_status")
+        _ensure_index(conn, "ix_raw_observations_lead_status", "raw_observations", "lead_status")
+        _ensure_index(conn, "ix_raw_observations_process_status", "raw_observations", "process_status")
         # Backfill: only positively set what we can prove. raw_observations has
         # no handle column (handle lives inside raw_json) so a precise per-creator
         # join is infeasible; platform reliably identifies Shop. Legacy non-Shop

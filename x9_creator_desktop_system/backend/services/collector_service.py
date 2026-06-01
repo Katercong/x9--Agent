@@ -118,6 +118,7 @@ def ingest_observation(
             worker_id=payload.get("worker_id"),
             account_id=payload.get("account_id"),
             search_keyword=payload.get("search_keyword"),
+            lead_status=payload.get("lead_status"),
             raw_json=raw_blob,
             content_hash=content_hash(raw_blob),
             collected_at=collected_at,

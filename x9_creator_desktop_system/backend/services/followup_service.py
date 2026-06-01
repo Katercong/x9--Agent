@@ -130,7 +130,7 @@ def apply_outreach_event_followups(
     normalized = str(event_type or "").strip().lower()
     owner_user_id = _owner_id(creator, actor_user_id)
 
-    if normalized == "pending_reply":
+    if normalized in {"sent", "pending_reply"}:
         close_creator_tasks(db, creator_id=creator.id, task_types=("reply_followup_1", "reply_followup_2"))
         create_followup_task_once(
             db,

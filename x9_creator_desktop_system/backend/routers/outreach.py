@@ -625,17 +625,9 @@ def send_draft(draft_id: str, body: SendIn, request: Request, db: Session = Depe
                 owner_bd=creator.owner_bd,
                 metadata=event_metadata,
             )
-            create_outreach_event(
-                db,
-                creator,
-                event_type="pending_reply",
-                actor_user_id=actor_user_id,
-                owner_bd=creator.owner_bd,
-                metadata=event_metadata,
-            )
         elif str(draft.creator_id).isdigit():
             try:
-                remote_creators.patch(draft.creator_id, current_status="\u5f85\u56de\u590d")
+                remote_creators.patch(draft.creator_id, current_status="\u5df2\u5efa\u8054")
             except RemoteRepoError:
                 # The email has already been accepted by Gmail. Do not fail the
                 # send response only because the optional status sync failed.

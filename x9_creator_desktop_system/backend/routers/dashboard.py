@@ -797,7 +797,7 @@ def _build_summary(department_code: str | None) -> dict[str, Any]:
             "name": "公司全局" if department_code is None else DEPARTMENTS.get(department_code, {}).get("name", department_code),
         },
         "summary": {
-            "total_creators": business_total,
+            "total_creators": business_with_bd_history_total,
             "processed_creators": unique_creator_total,
             "today_collected": all_channel_today,
             "today_new_creators": all_channel_today,

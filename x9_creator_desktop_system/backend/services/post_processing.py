@@ -89,7 +89,7 @@ EMAIL_EVENT_LABELS = {
 EVENT_TO_STATUS = {
     "recommended": "prospect",
     "assigned": "prospect",
-    "sent": "\u5f85\u56de\u590d",
+    "sent": "\u5df2\u5efa\u8054",
     "pending_reply": "\u5f85\u56de\u590d",
     "contacted": "\u6c9f\u901a\u4e2d",
     "replied": "\u6c9f\u901a\u4e2d",
