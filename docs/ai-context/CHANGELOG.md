@@ -92,6 +92,7 @@
 ## Phase 2-E — 招聘爬虫移植 + 接 X9 ingest
 
 - `+` Added: 招聘爬虫移植到 `scrapers/recruitment/` —— `job_platform_scraper.py`（51job/智联·公司+人才）、`qzrc_scraper.py`（大泉州·公司+人才）、`platform_contract.py`（推送接口）、`README.md`。
+  （**2026-06-01 已删除该目录**：无任何代码引用、且与 Phase 4 的 `desktop/foreign-trade-helper/scraper/` 重复且不同步，统一改用 helper 那份；删前确认无外部引用。）
 - `~` Modified: `platform_contract.py` 推送目标改为 X9 `/api/local/{company-leads,talents}/ingest`（env `X9_INGEST_BASE` 默认 :8000）；会话登录（`X9_INGEST_USERNAME`/`X9_INGEST_PASSWORD`，外贸部账号 → 线索 department_code=foreign_trade），登录一次复用 cookie。
 - `#` Note: 端到端验证 —— testadmin2 登录推送，公司/人才各 1 条成功入库（新公司 A 级）。实际抓取需在装 Playwright、已登录目标站的机器上运行。
 
