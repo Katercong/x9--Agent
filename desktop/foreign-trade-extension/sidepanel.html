@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>X9 外贸采集</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; }
+    .hd { padding: 16px; border-bottom: 1px solid #1e293b; }
+    .hd h1 { font-size: 15px; margin: 0; }
+    .hd p { font-size: 11px; color: #94a3b8; margin: 6px 0 0; line-height: 1.5; }
+    .cards { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+    a.card { display: block; text-decoration: none; color: inherit; border: 1px solid #1e293b; border-radius: 10px; padding: 14px; background: #111827; transition: border-color .15s, transform .15s; }
+    a.card:hover { border-color: #334155; transform: translateY(-1px); }
+    .card .t { font-size: 14px; font-weight: 600; }
+    .card .d { font-size: 11px; color: #94a3b8; margin-top: 4px; line-height: 1.5; }
+    .badge { display: inline-block; font-size: 10px; padding: 1px 7px; border-radius: 99px; margin-left: 6px; }
+    .b-jobs { background: rgba(139,92,246,.18); color: #c4b5fd; }
+    .b-social { background: rgba(236,72,153,.18); color: #f9a8d4; }
+    .tip { padding: 0 14px 14px; font-size: 11px; color: #64748b; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="hd">
+    <h1>X9 外贸部采集</h1>
+    <p>选择采集渠道。采集到的线索自动回传 X9 后台并归入外贸部。</p>
+  </div>
+  <div class="cards">
+    <a class="card" href="recruit/sidepanel.html">
+      <div class="t">招聘网站采集<span class="badge b-jobs">51job / 智联 / 大泉州</span></div>
+      <div class="d">在招聘网站页面采集跨境公司客户与人才线索。</div>
+    </a>
+    <a class="card" href="social/sidepanel.html">
+      <div class="t">小红书 / 抖音采集<span class="badge b-social">XHS / 抖音</span></div>
+      <div class="d">在小红书 / 抖音页面采集博主、笔记、评论与联系方式。</div>
+    </a>
+  </div>
+  <div class="tip">提示：先打开对应网站页面，再回到此侧边栏点击进入采集面板。</div>
+</body>
+</html>

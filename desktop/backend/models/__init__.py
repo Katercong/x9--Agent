@@ -1,6 +1,7 @@
 from .app_session import AppSession
 from .app_user import AppUser
 from .bd_monthly_stat import BdMonthlyStat
+from .company_lead import CompanyLead, CompanyObservation, CompanyOutreachEmail
 from .creator import Creator
 from .creator_outreach_lock import CreatorOutreachLock
 from .creator_recommendation import CreatorRecommendation
@@ -18,8 +19,18 @@ from .outreach_template import OutreachTemplate
 from .raw_observation import RawObservation
 from .request_log import RequestLog
 from .review_task import ReviewTask
+from .social_lead import (
+    XhsAiJudgment,
+    XhsCollectionRun,
+    XhsComment,
+    XhsExtractedContact,
+    XhsNote,
+    XhsRawSnapshot,
+    XhsUser,
+)
 from .system_log import SystemLog
 from .tag_definition import TagDefinition
+from .talent_lead import TalentLead
 
 __all__ = [
     "Creator",
@@ -27,6 +38,17 @@ __all__ = [
     "AppSession",
     "AppUser",
     "BdMonthlyStat",
+    "CompanyLead",
+    "CompanyObservation",
+    "CompanyOutreachEmail",
+    "TalentLead",
+    "XhsAiJudgment",
+    "XhsCollectionRun",
+    "XhsComment",
+    "XhsExtractedContact",
+    "XhsNote",
+    "XhsRawSnapshot",
+    "XhsUser",
     "CreatorRecommendation",
     "CreatorOutreachEvent",
     "CreatorSource",

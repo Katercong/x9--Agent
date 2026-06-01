@@ -16,7 +16,7 @@ from ..models.creator_source import CreatorSource
 from ..models.extension_run_progress import ExtensionRunProgress
 from ..models.extension_session import ExtensionSession
 from ..models.raw_observation import RawObservation
-from ..services.collector_service import queue_observation, reprocess_raw_observations
+from ..services.collector_service import ingest_observation, reprocess_raw_observations
 from ..services.collection_stats_service import (
     SHOP_QUEUE_CLEARED_STATUS,
     get_actor_collection_stats_map,
@@ -138,15 +138,6 @@ def _apply_worker_binding_attribution(db: Session, payload: dict[str, Any], requ
     payload.setdefault("department_code", DEFAULT_DEPARTMENT)
 
 
-def _require_bound_shop_actor(payload: dict[str, Any]) -> None:
-    platform = str(payload.get("platform") or "").strip().lower()
-    if platform != "tiktok_shop":
-        return
-    if _payload_actor_id(payload):
-        return
-    raise HTTPException(status_code=409, detail="actor_binding_required")
-
-
 def _requested_actor_filter(request: Request, actor_user_id: str | None = None) -> str | None:
     user = getattr(request.state, "current_user", None)
     current_actor = _actor_id(user)
@@ -235,8 +226,7 @@ def post_observation(request: Request, payload: Any = Body(...), db: Session = D
     try:
         payload = _coerce_observation_payload(payload)
         _apply_worker_binding_attribution(db, payload, request)
-        _require_bound_shop_actor(payload)
-        return queue_observation(db, payload)
+        return ingest_observation(db, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -402,6 +392,11 @@ def _exclude_source_video_seed_rows(q):
         or_(
             RawObservation.lead_status.is_(None),
             ~RawObservation.lead_status.in_(["source_video_seen", SHOP_QUEUE_CLEARED_STATUS]),
+        )
+    ).where(
+        or_(
+            RawObservation.raw_json.is_(None),
+            ~RawObservation.raw_json.like(SOURCE_VIDEO_SEED_PATTERN),
         )
     )
 

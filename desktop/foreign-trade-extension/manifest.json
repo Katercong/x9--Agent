@@ -1,0 +1,73 @@
+{
+  "manifest_version": 3,
+  "name": "X9 外贸部采集插件（招聘 + 小红书/抖音）",
+  "version": "1.0",
+  "description": "外贸部一体化采集：51job / 智联 / 大泉州 招聘线索 + 小红书 / 抖音 社媒线索，自动回传 X9 外贸部后台。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAo8ETYHtXdZDJ2hrWa4hVpN/h5r8ut9nHnTZ9GKMqM6Ese4qX3olsWRB9LAYQX7pMQp8mWjxZM+OVI3YwJXrarL3mkZilvJZLsRQNrBOUpUA6y0bhWECiAMFOIatxCEcknNeFoKliGKyeuvuTAIy21m2ukxXaly6Ty6D9+nUSGAbZ6kArbTuYa0I9+LZJex4maNK4YMZIev7llPVWbqdZg0hJ3YP8uoX8FKmXrs/pL3zlE1CgwaiAGGf1/NgRbf7999cuLNP3GgftDqQEdkDv2ycSrWtD8/3uys4sqBanvnf5h2VJUs6MqFKtBsJTScHL6hDuAxBvNLAaKYMRC3TOmwIDAQAB",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs",
+    "debugger",
+    "nativeMessaging",
+    "downloads",
+    "sidePanel",
+    "unlimitedStorage",
+    "alarms",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://search.51job.com/*",
+    "https://*.51job.com/*",
+    "https://sou.zhaopin.com/*",
+    "https://www.zhaopin.com/*",
+    "https://jobs.zhaopin.com/*",
+    "https://www.qzrc.com/*",
+    "https://www.xiaohongshu.com/*",
+    "https://*.xiaohongshu.com/*",
+    "https://www.douyin.com/*",
+    "https://*.douyin.com/*",
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8765/*",
+    "https://usx9.us/*",
+    "https://*.usx9.us/*"
+  ],
+  "action": {
+    "default_title": "X9 外贸部采集插件"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "ft_background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://search.51job.com/*", "https://*.51job.com/jobs/*"],
+      "js": ["ft_actor.js", "ft_api_config.js", "recruit/job_collector.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://sou.zhaopin.com/*", "https://www.zhaopin.com/*", "https://jobs.zhaopin.com/*"],
+      "js": ["ft_actor.js", "ft_api_config.js", "recruit/zhaopin_click_bridge.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.qzrc.com/company/show/*"],
+      "js": ["ft_actor.js", "ft_api_config.js", "recruit/qzrc_collector.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.xiaohongshu.com/*", "https://*.xiaohongshu.com/*"],
+      "js": ["ft_actor.js", "ft_api_config.js", "social/xhs_content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.douyin.com/*", "https://*.douyin.com/*"],
+      "js": ["ft_actor.js", "ft_api_config.js", "social/douyin_content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 import {
   Home, BarChart3, Telescope, Sparkles,
   ArrowDownToLine, TrendingUp, Bot, Users, Store, Radar, FileSpreadsheet, MailCheck,
+  Briefcase, Heart,
   type LucideIcon,
 } from 'lucide-react';
 import type { Language } from '@/lib/i18n';
@@ -37,6 +38,10 @@ const menuText: Record<Language, Record<string, string>> = {
     export: '数据工具',
     hotkw: 'TikTok 热搜',
     assistant: 'AI 助手',
+    ftCollectData: '数据采集',
+    ftCollectJobs: '采集 · 招聘网站',
+    ftCollectSocial: '采集 · 小红书抖音',
+    ftRecommendations: '线索推荐',
   },
   en: {
     workbench: 'Workbench',
@@ -51,6 +56,10 @@ const menuText: Record<Language, Record<string, string>> = {
     export: 'Data Tools',
     hotkw: 'TikTok Trends',
     assistant: 'AI Assistant',
+    ftCollectData: 'Data Collection',
+    ftCollectJobs: 'Recruitment Sites',
+    ftCollectSocial: 'Xiaohongshu / Douyin',
+    ftRecommendations: 'Lead Recommendations',
   },
 };
 
@@ -78,10 +87,34 @@ function buildPortalMenu(language: Language): MenuEntry[] {
   ];
 }
 
+// 外贸部门户菜单（招聘 + 社媒线索）。
+function buildForeignTradePortalMenu(language: Language): MenuEntry[] {
+  const t = menuText[language];
+  return [
+    { key: 'workbench', label: t.workbench, to: '/', icon: Home },
+    { key: 'business', label: t.business, to: '/business', icon: BarChart3 },
+    {
+      key: 'ft-collect-data',
+      label: t.ftCollectData,
+      icon: Users,
+      children: [
+        { key: 'collection', label: t.collection, to: '/collection', icon: Telescope },
+        { key: 'collect-jobs', label: t.ftCollectJobs, to: '/collect-jobs', icon: Briefcase },
+        { key: 'collect-social', label: t.ftCollectSocial, to: '/collect-social', icon: Heart },
+        { key: 'ft-import', label: t.collectImport, to: '/ft-import', icon: FileSpreadsheet },
+      ],
+    },
+    { key: 'recommendations', label: t.ftRecommendations, to: '/recommendations', icon: Sparkles },
+    { key: 'emails', label: t.emails, to: '/emails', icon: MailCheck },
+    { key: 'export', label: t.export, to: '/export', icon: ArrowDownToLine },
+    { key: 'assistant', label: t.assistant, to: '/assistant', icon: Bot },
+  ];
+}
+
 export const portalMenu: MenuEntry[] = buildPortalMenu('zh');
 
-export function getPortalMenu(language: Language): MenuEntry[] {
-  return buildPortalMenu(language);
+export function getPortalMenu(language: Language, isForeignTrade = false): MenuEntry[] {
+  return isForeignTrade ? buildForeignTradePortalMenu(language) : buildPortalMenu(language);
 }
 
 const pageMetaByLanguage: Record<Language, Record<string, PageMeta>> = {
@@ -98,6 +131,9 @@ const pageMetaByLanguage: Record<Language, Record<string, PageMeta>> = {
     '/export': { title: '数据工具', subtitle: '导出文件、下载模板，正式导入统一到表格导入页' },
     '/hotkw': { title: 'TikTok 热搜', subtitle: '热门关键词与增长趋势' },
     '/assistant': { title: 'AI 助手', subtitle: '智能问答与运维指引' },
+    '/collect-jobs': { title: '采集 · 招聘网站', subtitle: '51job / 智联 / 大泉州 · 公司客户与跨境人才' },
+    '/collect-social': { title: '采集 · 小红书抖音', subtitle: '博主 / 笔记 / 评论 · 联系方式与采购意向' },
+    '/ft-import': { title: '采集 · 表格导入', subtitle: 'CSV / XLSX 批量导入线索 · 分级与质量分布' },
   },
   en: {
     '/': { title: 'Workbench', subtitle: 'Open tasks, collection status, and common entry points' },
@@ -112,6 +148,9 @@ const pageMetaByLanguage: Record<Language, Record<string, PageMeta>> = {
     '/export': { title: 'Data Tools', subtitle: 'Export files, download templates, and route formal imports to Table Import' },
     '/hotkw': { title: 'TikTok Trends', subtitle: 'Trending keywords and growth signals' },
     '/assistant': { title: 'AI Assistant', subtitle: 'Smart Q&A and operations guidance' },
+    '/collect-jobs': { title: 'Recruitment Sites', subtitle: '51job / Zhaopin / QZRC · company clients and cross-border talent' },
+    '/collect-social': { title: 'Xiaohongshu / Douyin', subtitle: 'Creators / notes / comments · contacts and purchase intent' },
+    '/ft-import': { title: 'Table Import', subtitle: 'CSV / XLSX batch import with tier and quality distribution' },
   },
 };
 

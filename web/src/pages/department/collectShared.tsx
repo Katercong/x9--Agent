@@ -7,6 +7,8 @@ export const ACCENTS = {
   shop: { key: '#FE2C55', soft: '#FFE5EC', ink: '#161823', label: 'TikTok Shop' },
   leads: { key: '#10b981', soft: '#d1fae5', ink: '#064e3b', label: 'X9 线索' },
   import: { key: '#f59e0b', soft: '#fef3c7', ink: '#78350f', label: '表格导入' },
+  jobs: { key: '#6d28d9', soft: '#ede9fe', ink: '#2e1065', label: '招聘网站' },
+  social: { key: '#db2777', soft: '#fce7f3', ink: '#500724', label: '小红书抖音' },
 } as const;
 
 export type Accent = (typeof ACCENTS)[keyof typeof ACCENTS];

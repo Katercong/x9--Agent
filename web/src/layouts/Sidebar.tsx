@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { ChevronDown, ChevronsLeft, ChevronsRight, X } from 'lucide-react';
 import { useRoleStore } from '@/stores/roleStore';
-import { departmentMenu, companyMenu, superMenu, type MenuEntry, type MenuItem } from './menus';
+import { departmentMenu, foreignTradeDepartmentMenu, companyMenu, superMenu, type MenuEntry, type MenuItem } from './menus';
 import { cn } from '@/lib/cn';
 
 function isMenuGroup(entry: MenuEntry): entry is Extract<MenuEntry, { children: MenuItem[] }> {
@@ -10,12 +10,15 @@ function isMenuGroup(entry: MenuEntry): entry is Extract<MenuEntry, { children: 
 }
 
 export default function Sidebar() {
-  const { currentRole, sidebarCollapsed, toggleSidebar, mobileDrawerOpen, closeMobileDrawer } = useRoleStore();
+  const { currentRole, currentUser, sidebarCollapsed, toggleSidebar, mobileDrawerOpen, closeMobileDrawer } = useRoleStore();
   const { pathname } = useLocation();
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
+  // 外贸部成员看招聘+社媒菜单；其余部门（含跨境部）保持原达人采集菜单。
+  const isForeignTrade = currentUser?.department_code === 'foreign_trade';
+  const deptMenu = isForeignTrade ? foreignTradeDepartmentMenu : departmentMenu;
   const menu: MenuEntry[] =
-    currentRole === 'company' ? companyMenu : currentRole === 'super' ? superMenu : departmentMenu;
+    currentRole === 'company' ? companyMenu : currentRole === 'super' ? superMenu : deptMenu;
 
   const toggleGroup = (key: string) => {
     setOpenGroups((current) => ({ ...current, [key]: !(current[key] ?? true) }));

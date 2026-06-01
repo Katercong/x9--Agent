@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN" class="sidepanel">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>X9 小红书/抖音精简采集 v3.0</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="app">
+      <div class="top-bar">
+        <button id="langToggle" class="lang-toggle" type="button" title="Switch language">EN</button>
+      </div>
+
+      <section class="identity-card" id="actorNotice" data-state="checking">
+        <div class="identity-main">
+          <div class="identity-copy">
+            <span class="identity-label" data-zh="插件绑定账号" data-en="Plugin account">插件绑定账号</span>
+            <strong id="actorName">检查中</strong>
+          </div>
+          <span class="identity-pill" id="actorStatusPill">检查中</span>
+        </div>
+        <p class="identity-meta" id="actorMeta"></p>
+        <p class="identity-message" id="actorMessage">正在等待第一次心跳校验。</p>
+        <div class="identity-actions">
+          <button class="identity-action primary" id="actorBindBtn" type="button">绑定当前登录账号</button>
+          <button class="identity-action" id="actorLoginBtn" type="button">打开登录页</button>
+        </div>
+      </section>
+
+      <section class="auto-card xhs" id="xhsPanel">
+        <div class="card-head">
+          <h2>
+            <span data-zh="小红书精简采集 v3.0" data-en="XHS Lite Collector v3.0">小红书精简采集 v3.0</span>
+          </h2>
+          <span class="pill" id="xhsStatusPill" data-state="idle" data-zh="空闲" data-en="Idle">空闲</span>
+        </div>
+
+        <div class="xhs-form compact">
+          <div class="xhs-grid two">
+            <label class="xhs-field">
+              <span data-zh="采集用户数" data-en="Users">采集用户数</span>
+              <input id="xhsProfileLimitInput" type="number" min="1" max="300" value="20">
+            </label>
+            <label class="xhs-field">
+              <span data-zh="采集笔记数" data-en="Notes">采集笔记数</span>
+              <input id="xhsMaxNotesInput" type="number" min="1" max="200" value="10">
+            </label>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button id="xhsStartBtn" class="btn-start" type="button" data-zh="开始" data-en="Start">开始</button>
+          <button id="xhsStopBtn" class="btn-stop" type="button" data-zh="停止" data-en="Stop">停止</button>
+          <button id="xhsResetBtn" class="btn-reset" type="button" data-zh="重置" data-en="Reset">重置</button>
+        </div>
+
+        <div class="counts xhs-counts">
+          <div><strong id="xhsNotesCount">0</strong><span data-zh="笔记" data-en="Notes">笔记</span></div>
+          <div><strong id="xhsCommentsCount">0</strong><span data-zh="评论" data-en="Comments">评论</span></div>
+          <div><strong id="xhsRepliesCount">0</strong><span data-zh="回复" data-en="Replies">回复</span></div>
+          <div><strong id="xhsUsersCount">0</strong><span data-zh="用户" data-en="Users">用户</span></div>
+          <div><strong id="xhsProfilesCount">0</strong><span data-zh="主页" data-en="Profiles">主页</span></div>
+        </div>
+
+        <div class="xhs-steps">
+          <span id="xhsStepNotes">卡片/帖子</span>
+          <span id="xhsStepProfiles">用户主页</span>
+          <span id="xhsStepComments">评论区</span>
+          <span id="xhsStepUpload">上传</span>
+        </div>
+        <p class="footnote" id="xhsError"></p>
+        <p class="footnote" id="xhsPhase"></p>
+      </section>
+
+      <section class="auto-card douyin" id="douyinPanel">
+        <div class="card-head">
+          <h2>
+            <span data-zh="抖音精简采集 v3.0" data-en="Douyin Lite Collector v3.0">抖音精简采集 v3.0</span>
+          </h2>
+          <span class="pill" id="douyinStatusPill" data-state="idle" data-zh="空闲" data-en="Idle">空闲</span>
+        </div>
+
+        <div class="xhs-form compact">
+          <div class="limit-mode" role="radiogroup" aria-label="Douyin limit mode">
+            <label class="limit-choice">
+              <input id="douyinLimitModeProfiles" type="radio" name="douyinLimitMode" value="profiles" checked>
+              <span data-zh="按主页数" data-en="By profiles">按主页数</span>
+            </label>
+            <label class="limit-choice">
+              <input id="douyinLimitModeVideos" type="radio" name="douyinLimitMode" value="videos">
+              <span data-zh="按视频数" data-en="By videos">按视频数</span>
+            </label>
+          </div>
+          <div class="xhs-grid two">
+            <label class="xhs-field">
+              <span data-zh="采集主页数" data-en="Profiles">采集主页数</span>
+              <input id="douyinProfileLimitInput" type="number" min="1" max="300" value="20">
+            </label>
+            <label class="xhs-field">
+              <span data-zh="采集视频数" data-en="Videos">采集视频数</span>
+              <input id="douyinMaxPostsInput" type="number" min="1" max="200" value="10">
+            </label>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button id="douyinStartBtn" class="btn-start" type="button" data-zh="开始" data-en="Start">开始</button>
+          <button id="douyinStopBtn" class="btn-stop" type="button" data-zh="停止" data-en="Stop">停止</button>
+          <button id="douyinResetBtn" class="btn-reset" type="button" data-zh="重置" data-en="Reset">重置</button>
+        </div>
+
+        <div class="counts xhs-counts">
+          <div><strong id="douyinPostsCount">0</strong><span data-zh="视频" data-en="Videos">视频</span></div>
+          <div><strong id="douyinCommentsCount">0</strong><span data-zh="评论" data-en="Comments">评论</span></div>
+          <div><strong id="douyinRepliesCount">0</strong><span data-zh="回复" data-en="Replies">回复</span></div>
+          <div><strong id="douyinUsersCount">0</strong><span data-zh="发现用户" data-en="Found users">发现用户</span></div>
+          <div><strong id="douyinProfilesCount">0</strong><span data-zh="已采主页" data-en="Profiles">已采主页</span></div>
+        </div>
+
+        <div class="xhs-steps douyin-steps">
+          <span id="douyinStepPosts">卡片/帖子</span>
+          <span id="douyinStepProfiles">用户主页</span>
+          <span id="douyinStepComments">评论区</span>
+          <span id="douyinStepUpload">上传</span>
+        </div>
+        <p class="footnote" id="douyinError"></p>
+        <p class="footnote" id="douyinPhase"></p>
+      </section>
+    </main>
+
+    <div class="legacy-shim" aria-hidden="true">
+      <select id="languageSelect"><option value="zh" selected>中文</option><option value="en">English</option></select>
+      <input id="keywordInput" type="text" value="">
+      <input id="requireEmailInput" type="checkbox" checked>
+      <input id="minFollowersInput" type="number" value="1000">
+      <input id="autoProfilesInput" type="number" value="20">
+      <span id="runTimer">00:00:00</span>
+      <span id="runTimerMeta">未开始</span>
+      <span class="pill" id="ttStatusPill" data-state="idle">空闲</span>
+      <span id="leadCount">0</span>
+      <span id="pendingCount">0</span>
+      <span id="skippedCount">0</span>
+      <span id="ttErrorCount">0</span>
+      <p id="ttFootnote"></p>
+      <button id="startAutoBtn" type="button"></button>
+      <button id="stopAutoBtn" type="button"></button>
+      <button id="clearBtn" type="button"></button>
+      <button id="openPanelBtn" type="button"></button>
+      <button id="openSearchBtn" type="button"></button>
+      <button id="scanPageBtn" type="button"></button>
+      <button id="openNextBtn" type="button"></button>
+      <button id="exportCsvBtn" type="button"></button>
+      <button id="exportExcelBtn" type="button"></button>
+      <button id="exportJsonBtn" type="button"></button>
+      <button id="exportBackupBtn" type="button"></button>
+      <button id="copyNextBtn" type="button"></button>
+      <ul id="queueList"><li class="empty"></li></ul>
+      <ul id="leadList"><li class="empty"></li></ul>
+      <p id="status"></p>
+      <input id="shopEndpointInput" type="url" value="https://usx9.us/api/local/collector/observations">
+      <input id="x9BackendInput" type="url">
+      <span id="x9BackendStatus"></span>
+      <button id="x9BackendSave" type="button"></button>
+      <button id="x9BackendDetect" type="button"></button>
+    </div>
+
+    <script src="x9_actor_config.js"></script>
+    <script src="popup.js"></script>
+    <script src="xhs_panel.js"></script>
+    <script src="douyin_panel.js"></script>
+    <script src="i18n_toggle.js"></script>
+  </body>
+</html>

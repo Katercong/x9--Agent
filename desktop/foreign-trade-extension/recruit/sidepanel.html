@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>外贸部 · 招聘采集</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 14px;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      background: #111827;
+      color: #e5e7eb;
+      font-size: 13px;
+    }
+    h1 { margin: 0 0 12px; font-size: 16px; color: #fff; }
+    label { display: block; margin: 10px 0 5px; color: #9ca3af; font-size: 12px; }
+    select, input, textarea {
+      width: 100%;
+      border: 1px solid #374151;
+      border-radius: 6px;
+      background: #0b1220;
+      color: #e5e7eb;
+      padding: 8px;
+      font: inherit;
+    }
+    textarea { resize: vertical; min-height: 92px; }
+    button {
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #4f46e5;
+      border-radius: 6px;
+      background: #4f46e5;
+      color: #fff;
+      padding: 8px 10px;
+      cursor: pointer;
+      font: inherit;
+    }
+    button.secondary { border-color: #374151; background: #1f2937; }
+    button.warn { border-color: #92400e; background: #78350f; }
+    .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+    .status { margin: 12px 0; padding: 8px; border-radius: 6px; background: #0b1220; color: #cbd5e1; }
+    .crawl-progress-list { margin: 0 0 12px; display: flex; flex-direction: column; gap: 8px; }
+    .task-card { padding: 10px; border: 1px solid #263244; border-left: 3px solid #475569; border-radius: 6px; background: #07111f; }
+    .task-card[data-status="running"], .task-card[data-status="queued"], .task-card[data-status="stopping"] { border-left-color: #4f46e5; }
+    .task-card[data-status="done"] { border-left-color: #166534; }
+    .task-card[data-status="failed"] { border-left-color: #7f1d1d; }
+    .task-card[data-status="stopped"] { border-left-color: #92400e; }
+    .progress-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+    .progress-title { color: #f8fafc; font-size: 12px; font-weight: 650; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .progress-count { color: #a7f3d0; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .progress-meta { display: flex; flex-direction: column; gap: 4px; margin-top: 7px; color: #94a3b8; font-size: 11px; line-height: 1.4; }
+    .progress-meta span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .progress-meta span:empty { display: none; }
+    .muted { color: #9ca3af; font-size: 12px; line-height: 1.45; }
+
+    /* 逐页采集首推卡片 */
+    .primary-card { border: 1px solid #1f6feb; background: #131b2b; border-radius: 8px; padding: 12px; margin-bottom: 14px; }
+    .primary-card h2 { margin: 0 0 6px; font-size: 14px; color: #fff; }
+    .primary-card ol { margin: 6px 0 0; padding-left: 18px; }
+    .primary-card li { margin-bottom: 4px; color: #c9d1d9; }
+    .section-label { font-size: 12px; color: #6e7681; margin: 4px 0 8px; border-top: 1px solid #232830; padding-top: 12px; }
+    .badge { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: #30363d; color: #aab2bd; margin-left: 6px; }
+  </style>
+</head>
+<body>
+  <h1>外贸部 · 招聘网站采集</h1>
+
+  <!-- 主路径：逐页采集（无需 helper、无需点按钮） -->
+  <div class="primary-card">
+    <h2>✅ 逐页采集（推荐 · 即开即用）</h2>
+    <div style="font-size:12px; color:#c9d1d9;">无需安装、无需点下面的按钮：</div>
+    <ol>
+      <li>浏览器打开并登录 <b>51job / 智联 / 大泉州</b></li>
+      <li>搜关键词，打开<b>搜索结果页</b>或<b>公司/职位详情页</b></li>
+      <li>插件<b>自动采集当前页</b>并推送到外贸部后台</li>
+      <li>回 <b>http://localhost:8000</b>（外贸部账号）→「采集·招聘网站 / 公司客户线索」查看</li>
+    </ol>
+  </div>
+
+  <!-- 高级路径：批量采集（需 helper，原 ID 全部保留给 sidepanel.js） -->
+  <div class="section-label">批量采集 <span class="badge">高级 · 需本机 helper</span> —— 关键词自动翻页；helper 暂未提供，当前请用上面的逐页采集</div>
+
+  <div id="crawl-progress" class="crawl-progress-list">
+    <div class="task-card task-empty">
+      <div class="progress-head">
+        <div class="progress-title">主采集进度</div>
+        <div class="progress-count">未开始</div>
+      </div>
+      <div class="progress-meta"><span>未开始</span></div>
+    </div>
+  </div>
+
+  <div id="health" class="status">helper: 检查中...</div>
+  <div id="task-completion" class="status" style="display:none"></div>
+  <div id="runtime-status" class="muted">批量采集需本机 helper；当前未提供，请使用上方逐页采集。</div>
+
+  <label>采集平台</label>
+  <select id="platform">
+    <option value="qzrc_job">大泉州人才网：公司客户</option>
+    <option value="qzrc_resume">大泉州人才网：跨境人才</option>
+    <option value="51job" selected>前程无忧：公司客户</option>
+    <option value="51job_talent">前程无忧：跨境人才</option>
+    <option value="zhaopin">智联招聘：公司客户</option>
+    <option value="zhaopin_resume">智联招聘：跨境人才</option>
+  </select>
+  <div id="login-hint" class="muted" style="margin-top:6px"></div>
+
+  <label>关键词（逗号分隔）</label>
+  <textarea id="keywords">外贸,跨境电商运营,亚马逊运营,海外仓,供应链,品牌销售,北美市场</textarea>
+
+  <label>本次采集数量</label>
+  <input id="max-items" type="number" min="1" max="5000" value="10" />
+
+  <div class="actions">
+    <button id="start">开始采集</button>
+    <button id="stop" class="warn">停止采集</button>
+    <button id="open-dashboard" class="secondary">管理后台</button>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

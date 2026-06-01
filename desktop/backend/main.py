@@ -23,12 +23,15 @@ from .routers import (
     app as app_router,
     auth,
     collector,
+    company_leads,
     creators,
     dashboard,
     data as data_router,
     db as db_router,
     export as export_router,
     extension,
+    extension_ingest_compat,
+    foreign_trade,
     imports,
     outreach,
     post_process,
@@ -37,6 +40,7 @@ from .routers import (
     review_tasks,
     shared,
     v2 as v2_router,
+    xhs_leads,
 )
 from .services import auth_service
 from .services.departments import SLUG_TO_CODE
@@ -60,6 +64,10 @@ app.include_router(db_router.router)
 app.include_router(extension.router)
 app.include_router(collector.router)
 app.include_router(dashboard.router)
+app.include_router(foreign_trade.router)
+app.include_router(company_leads.router)
+app.include_router(xhs_leads.router)
+app.include_router(extension_ingest_compat.router)
 app.include_router(post_process.process_router)
 app.include_router(process.router)
 app.include_router(post_process.creators_router)
