@@ -46,9 +46,12 @@ from ..utils.id_utils import new_id
 logger = logging.getLogger(__name__)
 
 
+GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+
 SCOPES = [
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/gmail.readonly",
+    GMAIL_SEND_SCOPE,
+    GMAIL_READONLY_SCOPE,
     "https://www.googleapis.com/auth/userinfo.email",
     "openid",
 ]
@@ -262,6 +265,43 @@ def status(
             accounts[0]["email"] if accounts else None,
         ),
     }
+
+
+def account_scopes(account: GmailAccount) -> set[str]:
+    """Return OAuth scopes stored on an account token."""
+
+    raw = _token_json_from_storage(account.token_json or "{}")
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return set()
+    value = payload.get("scopes") or payload.get("scope") or []
+    if isinstance(value, str):
+        return {part.strip() for part in value.replace(",", " ").split() if part.strip()}
+    if isinstance(value, list):
+        return {str(part).strip() for part in value if str(part).strip()}
+    return set()
+
+
+def account_has_readonly_scope(account: GmailAccount) -> bool:
+    return GMAIL_READONLY_SCOPE in account_scopes(account)
+
+
+def build_gmail_service_for_account(session: Session, account: GmailAccount) -> Any:
+    """Build an authenticated Gmail API client for an already selected row."""
+
+    Credentials, Request, _Flow, build, _HttpError = _require_google()
+    stored_token_json = account.token_json or "{}"
+    raw_token_json = _token_json_from_storage(stored_token_json)
+    creds = Credentials.from_authorized_user_info(json.loads(raw_token_json), scopes=SCOPES)
+    if not _token_json_is_encrypted(stored_token_json) and _token_cipher() is not None:
+        account.token_json = _token_json_to_storage(raw_token_json)
+    if not creds.valid and getattr(creds, "refresh_token", None):
+        creds.refresh(Request())
+        account.token_json = _token_json_to_storage(creds.to_json())
+    account.last_used_at = datetime.utcnow()
+    session.flush()
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
 def build_auth_url(
@@ -583,6 +623,88 @@ def send_email(
         }
 
 
+def send_thread_reply(
+    to_email: str,
+    subject: str,
+    body: str,
+    *,
+    gmail_thread_id: str | None,
+    body_format: str = "plain",
+    from_account_id: str | None = None,
+    from_email: str | None = None,
+    in_reply_to: str | None = None,
+    references: str | None = None,
+    department_code: str | None = None,
+) -> dict[str, Any]:
+    """Send a reply inside an existing Gmail thread.
+
+    The caller chooses the account from the matched outreach conversation; this
+    function intentionally does not fall back to the user's default account
+    when a thread/account mismatch would hide an operational mistake.
+    """
+
+    if not to_email or "@" not in to_email:
+        raise ValueError(f"invalid recipient: {to_email!r}")
+    if not from_account_id and not from_email:
+        raise GmailNotAuthorizedError("Reply sender mailbox is missing from this conversation.")
+
+    Credentials, Request, _Flow, build, HttpError = _require_google()
+
+    with SessionLocal() as session:
+        account = _resolve_account(
+            session,
+            account_id=from_account_id,
+            email=from_email,
+            user_id=None,
+            department_code=None,
+            include_shared=True,
+        )
+        if account is None:
+            raise GmailNotAuthorizedError(
+                "The original outreach Gmail account is not authorized anymore. Reconnect it before replying."
+            )
+
+        stored_token_json = account.token_json or "{}"
+        raw_token_json = _token_json_from_storage(stored_token_json)
+        creds = Credentials.from_authorized_user_info(json.loads(raw_token_json), scopes=SCOPES)
+        if not _token_json_is_encrypted(stored_token_json) and _token_cipher() is not None:
+            account.token_json = _token_json_to_storage(raw_token_json)
+        if not creds.valid and getattr(creds, "refresh_token", None):
+            creds.refresh(Request())
+            account.token_json = _token_json_to_storage(creds.to_json())
+
+        sender = account.email
+        raw = _build_mime_message(
+            to_email=to_email,
+            subject=subject,
+            body=body,
+            body_format=body_format,
+            from_email=sender,
+            in_reply_to=in_reply_to,
+            references=references,
+            department_code=department_code,
+        )
+        request_body: dict[str, Any] = {"raw": raw}
+        if gmail_thread_id:
+            request_body["threadId"] = gmail_thread_id
+
+        service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+        try:
+            sent = service.users().messages().send(userId="me", body=request_body).execute()
+        except HttpError as exc:
+            raise RuntimeError(f"Gmail reply failed: {exc}") from exc
+
+        account.last_used_at = datetime.utcnow()
+        session.commit()
+
+        return {
+            "message_id": sent.get("id"),
+            "thread_id": sent.get("threadId") or gmail_thread_id,
+            "from_email": sender,
+            "from_account_id": account.id,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Migration: bring the legacy single-file token into the new table
 # ---------------------------------------------------------------------------
@@ -862,6 +984,8 @@ def _build_mime_message(
     body_format: str,
     from_email: str,
     reply_to: str | None = None,
+    in_reply_to: str | None = None,
+    references: str | None = None,
     department_code: str | None = None,
 ) -> str:
     if body_format == "html":
@@ -890,6 +1014,10 @@ def _build_mime_message(
     message["Subject"] = subject or "(no subject)"
     if reply_to:
         message["Reply-To"] = reply_to
+    if in_reply_to:
+        message["In-Reply-To"] = in_reply_to
+    if references:
+        message["References"] = references
     return base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
 
 

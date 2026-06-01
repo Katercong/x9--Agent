@@ -123,6 +123,11 @@ export function getPageMeta(pathname: string, language: Language): PageMeta {
       ? { title: 'Creator Detail', subtitle: 'Recommendation evidence, review signals, and email outreach' }
       : { title: '达人详情', subtitle: '推荐判断、证据复核与邮件建联' };
   }
+  if (pathname.startsWith('/emails/')) {
+    return language === 'en'
+      ? { title: 'Creator Email Tracking', subtitle: 'Creator-specific communication records and full email history' }
+      : { title: '达人邮件跟踪', subtitle: '单个达人的沟通记录与完整邮件历史' };
+  }
   return pageMetaByLanguage[language][pathname]
     ?? (language === 'en' ? { title: 'Page', subtitle: '' } : { title: '页面', subtitle: '' });
 }

@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import UI_DIR, settings
 from .database import SessionLocal, init_db
 from .models.request_log import RequestLog
-from .utils import collector_queue_scheduler, log_scheduler, raw_processor_scheduler, session_cache, stats_scheduler
+from .utils import collector_queue_scheduler, gmail_sync_scheduler, log_scheduler, raw_processor_scheduler, session_cache, stats_scheduler
 from .routers import (
     admin,
     analytics,
@@ -92,6 +92,9 @@ def startup() -> None:
     # Dashboard/API statistics are read much more often than they need to be
     # recomputed. Keep hot snapshots fresh once per minute in the background.
     stats_scheduler.start_stats_refresh()
+    # Gmail replies are checked from the already-sent creator outreach threads
+    # every 10 minutes so the email tracking page reflects real inbound mail.
+    gmail_sync_scheduler.start_gmail_reply_sync()
 
 
 PUBLIC_API_PATHS = {

@@ -197,6 +197,19 @@ export function useOutreachArchiveDetail(id?: string | null) {
   });
 }
 
+export function useReplyOutreachArchive() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Parameters<typeof endpoints.replyOutreachArchive>[1] }) =>
+      endpoints.replyOutreachArchive(id, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['outreach', 'tracking'] });
+      qc.invalidateQueries({ queryKey: ['outreach', 'archive'] });
+      qc.invalidateQueries({ queryKey: ['outreach', 'archive-detail'] });
+    },
+  });
+}
+
 export function useOutreachTracking(params?: Params) {
   return useQuery({
     queryKey: ['outreach', 'tracking', params],
@@ -247,6 +260,25 @@ export function useDeleteTkPrompt() {
 // Gmail
 export function useGmailStatus() {
   return useQuery({ queryKey: ['gmail', 'status'], queryFn: () => endpoints.gmailStatus() });
+}
+export function useGmailReplySyncStatus() {
+  return useQuery({
+    queryKey: ['gmail', 'reply-sync-status'],
+    queryFn: () => endpoints.gmailReplySyncStatus(),
+    refetchInterval: 10_000,
+  });
+}
+export function useGmailSyncReplies() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body?: Parameters<typeof endpoints.gmailSyncReplies>[0]) => endpoints.gmailSyncReplies(body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['gmail', 'reply-sync-status'] });
+      qc.invalidateQueries({ queryKey: ['outreach', 'tracking'] });
+      qc.invalidateQueries({ queryKey: ['outreach', 'archive'] });
+      qc.invalidateQueries({ queryKey: ['outreach', 'archive-detail'] });
+    },
+  });
 }
 export function useGmailAccounts() {
   return useQuery({ queryKey: ['gmail', 'accounts'], queryFn: () => endpoints.gmailAccounts() });

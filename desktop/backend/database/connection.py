@@ -90,6 +90,7 @@ def _ensure_schema_columns() -> None:
         "raw_observations",
         "creator_tags",
         "creator_recommendations",
+        "creator_email_messages",
         "creator_outreach_events",
         "review_tasks",
         "outreach_emails",
@@ -163,6 +164,40 @@ def _ensure_schema_columns() -> None:
         _ensure_index(conn, "ix_gmail_sync_state_status", "gmail_sync_state", "status")
         _ensure_index(conn, "ix_gmail_sync_state_next_sync_at", "gmail_sync_state", "next_sync_at")
 
+        _ensure_column(conn, "creator_email_messages", "creator_id", "VARCHAR(120)")
+        _ensure_column(conn, "creator_email_messages", "outreach_email_id", "VARCHAR(120)")
+        _ensure_column(conn, "creator_email_messages", "gmail_account_id", "VARCHAR(120)")
+        _ensure_column(conn, "creator_email_messages", "gmail_account_email", "VARCHAR(320)")
+        _ensure_column(conn, "creator_email_messages", "gmail_thread_id", "VARCHAR(120)")
+        _ensure_column(conn, "creator_email_messages", "gmail_message_id", "VARCHAR(120)")
+        _ensure_column(conn, "creator_email_messages", "direction", "VARCHAR(20)")
+        _ensure_column(conn, "creator_email_messages", "from_email", "VARCHAR(320)")
+        _ensure_column(conn, "creator_email_messages", "to_email", "VARCHAR(1000)")
+        _ensure_column(conn, "creator_email_messages", "subject", "TEXT")
+        _ensure_column(conn, "creator_email_messages", "snippet", "TEXT")
+        _ensure_column(conn, "creator_email_messages", "body_preview", "TEXT")
+        _ensure_column(conn, "creator_email_messages", "body", "TEXT")
+        _ensure_column(conn, "creator_email_messages", "body_format", "VARCHAR(10)")
+        _ensure_column(conn, "creator_email_messages", "message_at", "TIMESTAMP")
+        _ensure_column(conn, "creator_email_messages", "metadata_json", "TEXT")
+        _ensure_column(conn, "creator_email_messages", "created_at", "TIMESTAMP")
+        _ensure_column(conn, "creator_email_messages", "updated_at", "TIMESTAMP")
+        _ensure_index(conn, "ix_creator_email_messages_creator_id", "creator_email_messages", "creator_id")
+        _ensure_index(conn, "ix_creator_email_messages_outreach_email_id", "creator_email_messages", "outreach_email_id")
+        _ensure_index(conn, "ix_creator_email_messages_gmail_account_id", "creator_email_messages", "gmail_account_id")
+        _ensure_index(conn, "ix_creator_email_messages_gmail_thread_id", "creator_email_messages", "gmail_thread_id")
+        _ensure_index(conn, "ix_creator_email_messages_gmail_message_id", "creator_email_messages", "gmail_message_id")
+        _ensure_index(conn, "ix_creator_email_messages_direction", "creator_email_messages", "direction")
+        _ensure_index(conn, "ix_creator_email_messages_message_at", "creator_email_messages", "message_at")
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_creator_email_messages_account_message "
+            "ON creator_email_messages (gmail_account_id, gmail_message_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_creator_email_messages_creator_at "
+            "ON creator_email_messages (creator_id, message_at)"
+        ))
+
         _ensure_column(conn, "raw_observations", "actor_user_id", "VARCHAR(120)")
         _ensure_column_type(conn, "raw_observations", "worker_id", "VARCHAR(120)")
         _ensure_column_type(conn, "raw_observations", "account_id", "VARCHAR(120)")
@@ -189,7 +224,8 @@ def _ensure_schema_columns() -> None:
         _set_nulls(conn, "followup_tasks", "status", "open")
         _set_nulls_typed(conn, "followup_tasks", "priority", 50)
         _set_nulls(conn, "gmail_sync_state", "status", "idle")
-        _set_nulls_typed(conn, "gmail_sync_state", "interval_minutes", 30)
+        _set_nulls_typed(conn, "gmail_sync_state", "interval_minutes", 10)
+        conn.execute(text("UPDATE gmail_sync_state SET interval_minutes = 10 WHERE interval_minutes IS NULL OR interval_minutes <> 10"))
         for table in department_tables:
             if table not in {"outreach_templates", "app_users"}:
                 _set_nulls(conn, table, "department_code", DEFAULT_DEPARTMENT)

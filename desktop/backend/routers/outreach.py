@@ -39,11 +39,15 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models.creator import Creator
+from ..models.creator_email_message import CreatorEmailMessage
 from ..models.creator_outreach_event import CreatorOutreachEvent
 from ..models.creator_outreach_lock import CreatorOutreachLock
+from ..models.gmail_account import GmailAccount
+from ..models.gmail_sync_state import GmailSyncState
 from ..models.outreach_email import OutreachEmail
 from ..models.outreach_template import OutreachTemplate
 from ..services import gmail_service
+from ..services import gmail_sync_service
 from ..services import product_asset_service
 from ..services import remote_creators
 from ..services.departments import current_department_code, department_where, effective_row_department, row_in_department
@@ -185,6 +189,17 @@ class RollbackIn(BaseModel):
 class TrackingStatusIn(BaseModel):
     current_status: str
     note: str | None = Field(default=None, max_length=1000)
+
+
+class GmailReplySyncIn(BaseModel):
+    account_ids: list[str] | None = None
+    limit_per_account: int = Field(default=2500, ge=1, le=10000)
+
+
+class EmailReplyIn(BaseModel):
+    subject: str | None = Field(default=None, max_length=500)
+    body: str = Field(min_length=1, max_length=20000)
+    body_format: str = Field(default="plain", pattern="^(plain|html)$")
 
 
 class LockAcquireIn(BaseModel):
@@ -384,6 +399,61 @@ def _archive_detail_to_dict(email: OutreachEmail, creator_summary: dict[str, Any
     return item
 
 
+def _archive_message_item_to_dict(
+    message: CreatorEmailMessage,
+    creator_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": message.id,
+        "department_code": message.department_code,
+        "creator_id": message.creator_id,
+        **(creator_summary or {}),
+        "to_email": message.to_email or "",
+        "from_email": message.from_email,
+        "subject": message.subject or "(no subject)",
+        "body_preview": message.body_preview or message.snippet or "",
+        "body_format": message.body_format or "plain",
+        "status": message.direction,
+        "direction": message.direction,
+        "sent_at": _iso(message.message_at),
+        "created_at": _iso(message.created_at),
+        "created_by": message.gmail_account_email,
+        "gmail_thread_id": message.gmail_thread_id,
+        "gmail_message_id": message.gmail_message_id,
+        "parent_email_id": message.outreach_email_id,
+    }
+
+
+def _archive_message_detail_to_dict(
+    message: CreatorEmailMessage,
+    creator_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    item = _archive_message_item_to_dict(message, creator_summary)
+    item.update(
+        {
+            "body": message.body or message.snippet or "",
+            "error_message": None,
+            "updated_at": _iso(message.updated_at),
+        }
+    )
+    return item
+
+
+def _message_metadata(message: CreatorEmailMessage) -> dict[str, Any]:
+    if not message.metadata_json:
+        return {}
+    try:
+        value = json.loads(message.metadata_json)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _reply_subject(value: str | None) -> str:
+    subject = (value or "").strip() or "(no subject)"
+    return subject if subject.lower().startswith("re:") else f"Re: {subject}"
+
+
 def _parse_archive_datetime(value: str | None, field_name: str) -> datetime | None:
     if not value:
         return None
@@ -391,6 +461,12 @@ def _parse_archive_datetime(value: str | None, field_name: str) -> datetime | No
         return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"{field_name} must be ISO datetime or YYYY-MM-DD") from exc
+
+
+def _archive_sort_timestamp(row: OutreachEmail | CreatorEmailMessage) -> float:
+    if isinstance(row, CreatorEmailMessage):
+        return _tracking_timestamp(row.message_at or row.created_at)
+    return _tracking_timestamp(row.sent_at or row.created_at)
 
 
 _TRACKING_STATUSES = (
@@ -1325,11 +1401,29 @@ def list_outreach_tracking(
         )
     )
     total = len(items)
+    status_counts: dict[str, int] = {}
+    for item in items:
+        key = str(item.get("current_status") or "")
+        if key:
+            status_counts[key] = status_counts.get(key, 0) + 1
+    direction_counts = {
+        "inbound": sum(1 for item in items if item.get("latest_direction") == "inbound"),
+        "outbound": sum(1 for item in items if item.get("latest_direction") != "inbound"),
+        "needs_followup": sum(1 for item in items if item.get("needs_followup")),
+    }
     page = items[offset:offset + limit]
     for item in page:
         item.pop("_latest_sort", None)
         item.pop("_overdue_contacted", None)
-    return {"ok": True, "total": total, "limit": limit, "offset": offset, "items": page}
+    return {
+        "ok": True,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "items": page,
+        "status_counts": status_counts,
+        "direction_counts": direction_counts,
+    }
 
 
 @router.post("/tracking/{creator_id}/status")
@@ -1415,6 +1509,48 @@ def list_outreach_archive(
     if end is not None:
         filters.append(sent_at <= end)
 
+    if creator_id:
+        message_filters = [CreatorEmailMessage.creator_id == creator_id]
+        message_department = department_where(CreatorEmailMessage, department_code)
+        if message_department is not None:
+            message_filters.append(message_department)
+        if from_email:
+            message_filters.append(CreatorEmailMessage.from_email.ilike(f"%{from_email.strip()}%"))
+        if to_email:
+            message_filters.append(CreatorEmailMessage.to_email.ilike(f"%{to_email.strip()}%"))
+        if q and q.strip():
+            needle = f"%{q.strip()}%"
+            message_filters.append(
+                or_(
+                    CreatorEmailMessage.subject.ilike(needle),
+                    CreatorEmailMessage.body.ilike(needle),
+                    CreatorEmailMessage.body_preview.ilike(needle),
+                    CreatorEmailMessage.snippet.ilike(needle),
+                    CreatorEmailMessage.to_email.ilike(needle),
+                    CreatorEmailMessage.from_email.ilike(needle),
+                    CreatorEmailMessage.creator_id.ilike(needle),
+                )
+            )
+        if start is not None:
+            message_filters.append(CreatorEmailMessage.message_at >= start)
+        if end is not None:
+            message_filters.append(CreatorEmailMessage.message_at <= end)
+
+        outbound_rows = list(db.scalars(select(OutreachEmail).where(*filters)).all())
+        inbound_rows = list(db.scalars(select(CreatorEmailMessage).where(*message_filters)).all())
+        combined: list[OutreachEmail | CreatorEmailMessage] = [*outbound_rows, *inbound_rows]
+        combined.sort(key=_archive_sort_timestamp, reverse=True)
+        total = len(combined)
+        page = combined[offset:offset + limit]
+        creators = _creator_summary_map(db, [str(getattr(row, "creator_id", "")) for row in page], department_code)
+        items = [
+            _archive_message_item_to_dict(row, creators.get(str(row.creator_id)))
+            if isinstance(row, CreatorEmailMessage)
+            else _archive_item_to_dict(row, creators.get(str(row.creator_id)))
+            for row in page
+        ]
+        return {"ok": True, "total": total, "items": items}
+
     total = int(db.scalar(select(func.count()).select_from(OutreachEmail).where(*filters)) or 0)
     rows = list(
         db.scalars(
@@ -1437,12 +1573,152 @@ def list_outreach_archive(
 def get_outreach_archive_email(email_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
     department_code = current_department_code(request)
     email = db.get(OutreachEmail, email_id)
-    if email is None or email.status != "sent":
+    if email is not None and email.status == "sent" and row_in_department(email, department_code):
+        creators = _creator_summary_map(db, [str(email.creator_id)], department_code)
+        return {"ok": True, "item": _archive_detail_to_dict(email, creators.get(str(email.creator_id)))}
+
+    message = db.get(CreatorEmailMessage, email_id)
+    if message is None or not row_in_department(message, department_code):
         raise HTTPException(status_code=404, detail="archived email not found")
-    if not row_in_department(email, department_code):
-        raise HTTPException(status_code=404, detail="archived email not found")
-    creators = _creator_summary_map(db, [str(email.creator_id)], department_code)
-    return {"ok": True, "item": _archive_detail_to_dict(email, creators.get(str(email.creator_id)))}
+    creators = _creator_summary_map(db, [str(message.creator_id)], department_code)
+    return {"ok": True, "item": _archive_message_detail_to_dict(message, creators.get(str(message.creator_id)))}
+
+
+@router.post("/archive/{email_id}/reply")
+def reply_outreach_archive_email(
+    email_id: str,
+    body: EmailReplyIn,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    department_code = current_department_code(request)
+    current_user = getattr(request.state, "current_user", None) or {}
+    actor_user_id = current_user.get("id") or current_user.get("identity")
+
+    source_email = db.get(OutreachEmail, email_id)
+    source_message = None if source_email is not None else db.get(CreatorEmailMessage, email_id)
+    if source_email is None and source_message is None:
+        raise HTTPException(status_code=404, detail="email not found")
+
+    if source_email is not None:
+        if source_email.status != "sent" or not row_in_department(source_email, department_code):
+            raise HTTPException(status_code=404, detail="email not found")
+        creator_id = str(source_email.creator_id)
+        to_email = source_email.to_email
+        from_account_id = None
+        from_email = source_email.from_email
+        gmail_thread_id = source_email.gmail_thread_id
+        subject = body.subject or _reply_subject(source_email.subject)
+        parent_email_id = source_email.id
+        source_metadata: dict[str, Any] = {}
+        row_department = source_email.department_code
+    else:
+        assert source_message is not None
+        if not row_in_department(source_message, department_code):
+            raise HTTPException(status_code=404, detail="email not found")
+        if source_message.direction == "bounce":
+            raise HTTPException(status_code=400, detail="Cannot reply to a bounce notification.")
+        creator_id = str(source_message.creator_id)
+        to_email = source_message.from_email or ""
+        from_account_id = source_message.gmail_account_id
+        from_email = source_message.gmail_account_email
+        gmail_thread_id = source_message.gmail_thread_id
+        subject = body.subject or _reply_subject(source_message.subject)
+        parent_email_id = source_message.outreach_email_id
+        source_metadata = _message_metadata(source_message)
+        row_department = source_message.department_code
+
+    if not to_email or "@" not in to_email:
+        raise HTTPException(status_code=400, detail="reply recipient is missing")
+    if not from_account_id and not from_email:
+        raise HTTPException(status_code=400, detail="reply mailbox is missing")
+
+    reply_row = OutreachEmail(
+        id=new_id("oem"),
+        department_code=row_department or department_code or "cross_border",
+        creator_id=creator_id,
+        template_id=None,
+        to_email=to_email,
+        from_email=from_email,
+        subject=subject,
+        body=body.body,
+        body_format=body.body_format,
+        status="queued",
+        review_required=0,
+        auto_send=0,
+        gmail_thread_id=gmail_thread_id,
+        parent_email_id=parent_email_id,
+        created_by=actor_user_id,
+    )
+    db.add(reply_row)
+    db.commit()
+
+    try:
+        result = gmail_service.send_thread_reply(
+            to_email=reply_row.to_email,
+            subject=reply_row.subject,
+            body=reply_row.body,
+            body_format=reply_row.body_format,
+            from_account_id=from_account_id,
+            from_email=from_email,
+            gmail_thread_id=gmail_thread_id,
+            in_reply_to=source_metadata.get("rfc_message_id"),
+            references=source_metadata.get("references") or source_metadata.get("rfc_message_id"),
+            department_code=reply_row.department_code,
+        )
+    except gmail_service.GmailNotConfiguredError as exc:
+        reply_row.status = "failed"
+        reply_row.error_message = str(exc)
+        db.commit()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except gmail_service.GmailNotAuthorizedError as exc:
+        reply_row.status = "failed"
+        reply_row.error_message = str(exc)
+        db.commit()
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except Exception as exc:
+        reply_row.status = "failed"
+        reply_row.error_message = str(exc)
+        db.commit()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    reply_row.status = "sent"
+    reply_row.sent_at = datetime.utcnow()
+    reply_row.gmail_message_id = result.get("message_id")
+    reply_row.gmail_thread_id = result.get("thread_id") or gmail_thread_id
+    reply_row.from_email = result.get("from_email") or reply_row.from_email
+    reply_row.error_message = None
+
+    creator = db.get(Creator, creator_id)
+    if creator is not None:
+        previous_status = normalize_current_status(creator.current_status)
+        if previous_status in {None, STATUS_CONTACTED, STATUS_PENDING_FOLLOWUP, STATUS_COMMUNICATING}:
+            create_outreach_event(
+                db,
+                creator,
+                event_type="communicating",
+                actor_user_id=actor_user_id,
+                owner_bd=creator.owner_bd,
+                metadata={
+                    "source": "email_reply",
+                    "outreach_email_id": reply_row.id,
+                    "parent_email_id": parent_email_id,
+                    "gmail_message_id": reply_row.gmail_message_id,
+                    "gmail_thread_id": reply_row.gmail_thread_id,
+                    "from_email": reply_row.from_email,
+                    "to_email": reply_row.to_email,
+                },
+            )
+    elif creator_id.isdigit():
+        try:
+            remote_creators.patch(creator_id, current_status=STATUS_COMMUNICATING)
+        except RemoteRepoError:
+            pass
+
+    db.commit()
+    db.refresh(reply_row)
+    creators = _creator_summary_map(db, [str(reply_row.creator_id)], department_code)
+    return {"ok": True, "item": _archive_detail_to_dict(reply_row, creators.get(str(reply_row.creator_id)))}
 
 
 @router.get("/drafts")
@@ -1560,6 +1836,105 @@ def gmail_status(request: Request) -> dict:
         )
     snapshot["diagnostics"] = gmail_service.diagnose(request_origin, **gmail_scope)
     return {"ok": True, **snapshot}
+
+
+@router.get("/gmail/sync-status")
+def gmail_reply_sync_status(db: Session = Depends(get_db)) -> dict:
+    accounts = list(
+        db.scalars(
+            select(GmailAccount)
+            .where(GmailAccount.is_active == 1)
+            .order_by(GmailAccount.is_default.desc(), GmailAccount.created_at.asc())
+        ).all()
+    )
+    states = {state.account_id: state for state in db.scalars(select(GmailSyncState)).all()}
+    items = [_gmail_sync_account_item(db, account, states.get(account.id)) for account in accounts]
+    totals = {
+        "accounts": len(items),
+        "readable_accounts": sum(1 for item in items if item.get("has_readonly_scope")),
+        "tracked_threads": sum(int(item.get("tracked_threads") or 0) for item in items),
+        "stored_replies": sum(int(item.get("stored_replies") or 0) for item in items),
+        "stored_bounces": sum(int(item.get("stored_bounces") or 0) for item in items),
+        "needs_reauth": sum(1 for item in items if item.get("status") == "needs_reauth"),
+    }
+    return {
+        "ok": True,
+        "interval_minutes": gmail_sync_service.SYNC_INTERVAL_MINUTES,
+        "totals": totals,
+        "items": items,
+        "background": gmail_sync_service.background_sync_status(),
+    }
+
+
+@router.post("/gmail/sync-replies")
+def gmail_sync_replies(body: GmailReplySyncIn | None = None, db: Session = Depends(get_db)) -> dict:
+    payload = body or GmailReplySyncIn()
+    result = gmail_sync_service.start_background_sync(
+        account_ids=payload.account_ids,
+        department_code=None,
+        limit_per_account=payload.limit_per_account,
+    )
+    snapshot = gmail_reply_sync_status(db)
+    snapshot.update(result)
+    return snapshot
+
+
+def _gmail_sync_account_item(
+    db: Session,
+    account: GmailAccount,
+    state: GmailSyncState | None,
+) -> dict[str, Any]:
+    normalized_email = (account.email or "").strip().lower()
+    tracked_threads = int(
+        db.scalar(
+            select(func.count(func.distinct(OutreachEmail.gmail_thread_id))).where(
+                OutreachEmail.status == "sent",
+                OutreachEmail.gmail_thread_id.is_not(None),
+                func.lower(func.trim(OutreachEmail.from_email)) == normalized_email,
+            )
+        )
+        or 0
+    )
+    stored_replies = int(
+        db.scalar(
+            select(func.count()).select_from(CreatorEmailMessage).where(
+                CreatorEmailMessage.gmail_account_id == account.id,
+                CreatorEmailMessage.direction == "inbound",
+            )
+        )
+        or 0
+    )
+    stored_bounces = int(
+        db.scalar(
+            select(func.count()).select_from(CreatorEmailMessage).where(
+                CreatorEmailMessage.gmail_account_id == account.id,
+                CreatorEmailMessage.direction == "bounce",
+            )
+        )
+        or 0
+    )
+    try:
+        has_readonly_scope = gmail_service.account_has_readonly_scope(account)
+        scope_error = None
+    except Exception as exc:
+        has_readonly_scope = False
+        scope_error = str(exc)
+    status = state.status if state is not None else ("idle" if has_readonly_scope else "needs_reauth")
+    return {
+        "account_id": account.id,
+        "email": account.email,
+        "user_id": account.user_id,
+        "department_code": account.department_code,
+        "has_readonly_scope": has_readonly_scope,
+        "status": status,
+        "error_message": (state.error_message if state is not None else None) or scope_error,
+        "last_sync_at": _iso(state.last_sync_at) if state is not None else None,
+        "next_sync_at": _iso(state.next_sync_at) if state is not None else None,
+        "interval_minutes": int((state.interval_minutes if state is not None else None) or gmail_sync_service.SYNC_INTERVAL_MINUTES),
+        "tracked_threads": tracked_threads,
+        "stored_replies": stored_replies,
+        "stored_bounces": stored_bounces,
+    }
 
 
 @router.get("/gmail/client-info")

@@ -4,7 +4,7 @@ import type {
   ExtensionStatus, RunProgress, BusinessDashboard, KeywordsDashboard,
   AssistantInfo, AssistantReply, User, ListResp,
   ExtensionCommand, ExtensionSession, CollectorObservation,
-  OutreachTemplate, PreviewResult, OutreachDraft, GmailAccount, GmailStatus, OutreachHistoryItem,
+  OutreachTemplate, PreviewResult, OutreachDraft, GmailAccount, GmailStatus, GmailReplySyncStatus, OutreachHistoryItem,
   CreatorOutreachLock, OutreachArchiveItem, OutreachArchiveDetail, OutreachTrackingItem,
   ReviewTaskUpdate, TkPrompt, TkScriptResult, ProductAsset,
 } from './types';
@@ -104,6 +104,8 @@ export const endpoints = {
     api.get<ListResp<OutreachArchiveItem>>('/outreach/archive', params),
   outreachArchiveDetail: (id: string) =>
     api.get<{ ok: boolean; item: OutreachArchiveDetail }>(`/outreach/archive/${encodeURIComponent(id)}`),
+  replyOutreachArchive: (id: string, body: { subject?: string; body: string; body_format?: 'plain' | 'html' | string }) =>
+    api.post<{ ok: boolean; item: OutreachArchiveDetail }>(`/outreach/archive/${encodeURIComponent(id)}/reply`, body),
   outreachTracking: (params?: Record<string, unknown>) =>
     api.get<ListResp<OutreachTrackingItem>>('/outreach/tracking', params),
   patchOutreachTrackingStatus: (creator_id: string | number, body: { current_status: string; note?: string }) =>
@@ -150,6 +152,9 @@ export const endpoints = {
   gmailAuthUrl: (label = 'workspace', returnTo = '/') =>
     api.get<{ auth_url: string }>('/outreach/gmail/auth-url', { label, return_to: returnTo }),
   gmailStatus: () => api.get<GmailStatus>('/outreach/gmail/status'),
+  gmailReplySyncStatus: () => api.get<GmailReplySyncStatus>('/outreach/gmail/sync-status'),
+  gmailSyncReplies: (body?: { account_ids?: string[]; limit_per_account?: number }) =>
+    api.post<GmailReplySyncStatus>('/outreach/gmail/sync-replies', body || {}),
   gmailAccounts: () => api.get<ListResp<GmailAccount>>('/outreach/gmail/accounts'),
   gmailSetDefault: (id: string) => api.post<{ ok: boolean }>(`/outreach/gmail/accounts/${id}/default`),
   gmailDeleteAccount: (id: string) => api.del<{ ok: boolean }>(`/outreach/gmail/accounts/${id}`),

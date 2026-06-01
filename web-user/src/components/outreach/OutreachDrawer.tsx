@@ -38,7 +38,9 @@ import {
   useSendDraft,
 } from '@/hooks/useApi';
 import { shortRelative } from '@/lib/format';
+import type { Language } from '@/lib/i18n';
 import type { Creator, CreatorOutreachLock, OutreachHistoryItem, ProductAsset, TkStrategy } from '@/api/types';
+import { useUiStore } from '@/stores/uiStore';
 
 interface Props {
   creator: Creator | null;
@@ -52,30 +54,211 @@ type EmailImagePosition = 'top' | 'after_intro' | 'bottom';
 type EmailImageAlign = 'left' | 'center' | 'right';
 
 const PRODUCT_OPTIONS = [
-  { key: 'feminine_care', label: '女性护理', hint: '护垫、经期护理、日常私护' },
-  { key: 'baby_care', label: '婴儿护理', hint: '纸尿裤、母婴日常护理' },
-  { key: 'adult_care', label: '成人护理', hint: '成人失禁、日常防护' },
-  { key: 'pet_care', label: '宠物护理', hint: '宠物尿垫、宠物纸尿裤' },
-  { key: 'all', label: '全品类', hint: '未确定 SKU 时使用' },
+  { key: 'feminine_care', zh: '女性护理', en: 'Feminine Care', hintZh: '护垫、经期护理、日常私护', hintEn: 'Pads, period care, daily feminine care' },
+  { key: 'baby_care', zh: '婴儿护理', en: 'Baby Care', hintZh: '纸尿裤、母婴日常护理', hintEn: 'Diapers and daily baby care' },
+  { key: 'adult_care', zh: '成人护理', en: 'Adult Care', hintZh: '成人失禁、日常防护', hintEn: 'Adult incontinence and daily protection' },
+  { key: 'pet_care', zh: '宠物护理', en: 'Pet Care', hintZh: '宠物尿垫、宠物纸尿裤', hintEn: 'Pet pads and pet diapers' },
+  { key: 'all', zh: '全品类', en: 'All Categories', hintZh: '未确定 SKU 时使用', hintEn: 'Use when SKU is not decided' },
 ];
 
-const STRATEGIES: Array<{ key: TkStrategy; label: string; desc: string }> = [
-  { key: 'ai', label: 'AI 全生成', desc: '直接按达人资料和 SKU 写完整话术' },
-  { key: 'hybrid', label: '混合', desc: '固定品牌框架，AI 写个性化开头' },
-  { key: 'template', label: '模板', desc: '不调用 AI，快速套用结构化话术' },
+const STRATEGIES: Array<{ key: TkStrategy; zh: string; en: string; descZh: string; descEn: string }> = [
+  { key: 'ai', zh: 'AI 全生成', en: 'AI Full Draft', descZh: '直接按达人资料和 SKU 写完整话术', descEn: 'Write the full pitch from creator profile and SKU' },
+  { key: 'hybrid', zh: '混合', en: 'Hybrid', descZh: '固定品牌框架，AI 写个性化开头', descEn: 'Keep brand structure and let AI personalize the opening' },
+  { key: 'template', zh: '模板', en: 'Template', descZh: '不调用 AI，快速套用结构化话术', descEn: 'Use the structured template without AI' },
 ];
 
 const COMMISSIONS = [20];
 const HISTORY_PAGE_SIZE = 10;
-const IMAGE_POSITIONS: Array<{ key: EmailImagePosition; label: string }> = [
-  { key: 'top', label: '正文开头' },
-  { key: 'after_intro', label: '第一段后' },
-  { key: 'bottom', label: '正文结尾' },
+const IMAGE_POSITIONS: Array<{ key: EmailImagePosition; zh: string; en: string }> = [
+  { key: 'top', zh: '正文开头', en: 'Top of email' },
+  { key: 'after_intro', zh: '第一段后', en: 'After first paragraph' },
+  { key: 'bottom', zh: '正文结尾', en: 'End of email' },
 ];
 const DEFAULT_EMAIL_IMAGE_POSITION: EmailImagePosition = 'top';
 
-function productLabel(key?: string | null) {
-  return PRODUCT_OPTIONS.find((item) => item.key === key)?.label || key || '未分类';
+const copy = {
+  zh: {
+    outreachTitle: '外联',
+    unknownRegion: '地区未知',
+    level: '级',
+    email: '邮箱',
+    unknown: '未知',
+    cancel: '取消',
+    again: '再来一封',
+    done: '完成',
+    generating: '生成中...',
+    generatePreview: '生成邮件预览',
+    saving: '保存中...',
+    saveDraft: '保存草稿',
+    sending: '发送中...',
+    send: '发送',
+    saveAndSend: '保存并发送',
+    lockBusy: '达人邮件建联占用中，请稍后再试',
+    connectGmailFirst: '请先连接 Gmail 账户',
+    fillRecipient: '请填写收件邮箱',
+    fillContent: '请先生成或填写邮件内容',
+    lockOk: '已占用建联窗口，到期时间',
+    locking: '正在占用达人邮件建联窗口...',
+    noGmail: '还没绑定 Gmail 账户',
+    connectGmail: '连接 Gmail',
+    gmailHelp: '授权后系统会把该 Gmail 绑定到当前登录账号，仅在你确认发送时调用 Gmail API。',
+    senderAccount: '发件账户',
+    disconnecting: '断开中...',
+    disconnect: '断开',
+    steps: ['生成预览', '预览', '编辑发送', '已发送'],
+    aiTitle: 'AI 邀约话术生成',
+    autoMatch: '自动匹配',
+    aiDesc: '新话术会直接替换旧模板预览，并写入后续邮件正文。图片/SKU 素材保存在本机，后续可复用。',
+    assetsTitle: '产品 SKU / 图片素材',
+    uploadImage: '上传图片',
+    deleteAsset: '删除素材',
+    skuMissing: '未填写 SKU 编码',
+    noSelectedSku: '暂无已选 SKU。可以上传产品图，也可以先用达人品类自动生成。',
+    chooseImage: '选择图片',
+    skuNamePlaceholder: 'SKU 名称，例如 Organic Cotton Pads',
+    skuCodePlaceholder: 'SKU 编码',
+    sellingPointsPlaceholder: '卖点，用逗号分隔，例如 soft, breathable, leak protection',
+    targetTypesPlaceholder: '匹配达人类型，例如 wellness, mom, pet',
+    imageOptional: '图片可选，填写 SKU 和卖点也能参与匹配',
+    clear: '清空',
+    saveAsset: '保存素材',
+    settings: '生成设置',
+    commission: '佣金',
+    aiReplaced: '已替换为 AI 邀约话术',
+    editableAfterAi: '仍可手动编辑正文，保存草稿或直接保存并发送。',
+    recipient: '收件人',
+    subject: '主题',
+    emailImage: '邮件图片',
+    inlineImage: '将作为 inline 图片发送',
+    emailImageHelp: '保存或发送时会把 SKU 图片插入邮件正文；本地图片会转换为 Gmail 内联图片，收件人可以直接看到。',
+    insertImage: '插入图片',
+    position: '插入位置',
+    caption: '图片说明',
+    width: '显示宽度',
+    align: '对齐',
+    currentSkuNoImage: '当前 SKU 没有图片。回到上一步上传图片后，这里就可以插入并调整。',
+    body: '正文',
+    draftId: '草稿 ID',
+    sentOk: '发送成功',
+    historyTitle: '历史外联记录',
+    total: '共',
+    records: '条',
+    noHistory: '还没有给这位达人发过邮件',
+    review: '复查',
+    apply: '套用',
+    close: '关闭',
+    reviewTitle: '邮件正文复查',
+    noBody: '无正文内容',
+    notSent: '未发送',
+    onlyImage: '只能上传图片文件',
+    imageTooLarge: '图片不能超过 8MB',
+    imageReadFailed: '图片读取失败，请重试',
+    skuNameRequired: '请填写 SKU 名称',
+    lockBeforeGenerate: '请先占用该达人后再生成邮件',
+    lockBeforeSave: '请先占用该达人后再保存邮件',
+    missingCreator: '缺少达人信息',
+    recipientRequired: '收件邮箱必填',
+    confirmSend: '确认发送此邮件?',
+    sentSummary: '已发送',
+    disconnectConfirmPrefix: '断开',
+    disconnectConfirmSuffix: '后，此账号将无法继续用该 Gmail 发送邮件。确认断开?',
+    htmlConverted: '已将历史 HTML 邮件转成可编辑文本，请复查后再发送',
+    operationFailed: '操作失败，请稍后重试',
+    unclassified: '未分类',
+  },
+  en: {
+    outreachTitle: 'Outreach',
+    unknownRegion: 'Unknown Region',
+    level: 'tier',
+    email: 'Email',
+    unknown: 'Unknown',
+    cancel: 'Cancel',
+    again: 'Another Email',
+    done: 'Done',
+    generating: 'Generating...',
+    generatePreview: 'Generate Preview',
+    saving: 'Saving...',
+    saveDraft: 'Save Draft',
+    sending: 'Sending...',
+    send: 'Send',
+    saveAndSend: 'Save and Send',
+    lockBusy: 'Creator outreach window is locked. Try again shortly.',
+    connectGmailFirst: 'Connect a Gmail account first',
+    fillRecipient: 'Enter recipient email',
+    fillContent: 'Generate or write the email first',
+    lockOk: 'Outreach window locked, expires',
+    locking: 'Locking creator outreach window...',
+    noGmail: 'No Gmail account connected',
+    connectGmail: 'Connect Gmail',
+    gmailHelp: 'After authorization, this Gmail is linked to the current account and only used when you confirm sending.',
+    senderAccount: 'Sender account',
+    disconnecting: 'Disconnecting...',
+    disconnect: 'Disconnect',
+    steps: ['Generate Preview', 'Preview', 'Edit and Send', 'Sent'],
+    aiTitle: 'AI Invite Draft',
+    autoMatch: 'Auto matched',
+    aiDesc: 'The new pitch replaces the old preview and becomes the email body. Images and SKU assets stay local for reuse.',
+    assetsTitle: 'Product SKU / Image Assets',
+    uploadImage: 'Upload Image',
+    deleteAsset: 'Delete asset',
+    skuMissing: 'SKU code not filled',
+    noSelectedSku: 'No SKU selected. Upload a product image or let creator category pick one automatically.',
+    chooseImage: 'Choose image',
+    skuNamePlaceholder: 'SKU name, e.g. Organic Cotton Pads',
+    skuCodePlaceholder: 'SKU code',
+    sellingPointsPlaceholder: 'Selling points, comma separated, e.g. soft, breathable, leak protection',
+    targetTypesPlaceholder: 'Creator types, e.g. wellness, mom, pet',
+    imageOptional: 'Image is optional. SKU and selling points can still be matched.',
+    clear: 'Clear',
+    saveAsset: 'Save Asset',
+    settings: 'Generation Settings',
+    commission: 'Commission',
+    aiReplaced: 'Replaced with AI invite draft',
+    editableAfterAi: 'You can still edit the body, save as draft, or send directly.',
+    recipient: 'Recipient',
+    subject: 'Subject',
+    emailImage: 'Email Image',
+    inlineImage: 'Will be sent as an inline image',
+    emailImageHelp: 'When saving or sending, the SKU image is inserted into the email. Local images are converted to Gmail inline images.',
+    insertImage: 'Insert image',
+    position: 'Position',
+    caption: 'Caption',
+    width: 'Display width',
+    align: 'Align',
+    currentSkuNoImage: 'The current SKU has no image. Go back and upload one to insert and adjust it here.',
+    body: 'Body',
+    draftId: 'Draft ID',
+    sentOk: 'Sent successfully',
+    historyTitle: 'Outreach History',
+    total: 'Total',
+    records: 'records',
+    noHistory: 'No emails have been sent to this creator yet',
+    review: 'Review',
+    apply: 'Apply',
+    close: 'Close',
+    reviewTitle: 'Email Body Review',
+    noBody: 'No body content',
+    notSent: 'Not sent',
+    onlyImage: 'Only image files can be uploaded',
+    imageTooLarge: 'Image cannot exceed 8MB',
+    imageReadFailed: 'Failed to read image. Try again.',
+    skuNameRequired: 'Enter SKU name',
+    lockBeforeGenerate: 'Lock this creator before generating an email',
+    lockBeforeSave: 'Lock this creator before saving email',
+    missingCreator: 'Creator info is missing',
+    recipientRequired: 'Recipient email is required',
+    confirmSend: 'Send this email?',
+    sentSummary: 'Sent',
+    disconnectConfirmPrefix: 'Disconnect',
+    disconnectConfirmSuffix: '? This account will no longer be able to send through this Gmail.',
+    htmlConverted: 'Historical HTML email was converted to editable text. Review before sending.',
+    operationFailed: 'Operation failed. Try again later.',
+    unclassified: 'Unclassified',
+  },
+} satisfies Record<Language, Record<string, any>>;
+
+function productLabel(key?: string | null, language: Language = 'zh') {
+  return PRODUCT_OPTIONS.find((item) => item.key === key)?.[language] || key || copy[language].unclassified;
 }
 
 function splitList(value: string) {
@@ -157,13 +340,37 @@ function buildEmailHtml(
 
 function fallbackSubject(creator: Creator, asset?: ProductAsset | null) {
   const name = creator.display_name || creator.handle || 'Creator';
-  const product = asset?.name || productLabel(asset?.product_key) || 'X9';
+  const product = asset?.name || productLabel(asset?.product_key, 'en') || 'X9';
   return `X9 x ${name} - ${product} collaboration`;
 }
 
-function formatError(error: any) {
-  const detail = error?.body?.detail || error?.response?.data?.detail || error?.message || '操作失败，请稍后重试';
-  return String(detail);
+function translateMessage(value: unknown, language: Language) {
+  const text = String(value || '');
+  if (language === 'zh' || !text) return text;
+  if (text.includes('Gmail token 已加密')) return 'Gmail token is encrypted but currently uses fallback key material.';
+  if (text.includes('生产环境请设置独立的 GMAIL_TOKEN_ENCRYPTION_KEY')) return 'Set a dedicated GMAIL_TOKEN_ENCRYPTION_KEY in production so OAuth secret rotation does not affect token decryption.';
+  if (text.includes('字段级加密未启用')) return 'Gmail token field encryption is not enabled.';
+  if (text.includes('连接 Gmail')) return copy.en.connectGmailFirst;
+  return text;
+}
+
+function formatError(error: any, language: Language) {
+  const detail = error?.body?.detail || error?.response?.data?.detail || error?.message || copy[language].operationFailed;
+  return translateMessage(detail, language);
+}
+
+function relativeByLanguage(value: string | null | undefined, language: Language) {
+  if (language === 'zh') return shortRelative(value);
+  if (!value) return '—';
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return value || '—';
+  const diff = Date.now() - dt.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return `${Math.floor(hours / 24)} d ago`;
 }
 
 function htmlToPlainText(value: string) {
@@ -184,6 +391,8 @@ function safeEmailHtml(value?: string | null) {
 }
 
 export function OutreachDrawer({ creator, open, onClose, initialLock = null }: Props) {
+  const { language } = useUiStore();
+  const t = copy[language];
   const [step, setStep] = useState<Step>('template');
   const [strategy, setStrategy] = useState<TkStrategy>('ai');
   const [commission, setCommission] = useState(20);
@@ -261,13 +470,13 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
   const gmailReturnTo = typeof window !== 'undefined' ? `${window.location.pathname}${window.location.search}` : '/';
   const gmailConnectHref = `/api/local/outreach/gmail/connect?return_to=${encodeURIComponent(gmailReturnTo)}`;
   const sendDisabledReason = !hasOutreachLock
-    ? '达人邮件建联占用中，请稍后再试'
+    ? t.lockBusy
     : !hasGmailAccount
-    ? '请先连接 Gmail 账户'
+    ? t.connectGmailFirst
     : !toEmail.trim()
-      ? '请填写收件邮箱'
+      ? t.fillRecipient
       : !subject.trim() || !body.trim()
-        ? '请先生成或填写邮件内容'
+        ? t.fillContent
         : '';
 
   useEffect(() => {
@@ -307,7 +516,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
       { creator_id: creator.id },
       {
         onSuccess: (result) => setActiveLock(result.lock),
-        onError: (error) => setLockError(formatError(error)),
+        onError: (error) => setLockError(formatError(error, language)),
       },
     );
   }, [acquireLock, activeLock, creator, initialLock, open]);
@@ -357,11 +566,11 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
       return;
     }
     if (!file.type.startsWith('image/')) {
-      setAssetError('只能上传图片文件');
+      setAssetError(t.onlyImage);
       return;
     }
     if (file.size > 8 * 1024 * 1024) {
-      setAssetError('图片不能超过 8MB');
+      setAssetError(t.imageTooLarge);
       return;
     }
     const reader = new FileReader();
@@ -370,13 +579,13 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
       setAssetFileName(file.name);
       if (!assetName.trim()) setAssetName(file.name.replace(/\.[^.]+$/, ''));
     };
-    reader.onerror = () => setAssetError('图片读取失败，请重试');
+    reader.onerror = () => setAssetError(t.imageReadFailed);
     reader.readAsDataURL(file);
   };
 
   const onSaveAsset = () => {
     if (!assetName.trim()) {
-      setAssetError('请填写 SKU 名称');
+      setAssetError(t.skuNameRequired);
       return;
     }
     createAsset.mutate(
@@ -395,13 +604,13 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
           resetAssetForm();
           assetsQ.refetch();
         },
-        onError: (error) => setAssetError(formatError(error)),
+        onError: (error) => setAssetError(formatError(error, language)),
       },
     );
   };
 
   const onDeleteAsset = (asset: ProductAsset) => {
-    if (!confirm(`删除素材「${asset.name}」?`)) return;
+    if (!confirm(language === 'zh' ? `删除素材「${asset.name}」?` : `Delete asset "${asset.name}"?`)) return;
     deleteAsset.mutate(asset.id, {
       onSuccess: () => {
         if (selectedAssetId === asset.id) setSelectedAssetId('');
@@ -413,7 +622,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
   const onGenerate = () => {
     if (!creator) return;
     if (!activeLock?.id) {
-      setLockError('请先占用该达人后再生成邮件');
+      setLockError(t.lockBeforeGenerate);
       return;
     }
     setSendError('');
@@ -436,16 +645,16 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
           });
           setStep('preview');
         },
-        onError: (error) => setSendError(formatError(error)),
+        onError: (error) => setSendError(formatError(error, language)),
       },
     );
   };
 
   const persistDraft = async () => {
-    if (!activeLock?.id) throw new Error('请先占用该达人后再保存邮件');
-    if (!creator) throw new Error('缺少达人信息');
-    if (!toEmail.trim()) throw new Error('收件邮箱必填');
-    if (!subject.trim() || !body.trim()) throw new Error('请先生成并确认邮件内容');
+    if (!activeLock?.id) throw new Error(t.lockBeforeSave);
+    if (!creator) throw new Error(t.missingCreator);
+    if (!toEmail.trim()) throw new Error(t.recipientRequired);
+    if (!subject.trim() || !body.trim()) throw new Error(t.fillContent);
     const imageEnabled = Boolean(includeProductImage && selectedAsset?.image_url);
     const emailBody = imageEnabled
       ? buildEmailHtml(body, selectedAsset!, {
@@ -481,36 +690,36 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
       await persistDraft();
       setStep('edit');
     } catch (error: any) {
-      setSendError(formatError(error));
+      setSendError(formatError(error, language));
     }
   };
 
   const onSend = async () => {
     setSendError('');
     if (!defaultAcc) {
-      setSendError('请先连接 Gmail 账户');
+      setSendError(t.connectGmailFirst);
       return;
     }
-    if (!confirm('确认发送此邮件?')) return;
+    if (!confirm(t.confirmSend)) return;
     try {
       const persistedDraftId = await persistDraft();
       const sent = await sendDraft.mutateAsync({
         id: persistedDraftId,
         body: { confirm: true, update_creator_status: true, from_account_id: defaultAcc.id },
       });
-      setSentSummary(`已发送 · 主题:${sent.subject} · 收件人:${sent.to_email}`);
+      setSentSummary(`${t.sentSummary} · ${t.subject}: ${sent.subject} · ${t.recipient}: ${sent.to_email}`);
       setStep('sent');
       setActiveLock(null);
       lockRequestKeyRef.current = '';
       historyQ.refetch();
     } catch (error: any) {
-      setSendError(formatError(error));
+      setSendError(formatError(error, language));
     }
   };
 
   const onDisconnectGmail = () => {
     if (!defaultAcc) return;
-    if (!confirm(`断开 ${defaultAcc.email} 后，此账号将无法继续用该 Gmail 发送邮件。确认断开?`)) return;
+    if (!confirm(`${t.disconnectConfirmPrefix} ${defaultAcc.email} ${t.disconnectConfirmSuffix}`)) return;
     deleteGmail.mutate(defaultAcc.id, { onSuccess: () => { accountsQ.refetch(); gmailStatusQ.refetch(); } });
   };
 
@@ -539,14 +748,14 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
     setSubject(item.subject || '');
     setBody(item.body_format === 'html' ? htmlToPlainText(item.body || '') : item.body || '');
     setIncludeProductImage(false);
-    setSendError(item.body_format === 'html' ? '已将历史 HTML 邮件转成可编辑文本，请复查后再发送' : '');
+    setSendError(item.body_format === 'html' ? t.htmlConverted : '');
     setStep('edit');
   };
 
   if (!creator) return null;
 
   const activeStrategy = STRATEGIES.find((item) => item.key === strategy);
-  const selectedProductLabel = selectedAsset?.name || productLabel(selectedAsset?.product_key);
+  const selectedProductLabel = selectedAsset?.name || productLabel(selectedAsset?.product_key, language);
   const generationBusy = generateTk.isPending;
   const emailImageEnabled = Boolean(includeProductImage && selectedAsset?.image_url);
   const emailImagePreviewHtml = selectedAsset?.image_url
@@ -562,31 +771,31 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
       open={open}
       onClose={handleClose}
       width={640}
-      title={<span>外联 · @{creator.handle}</span>}
-      subtitle={<span>{creator.display_name} · {creator.country || '地区未知'} · {creator.tier || '?'} 级 · 邮箱:{creator.email || '未知'}</span>}
+      title={<span>{t.outreachTitle} · @{creator.handle}</span>}
+      subtitle={<span>{creator.display_name} · {creator.country || t.unknownRegion} · {creator.tier || '?'} {t.level} · {t.email}: {creator.email || t.unknown}</span>}
       footer={
         <>
           {step === 'sent' ? (
             <>
-              <button onClick={onReset} className="btn"><RefreshCw size={12} />再来一封</button>
-              <button onClick={handleClose} className="btn btn-primary">完成</button>
+              <button onClick={onReset} className="btn"><RefreshCw size={12} />{t.again}</button>
+              <button onClick={handleClose} className="btn btn-primary">{t.done}</button>
             </>
           ) : (
             <>
-              <button onClick={handleClose} className="btn">取消</button>
+              <button onClick={handleClose} className="btn">{t.cancel}</button>
               {step === 'template' && (
                 <button onClick={onGenerate} disabled={generationBusy || isLocking || !hasOutreachLock} className="btn btn-primary">
                   {generationBusy ? <RefreshCw size={12} className="animate-spin" /> : <Wand2 size={12} />}
-                  {generationBusy ? '生成中...' : '生成邮件预览'} <ArrowRight size={12} />
+                  {generationBusy ? t.generating : t.generatePreview} <ArrowRight size={12} />
                 </button>
               )}
               {(step === 'preview' || step === 'edit') && (
                 <>
                   <button onClick={onSaveDraft} disabled={!hasOutreachLock || !canSaveDraft || isSending} className="btn">
-                    <Save size={12} />{isPersistingDraft ? '保存中...' : '保存草稿'}
+                    <Save size={12} />{isPersistingDraft ? t.saving : t.saveDraft}
                   </button>
                   <button onClick={onSend} disabled={!canSendDraft} className="btn btn-primary">
-                    <Send size={12} />{isSending ? '发送中...' : draftId ? '发送' : '保存并发送'}
+                    <Send size={12} />{isSending ? t.sending : draftId ? t.send : t.saveAndSend}
                   </button>
                 </>
               )}
@@ -605,8 +814,8 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
         {lockError
           ? lockError
           : hasOutreachLock
-            ? `已占用建联窗口，到期时间 ${shortRelative(activeLock?.expires_at)}`
-            : '正在占用达人邮件建联窗口...'}
+            ? `${t.lockOk} ${relativeByLanguage(activeLock?.expires_at, language)}`
+            : t.locking}
       </div>
 
       {accounts.length === 0 ? (
@@ -614,12 +823,12 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
           <div className="flex items-start gap-2 text-xs text-warn">
             <AlertOctagon size={14} className="mt-0.5 shrink-0" />
             <div className="min-w-0">
-              <div>还没绑定 Gmail 账户 · 请先 <a href={gmailConnectHref} className="underline font-medium">连接 Gmail</a> 后再发送</div>
-              <div className="text-xxs mt-1 opacity-90">授权后系统会把该 Gmail 绑定到当前登录账号，仅在你确认发送时调用 Gmail API。</div>
+              <div>{t.noGmail} · <a href={gmailConnectHref} className="underline font-medium">{t.connectGmail}</a></div>
+              <div className="text-xxs mt-1 opacity-90">{t.gmailHelp}</div>
               {blockingGmailDiagnostic?.message && (
                 <div className="mt-2 rounded border border-warn/40 px-2 py-1.5 text-xxs">
-                  <div>{blockingGmailDiagnostic.message}</div>
-                  {blockingGmailDiagnostic.action && <div className="mt-1 opacity-90">{blockingGmailDiagnostic.action}</div>}
+                  <div>{translateMessage(blockingGmailDiagnostic.message, language)}</div>
+                  {blockingGmailDiagnostic.action && <div className="mt-1 opacity-90">{translateMessage(blockingGmailDiagnostic.action, language)}</div>}
                 </div>
               )}
             </div>
@@ -629,10 +838,10 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
         <div className="text-xxs text-muted mb-3 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <Mail size={11} className="shrink-0" />
-            <span>发件账户:</span><span className="text-text font-medium truncate">{defaultAcc?.email}</span>
+            <span>{t.senderAccount}:</span><span className="text-text font-medium truncate">{defaultAcc?.email}</span>
           </div>
           <button type="button" onClick={onDisconnectGmail} disabled={deleteGmail.isPending} className="underline shrink-0">
-            {deleteGmail.isPending ? '断开中...' : '断开'}
+            {deleteGmail.isPending ? t.disconnecting : t.disconnect}
           </button>
         </div>
       )}
@@ -641,7 +850,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
         <div className={`mb-3 rounded-md border px-3 py-2 text-xs ${
           sendError || generateTk.error ? 'border-bad/40 bg-bad/10 text-bad' : 'border-border bg-elev2 text-muted'
         }`}>
-          {sendError || (generateTk.error ? formatError(generateTk.error) : sendDisabledReason)}
+          {sendError || (generateTk.error ? formatError(generateTk.error, language) : sendDisabledReason)}
         </div>
       )}
 
@@ -657,7 +866,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                 {i + 1}
               </span>
               <span className={active ? 'text-text font-semibold' : 'text-muted'}>
-                {['生成预览', '预览', '编辑发送', '已发送'][i]}
+                {t.steps[i]}
               </span>
               {i < 3 && <span className="text-muted">›</span>}
             </div>
@@ -674,12 +883,12 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="text-sm font-semibold">AI 邀约话术生成</h3>
+                  <h3 className="text-sm font-semibold">{t.aiTitle}</h3>
                   {matchedAsset && (
-                    <span className="chip text-xxs">自动匹配: {matchedAsset.name}</span>
+                    <span className="chip text-xxs">{t.autoMatch}: {matchedAsset.name}</span>
                   )}
                 </div>
-                <p className="mt-1 text-xs text-muted">新话术会直接替换旧模板预览，并写入后续邮件正文。图片/SKU 素材保存在本机，后续可复用。</p>
+                <p className="mt-1 text-xs text-muted">{t.aiDesc}</p>
               </div>
             </div>
           </section>
@@ -688,10 +897,10 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Package size={14} className="text-accent" />
-                <h3 className="text-xs font-semibold">产品 SKU / 图片素材</h3>
+                <h3 className="text-xs font-semibold">{t.assetsTitle}</h3>
               </div>
               <button type="button" className="btn btn-ghost !h-7 text-xs" onClick={() => setAssetFormOpen((v) => !v)}>
-                <UploadCloud size={12} />上传图片
+                <UploadCloud size={12} />{t.uploadImage}
               </button>
             </div>
 
@@ -707,18 +916,18 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="truncate text-sm font-semibold">{selectedAsset.name}</span>
-                    <span className="chip text-xxs">{productLabel(selectedAsset.product_key)}</span>
+                    <span className="chip text-xxs">{productLabel(selectedAsset.product_key, language)}</span>
                     <button
                       type="button"
                       onClick={() => onDeleteAsset(selectedAsset)}
                       disabled={deleteAsset.isPending}
                       className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-bad/10 hover:text-bad"
-                      title="删除素材"
+                      title={t.deleteAsset}
                     >
                       <Trash2 size={12} />
                     </button>
                   </div>
-                  <div className="mt-1 text-xxs text-muted">{selectedAsset.sku_code || '未填写 SKU 编码'}</div>
+                  <div className="mt-1 text-xxs text-muted">{selectedAsset.sku_code || t.skuMissing}</div>
                   {(selectedAsset.selling_points ?? []).length > 0 && (
                     <div className="mt-1 line-clamp-2 text-xs text-muted">{selectedAsset.selling_points?.join(' · ')}</div>
                   )}
@@ -726,7 +935,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
               </div>
             ) : (
               <div className="mb-3 rounded-md border border-dashed border-border p-3 text-xs text-muted">
-                暂无已选 SKU。可以上传产品图，也可以先用达人品类自动生成。
+                {t.noSelectedSku}
               </div>
             )}
 
@@ -752,7 +961,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-xs font-semibold">{asset.name}</span>
-                        <span className="mt-0.5 block truncate text-xxs text-muted">{asset.sku_code || productLabel(asset.product_key)}</span>
+                        <span className="mt-0.5 block truncate text-xxs text-muted">{asset.sku_code || productLabel(asset.product_key, language)}</span>
                       </span>
                       {selected ? <CheckCircle2 size={14} className="text-accent" /> : null}
                     </button>
@@ -770,7 +979,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                     ) : (
                       <>
                         <UploadCloud size={18} />
-                        <span>选择图片</span>
+                        <span>{t.chooseImage}</span>
                       </>
                     )}
                     <input
@@ -786,7 +995,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                       onChange={(event) => setAssetName(event.target.value)}
                       className="input-bare rounded border border-border px-3 py-2 text-xs"
                       style={{ background: 'rgb(var(--bg-elev-2))' }}
-                      placeholder="SKU 名称，例如 Organic Cotton Pads"
+                      placeholder={t.skuNamePlaceholder}
                     />
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                       <input
@@ -794,7 +1003,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                         onChange={(event) => setAssetSku(event.target.value)}
                         className="input-bare rounded border border-border px-3 py-2 text-xs"
                         style={{ background: 'rgb(var(--bg-elev-2))' }}
-                        placeholder="SKU 编码"
+                        placeholder={t.skuCodePlaceholder}
                       />
                       <select
                         value={assetProductKey}
@@ -803,7 +1012,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                         style={{ background: 'rgb(var(--bg-elev-2))', color: 'rgb(var(--text))' }}
                       >
                         {PRODUCT_OPTIONS.map((item) => (
-                          <option key={item.key} value={item.key}>{item.label}</option>
+                          <option key={item.key} value={item.key}>{item[language]}</option>
                         ))}
                       </select>
                     </div>
@@ -813,25 +1022,25 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                       rows={2}
                       className="input-bare resize-none rounded border border-border px-3 py-2 text-xs"
                       style={{ background: 'rgb(var(--bg-elev-2))' }}
-                      placeholder="卖点，用逗号分隔，例如 soft, breathable, leak protection"
+                      placeholder={t.sellingPointsPlaceholder}
                     />
                     <input
                       value={assetTargets}
                       onChange={(event) => setAssetTargets(event.target.value)}
                       className="input-bare rounded border border-border px-3 py-2 text-xs"
                       style={{ background: 'rgb(var(--bg-elev-2))' }}
-                      placeholder="匹配达人类型，例如 wellness, mom, pet"
+                      placeholder={t.targetTypesPlaceholder}
                     />
                   </div>
                 </div>
                 {assetError && <div className="mt-2 text-xxs text-bad">{assetError}</div>}
                 <div className="mt-3 flex items-center justify-between gap-2">
-                  <div className="min-w-0 text-xxs text-muted">{assetFileName || '图片可选，填写 SKU 和卖点也能参与匹配'}</div>
+                  <div className="min-w-0 text-xxs text-muted">{assetFileName || t.imageOptional}</div>
                   <div className="flex gap-2">
-                    <button type="button" className="btn btn-ghost !h-8 text-xs" onClick={resetAssetForm}>清空</button>
+                    <button type="button" className="btn btn-ghost !h-8 text-xs" onClick={resetAssetForm}>{t.clear}</button>
                     <button type="button" className="btn btn-primary !h-8 text-xs" onClick={onSaveAsset} disabled={createAsset.isPending}>
                       {createAsset.isPending ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
-                      保存素材
+                      {t.saveAsset}
                     </button>
                   </div>
                 </div>
@@ -842,8 +1051,8 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
           <section className="rounded-md border border-border bg-elev1/60 p-3">
             <div className="mb-2 flex items-center gap-2">
               <Wand2 size={14} className="text-accent" />
-              <h3 className="text-xs font-semibold">生成设置</h3>
-              <span className="text-xxs text-muted">{activeStrategy?.desc}</span>
+              <h3 className="text-xs font-semibold">{t.settings}</h3>
+              <span className="text-xxs text-muted">{language === 'zh' ? activeStrategy?.descZh : activeStrategy?.descEn}</span>
             </div>
             <div className="flex flex-wrap gap-1">
               {STRATEGIES.map((item) => (
@@ -854,14 +1063,14 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                     strategy === item.key ? 'bg-accent text-white' : 'bg-elev2 text-muted hover:text-text'
                   }`}
                   onClick={() => setStrategy(item.key)}
-                  title={item.desc}
+                  title={language === 'zh' ? item.descZh : item.descEn}
                 >
-                  {item.label}
+                  {item[language]}
                 </button>
               ))}
             </div>
             <div className="mt-3 flex items-center gap-2">
-              <span className="text-xs text-muted">佣金</span>
+              <span className="text-xs text-muted">{t.commission}</span>
               {COMMISSIONS.map((pct) => (
                 <button
                   key={pct}
@@ -884,15 +1093,15 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
           {generationMeta && (
             <div className="rounded-md border border-border bg-elev1/70 px-3 py-2 text-xs">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold">已替换为 AI 邀约话术</span>
+                <span className="font-semibold">{t.aiReplaced}</span>
                 <span className="chip text-xxs">{generationMeta.aiStatus || 'generated'}</span>
                 {generationMeta.productName && <span className="chip text-xxs">{generationMeta.productName}</span>}
               </div>
-              <div className="mt-1 text-xxs text-muted">仍可手动编辑正文，保存草稿或直接保存并发送。</div>
+              <div className="mt-1 text-xxs text-muted">{t.editableAfterAi}</div>
             </div>
           )}
           <div>
-            <label className="text-xxs text-muted block mb-1">收件人</label>
+            <label className="text-xxs text-muted block mb-1">{t.recipient}</label>
             <input
               value={toEmail}
               onChange={(event) => setToEmail(event.target.value)}
@@ -902,7 +1111,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
             />
           </div>
           <div>
-            <label className="text-xxs text-muted block mb-1">主题</label>
+            <label className="text-xxs text-muted block mb-1">{t.subject}</label>
             <input
               value={subject}
               onChange={(event) => setSubject(event.target.value)}
@@ -915,10 +1124,10 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <ImageIcon size={14} className="text-accent" />
-                  <h3 className="text-xs font-semibold">邮件图片</h3>
-                  {emailImageEnabled && <span className="chip text-xxs">将作为 inline 图片发送</span>}
+                  <h3 className="text-xs font-semibold">{t.emailImage}</h3>
+                  {emailImageEnabled && <span className="chip text-xxs">{t.inlineImage}</span>}
                 </div>
-                <p className="mt-1 text-xxs text-muted">保存或发送时会把 SKU 图片插入邮件正文；本地图片会转换为 Gmail 内联图片，收件人可以直接看到。</p>
+                <p className="mt-1 text-xxs text-muted">{t.emailImageHelp}</p>
               </div>
               <label className={`inline-flex h-8 shrink-0 items-center gap-2 rounded border px-2.5 text-xs ${
                 selectedAsset?.image_url ? 'cursor-pointer border-border bg-elev2 text-text' : 'cursor-not-allowed border-border bg-elev2/50 text-muted'
@@ -929,7 +1138,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                   disabled={!selectedAsset?.image_url}
                   onChange={(event) => setIncludeProductImage(event.target.checked)}
                 />
-                插入图片
+                {t.insertImage}
               </label>
             </div>
 
@@ -945,7 +1154,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                 <div className="min-w-0 space-y-3">
                   <div className="grid gap-2 sm:grid-cols-2">
                     <label className="space-y-1">
-                      <span className="text-xxs text-muted">插入位置</span>
+                      <span className="text-xxs text-muted">{t.position}</span>
                       <select
                         value={emailImagePosition}
                         onChange={(event) => setEmailImagePosition(event.target.value as EmailImagePosition)}
@@ -953,11 +1162,11 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                         className="h-9 w-full rounded border border-border px-2 text-xs"
                         style={{ background: 'rgb(var(--bg-elev-2))', color: 'rgb(var(--text))' }}
                       >
-                        {IMAGE_POSITIONS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                        {IMAGE_POSITIONS.map((item) => <option key={item.key} value={item.key}>{item[language]}</option>)}
                       </select>
                     </label>
                     <label className="space-y-1">
-                      <span className="text-xxs text-muted">图片说明</span>
+                      <span className="text-xxs text-muted">{t.caption}</span>
                       <input
                         value={emailImageCaption}
                         onChange={(event) => setEmailImageCaption(event.target.value)}
@@ -971,7 +1180,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                   <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_132px]">
                     <label className="space-y-1">
                       <span className="flex items-center justify-between text-xxs text-muted">
-                        <span>显示宽度</span>
+                        <span>{t.width}</span>
                         <span>{emailImageWidth}px</span>
                       </span>
                       <input
@@ -986,7 +1195,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                       />
                     </label>
                     <div className="space-y-1">
-                      <span className="block text-xxs text-muted">对齐</span>
+                      <span className="block text-xxs text-muted">{t.align}</span>
                       <div className="grid grid-cols-3 gap-1">
                         {([
                           ['left', AlignLeft],
@@ -1018,15 +1227,15 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
               </div>
             ) : (
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-dashed border-border p-3 text-xs text-muted">
-                <span>当前 SKU 没有图片。回到上一步上传图片后，这里就可以插入并调整。</span>
+                <span>{t.currentSkuNoImage}</span>
                 <button type="button" className="btn btn-ghost !h-8 text-xs" onClick={() => setStep('template')}>
-                  <UploadCloud size={12} /> 上传图片
+                  <UploadCloud size={12} /> {t.uploadImage}
                 </button>
               </div>
             )}
           </section>
           <div>
-            <label className="text-xxs text-muted block mb-1">正文</label>
+            <label className="text-xxs text-muted block mb-1">{t.body}</label>
             <textarea
               value={body}
               onChange={(event) => setBody(event.target.value)}
@@ -1036,9 +1245,9 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
             />
           </div>
           {generationBusy && (
-            <div className="text-xxs text-muted flex items-center gap-1"><RefreshCw size={11} className="animate-spin" />生成中...</div>
+            <div className="text-xxs text-muted flex items-center gap-1"><RefreshCw size={11} className="animate-spin" />{t.generating}</div>
           )}
-          {draftId && <div className="text-xxs text-muted">草稿 ID: {draftId}</div>}
+          {draftId && <div className="text-xxs text-muted">{t.draftId}: {draftId}</div>}
         </div>
       )}
 
@@ -1046,7 +1255,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
         <div className="card card-body" style={{ background: 'rgb(var(--good) / 0.12)' }}>
           <div className="flex items-center gap-2 text-good">
             <Send size={14} />
-            <span className="text-sm font-medium">发送成功</span>
+            <span className="text-sm font-medium">{t.sentOk}</span>
           </div>
           <div className="text-xxs text-muted mt-2">{sentSummary}</div>
         </div>
@@ -1055,11 +1264,11 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
       <div className="mt-6">
         <div className="flex items-center gap-2 mb-2">
           <History size={13} className="text-muted" />
-          <h4 className="text-xs font-semibold">历史外联记录</h4>
-          <span className="text-xxs text-muted">共 {historyTotal} 条</span>
+          <h4 className="text-xs font-semibold">{t.historyTitle}</h4>
+          <span className="text-xxs text-muted">{t.total} {historyTotal} {t.records}</span>
         </div>
         {history.length === 0 ? (
-          <div className="text-xxs text-muted">还没有给这位达人发过邮件</div>
+          <div className="text-xxs text-muted">{t.noHistory}</div>
         ) : (
           <div className="space-y-1.5">
             {history.map((h: OutreachHistoryItem) => (
@@ -1069,17 +1278,17 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
                     type="button"
                     onClick={() => setReviewEmail(h)}
                     className="min-w-0 flex-1 truncate text-left font-medium hover:text-accent"
-                    title="查看邮件正文"
+                    title={t.reviewTitle}
                   >
                     {h.subject}
                   </button>
                   <Pill tone={h.status === 'sent' ? 'good' : h.status === 'queued' ? 'warn' : 'muted'}>{h.status}</Pill>
                 </div>
                 <div className="mt-0.5 flex flex-wrap items-center justify-between gap-2 text-muted">
-                  <span>{h.to_email} · {shortRelative(h.sent_at || h.created_at)} · {h.from_email || '未发送'}</span>
+                  <span>{h.to_email} · {relativeByLanguage(h.sent_at || h.created_at, language)} · {h.from_email || t.notSent}</span>
                   <span className="flex items-center gap-1">
-                    <button type="button" onClick={() => setReviewEmail(h)} className="underline hover:text-accent">复查</button>
-                    {h.body && <button type="button" onClick={() => applyHistoryEmail(h)} className="underline hover:text-accent">套用</button>}
+                    <button type="button" onClick={() => setReviewEmail(h)} className="underline hover:text-accent">{t.review}</button>
+                    {h.body && <button type="button" onClick={() => applyHistoryEmail(h)} className="underline hover:text-accent">{t.apply}</button>}
                   </span>
                 </div>
               </div>
@@ -1090,6 +1299,7 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
               total={historyTotal}
               currentCount={history.length}
               loading={historyQ.isFetching}
+              language={language}
               onPageChange={setHistoryPage}
             />
           </div>
@@ -1099,24 +1309,24 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
             <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
               <div className="min-w-0">
                 <div className="truncate text-xs font-semibold">{reviewEmail.subject}</div>
-                <div className="mt-0.5 text-xxs text-muted">{reviewEmail.from_email || '未发送'} → {reviewEmail.to_email}</div>
+                <div className="mt-0.5 text-xxs text-muted">{reviewEmail.from_email || t.notSent} → {reviewEmail.to_email}</div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 {reviewEmail.body && (
-                  <button type="button" onClick={() => applyHistoryEmail(reviewEmail)} className="btn btn-ghost !h-8 text-xs">套用</button>
+                  <button type="button" onClick={() => applyHistoryEmail(reviewEmail)} className="btn btn-ghost !h-8 text-xs">{t.apply}</button>
                 )}
-                <button type="button" onClick={() => setReviewEmail(null)} className="btn btn-ghost !h-8 text-xs">关闭</button>
+                <button type="button" onClick={() => setReviewEmail(null)} className="btn btn-ghost !h-8 text-xs">{t.close}</button>
               </div>
             </div>
             {reviewEmail.body_format === 'html' ? (
               <iframe
-                title="邮件正文复查"
+                title={t.reviewTitle}
                 sandbox=""
                 srcDoc={safeEmailHtml(reviewEmail.body)}
                 className="block h-72 w-full bg-white"
               />
             ) : (
-              <pre className="max-h-72 overflow-auto whitespace-pre-wrap p-3 text-xs leading-relaxed text-text">{reviewEmail.body || '无正文内容'}</pre>
+              <pre className="max-h-72 overflow-auto whitespace-pre-wrap p-3 text-xs leading-relaxed text-text">{reviewEmail.body || t.noBody}</pre>
             )}
           </div>
         )}

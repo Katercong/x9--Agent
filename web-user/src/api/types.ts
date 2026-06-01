@@ -428,7 +428,9 @@ export interface OutreachArchiveItem {
   created_at?: string | null;
   created_by?: string | null;
   gmail_thread_id?: string | null;
+  gmail_message_id?: string | null;
   parent_email_id?: string | null;
+  direction?: 'inbound' | 'outbound' | 'bounce' | string;
 }
 
 export interface OutreachArchiveDetail extends OutreachArchiveItem {
@@ -495,6 +497,46 @@ export interface GmailStatus {
   accounts?: GmailAccount[];
   email?: string | null;
   [k: string]: any;
+}
+
+export interface GmailReplySyncAccount {
+  account_id: string;
+  email: string;
+  user_id?: string | null;
+  department_code?: string | null;
+  has_readonly_scope?: boolean;
+  status?: string;
+  error_message?: string | null;
+  last_sync_at?: string | null;
+  next_sync_at?: string | null;
+  interval_minutes?: number;
+  tracked_threads?: number;
+  stored_replies?: number;
+  stored_bounces?: number;
+  sent_rows?: number;
+  threads_checked?: number;
+  messages_seen?: number;
+  new_replies?: number;
+  new_bounces?: number;
+  errors?: number;
+  error?: string | null;
+}
+
+export interface GmailReplySyncStatus {
+  ok: boolean;
+  interval_minutes: number;
+  totals: Record<string, number>;
+  items?: GmailReplySyncAccount[];
+  accounts?: GmailReplySyncAccount[];
+  accepted?: boolean;
+  running?: boolean;
+  background?: {
+    running?: boolean;
+    started_at?: string | null;
+    finished_at?: string | null;
+    error?: string | null;
+    totals?: Record<string, number> | null;
+  };
 }
 
 export interface OutreachHistoryItem {

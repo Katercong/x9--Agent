@@ -3,6 +3,7 @@ from .app_user import AppUser
 from .bd_monthly_stat import BdMonthlyStat
 from .creator import Creator
 from .creator_outreach_lock import CreatorOutreachLock
+from .creator_email_message import CreatorEmailMessage
 from .creator_recommendation import CreatorRecommendation
 from .creator_outreach_event import CreatorOutreachEvent
 from .creator_source import CreatorSource
@@ -23,6 +24,7 @@ from .tag_definition import TagDefinition
 
 __all__ = [
     "Creator",
+    "CreatorEmailMessage",
     "CreatorOutreachLock",
     "AppSession",
     "AppUser",

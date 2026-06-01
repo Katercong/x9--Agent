@@ -158,7 +158,7 @@ function HomeRedirect({ user }: { user: CurrentUser }) {
     return (
       <div className="flex h-screen items-center justify-center gap-2 text-muted text-sm">
         <Loader2 size={16} className="animate-spin" />
-        璺宠浆宸ヤ綔鍙扳€?
+        跳转工作台…
       </div>
     );
   }

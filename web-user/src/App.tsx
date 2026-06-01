@@ -29,6 +29,7 @@ export default function App() {
         <Route path="/recommendations" element={<Recommendations />} />
         <Route path="/recommendations/:creatorId" element={<RecommendationDetail />} />
         <Route path="/emails" element={<OutreachArchive />} />
+        <Route path="/emails/:creatorId" element={<OutreachArchive />} />
         <Route path="/review" element={<Navigate to="/business" replace />} />
         <Route path="/export" element={<ExportImport />} />
         <Route path="/hotkw" element={<HotKeywords />} />
