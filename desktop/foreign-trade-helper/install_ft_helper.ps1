@@ -67,6 +67,7 @@ $pythonForConfig = if (Test-Path -LiteralPath $venvPython) { $venvPython } else 
   python = $pythonForConfig
   mode = "client"
   backendUrl = $BackendUrl.TrimEnd("/")
+  dashboardUrl = "https://usx9.us/workspace/foreign-trade/"
   backendHost = "127.0.0.1"
   backendPort = [int]([uri]$BackendUrl).Port
   department = $Department

@@ -19,6 +19,19 @@ def _actor_config_from_zip(content: bytes) -> dict:
     return json.loads(text[len(prefix):].strip().rstrip(";"))
 
 
+def _ft_actor_config_from_zip(content: bytes) -> dict:
+    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+        text = zf.read("ft_actor.js").decode("utf-8")
+        social_config = zf.read("social/x9_actor_config.js").decode("utf-8")
+    prefix = "globalThis.__X9_FT_ACTOR__ = "
+    assert text.startswith(prefix)
+    payload_text = text[len(prefix):].split(";\n", 1)[0]
+    payload = json.loads(payload_text)
+    assert "testuser01" not in social_config
+    assert "cross_border" not in social_config
+    return payload
+
+
 def test_extension_download_is_public_zip():
     client = TestClient(app)
     response = client.get("/api/local/extension/download")
@@ -66,6 +79,39 @@ def test_extension_download_embeds_current_user_actor_config():
     assert config["actor"]["display_name"] == "Download Actor"
     assert config["actor_token"].startswith("v1.")
     assert "testuser01" not in json.dumps(config)
+
+
+def test_foreign_trade_extension_download_embeds_ft_actor_config():
+    init_db()
+    with SessionLocal() as db:
+        user = auth_service.upsert_user(
+            db,
+            username="foreign_download_user",
+            password="X9@Test123",
+            role="department_user",
+            department_code="foreign_trade",
+            display_name="Foreign Download Actor",
+            is_active=True,
+            approval_status=auth_service.ACTIVE_STATUS,
+        )
+        token, _ = auth_service.create_session_for_user(db, user)
+        user_id = user.id
+
+    client = TestClient(app)
+    client.cookies.set(auth_service.SESSION_COOKIE, token)
+    response = client.get("/api/local/extension/download")
+
+    assert response.status_code == 200
+    assert "x9-foreign-trade-extension.zip" in response.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+        names = set(zf.namelist())
+    assert "ft_actor.js" in names
+    assert "social/sidepanel.html" in names
+    config = _ft_actor_config_from_zip(response.content)
+    assert config["department_code"] == "foreign_trade"
+    assert config["actor_user_id"] == user_id
+    assert config["actor"]["username"] == "foreign_download_user"
+    assert config["actor_token"].startswith("v1.")
 
 
 def test_actor_config_endpoint_returns_current_user_identity():

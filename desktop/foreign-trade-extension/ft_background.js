@@ -24,6 +24,9 @@ function ftLoad(path) {
   }
 }
 
+// Shared actor identity for the foreign-trade extension.
+ftLoad("ft_actor.js");
+
 // Recruitment: side-panel behavior, backfill orchestration, native helper bridge.
 ftLoad("recruit/background.js");
 

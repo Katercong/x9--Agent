@@ -39,6 +39,8 @@ const FAST_PAGE_SETTLE_MS = 350;
 const FAST_SEARCH_SETTLE_MS = 800;
 const FAST_TAB_SETTLE_MS = 700;
 const X9_BACKEND_BASE_URL = 'https://usx9.us';
+const X9_FOREIGN_TRADE_HOME_PATH = '/workspace/foreign-trade/';
+const X9_FOREIGN_TRADE_LOGIN_URL = `${X9_BACKEND_BASE_URL}/login?next=${encodeURIComponent(X9_FOREIGN_TRADE_HOME_PATH)}`;
 const X9_EXTENSION_ID = 'tiktok_creator_lead_browser_1_0_19';
 const X9_STABLE_WORKER_ID_KEY = 'x9StableWorkerId';
 const X9_HEARTBEAT_INTERVAL_MS = 5_000;
@@ -271,7 +273,7 @@ elements.actorBindBtn?.addEventListener('click', () => {
 });
 
 elements.actorLoginBtn?.addEventListener('click', () => {
-  chrome.tabs.create({ url: `${X9_BACKEND_BASE_URL}/login?next=/portal/dashboard` }).catch(() => undefined);
+  chrome.tabs.create({ url: X9_FOREIGN_TRADE_LOGIN_URL }).catch(() => undefined);
 });
 
 if (chrome?.storage?.onChanged) {
@@ -2455,7 +2457,7 @@ async function bindX9ActorFromLogin() {
 async function x9FetchActorConfigFromPortalTab() {
   const tab = await x9FindUsx9Tab();
   if (!tab?.id) {
-    await chrome.tabs.create({ url: `${X9_BACKEND_BASE_URL}/login?next=/portal/dashboard` }).catch(() => undefined);
+    await chrome.tabs.create({ url: X9_FOREIGN_TRADE_LOGIN_URL }).catch(() => undefined);
     throw new Error('没有找到已打开的 usx9.us 页面。已打开登录页，登录后回到插件点“绑定当前登录账号”。');
   }
   const [result] = await chrome.scripting.executeScript({
@@ -2477,7 +2479,7 @@ async function x9FetchActorConfigFromPortalTab() {
   const value = result?.result || {};
   if (!value.ok) {
     if (value.status === 401) {
-      await chrome.tabs.update(tab.id, { active: true, url: `${X9_BACKEND_BASE_URL}/login?next=/portal/dashboard` }).catch(() => undefined);
+      await chrome.tabs.update(tab.id, { active: true, url: X9_FOREIGN_TRADE_LOGIN_URL }).catch(() => undefined);
       throw new Error('当前 usx9.us 页面还没有登录。请先登录，登录后回到插件点“绑定当前登录账号”。');
     }
     throw new Error(x9ResponseDetail(value.body, `HTTP ${value.status || 0}`));

@@ -18,6 +18,7 @@ from typing import Any
 HOST_NAME = "com.companyleads.helper"
 REQUIRED_HELPER_VERSION = "1.1.1"
 DEFAULT_BACKEND_URL = "http://127.0.0.1:8000"
+DEFAULT_DASHBOARD_URL = "https://usx9.us/workspace/foreign-trade/"
 APP_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "CompanyLeads"
 CONFIG_PATH = APP_DIR / "config.json"
 
@@ -51,6 +52,7 @@ def load_config() -> dict[str, Any]:
     return {
         "root": str(root),
         "backendUrl": DEFAULT_BACKEND_URL,
+        "dashboardUrl": DEFAULT_DASHBOARD_URL,
         "helperUrl": "http://127.0.0.1:8765",
     }
 
@@ -271,6 +273,7 @@ def get_status(config: dict[str, Any]) -> dict[str, Any]:
         "cdpReady": cdp_ready,
         "helperUrl": helper_url,
         "backendUrl": backend_url,
+        "dashboardUrl": config.get("dashboardUrl", DEFAULT_DASHBOARD_URL),
         "mode": config.get("mode", "server"),
         "apiTokenConfigured": bool(config.get("apiToken")),
         "systemStatus": system_status,
@@ -304,9 +307,9 @@ def open_chrome(config: dict[str, Any], payload: dict[str, Any] | None) -> dict[
 
 def open_dashboard(config: dict[str, Any]) -> dict[str, Any]:
     status = ensure_started(config)
-    backend_url = status.get("backendUrl") or config.get("backendUrl", DEFAULT_BACKEND_URL)
+    dashboard_url = config.get("dashboardUrl") or DEFAULT_DASHBOARD_URL
     if os.name == "nt":
-        os.startfile(str(backend_url))  # type: ignore[attr-defined]
+        os.startfile(str(dashboard_url))  # type: ignore[attr-defined]
     return status
 
 
@@ -334,6 +337,7 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
             "host": HOST_NAME,
             "config": {
                 "backendUrl": str(config.get("backendUrl", DEFAULT_BACKEND_URL)).rstrip("/"),
+                "dashboardUrl": str(config.get("dashboardUrl", DEFAULT_DASHBOARD_URL)).rstrip("/"),
                 "apiToken": str(config.get("apiToken") or ""),
                 "mode": config.get("mode", "server"),
             },

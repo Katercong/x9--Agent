@@ -10,5 +10,16 @@
 globalThis.__X9_FT_ACTOR__ = {
   department_code: "foreign_trade",
   actor_user_id: "",
-  actor_token: ""
+  actor_token: "",
+  actor: null,
+  downloaded_at: ""
+};
+
+globalThis.X9_BUNDLED_ACTOR_CONFIG = {
+  ok: false,
+  source: "placeholder",
+  actor_user_id: "",
+  actor: null,
+  actor_token: "",
+  downloaded_at: ""
 };

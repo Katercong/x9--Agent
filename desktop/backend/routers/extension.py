@@ -55,12 +55,29 @@ def _extension_dir_for_department(department_code: str | None) -> tuple[Path, st
 def _ft_actor_config_js(payload: dict) -> str:
     """Personalize ft_actor.js with the downloading user's department + actor."""
     actor = payload.get("actor") or {}
-    data = {
+    ft_data = {
         "department_code": (actor.get("department_code") or "foreign_trade"),
         "actor_user_id": payload.get("actor_user_id") or actor.get("id") or "",
         "actor_token": payload.get("actor_token") or "",
+        "actor": actor,
+        "downloaded_at": payload.get("downloaded_at") or "",
     }
-    return "globalThis.__X9_FT_ACTOR__ = " + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + ";\n"
+    compat_payload = {
+        "ok": bool(payload.get("ok")),
+        "source": payload.get("source") or "download_user",
+        "actor_user_id": ft_data["actor_user_id"],
+        "actor": actor,
+        "actor_token": ft_data["actor_token"],
+        "downloaded_at": ft_data["downloaded_at"],
+    }
+    return (
+        "globalThis.__X9_FT_ACTOR__ = "
+        + json.dumps(ft_data, ensure_ascii=False, separators=(",", ":"))
+        + ";\n"
+        + "globalThis.X9_BUNDLED_ACTOR_CONFIG = "
+        + json.dumps(compat_payload, ensure_ascii=False, separators=(",", ":"))
+        + ";\n"
+    )
 
 
 def _extension_actor_token(actor_user_id: str, downloaded_at: str) -> str:

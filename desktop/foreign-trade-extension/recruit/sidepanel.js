@@ -2,6 +2,7 @@
 
 const HELPER = 'http://127.0.0.1:8765';
 const NATIVE_HOST = 'com.companyleads.helper';
+const X9_FOREIGN_TRADE_DASHBOARD_URL = 'https://usx9.us/workspace/foreign-trade/';
 const MAX_AUTO_PAGES = 100;
 const TALENT_51JOB_KEYWORDS = '跨境销售,跨境电商运营,Amazon运营,美区运营,海外仓招商,跨境供应链,品牌出海销售';
 
@@ -407,9 +408,9 @@ async function openDashboard() {
   } catch (err) {
     try {
       const cfg = await nativeMessage('helper.getClientConfig');
-      window.open(cfg.config?.backendUrl || 'http://127.0.0.1:8000', '_blank');
+      window.open(cfg.config?.dashboardUrl || X9_FOREIGN_TRADE_DASHBOARD_URL, '_blank');
     } catch {
-      window.open('http://127.0.0.1:8000', '_blank');
+      window.open(X9_FOREIGN_TRADE_DASHBOARD_URL, '_blank');
     }
   }
 }
