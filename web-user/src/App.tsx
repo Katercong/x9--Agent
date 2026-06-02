@@ -18,6 +18,7 @@ import ForeignTradeBusiness from './pages/ForeignTradeBusiness';
 import ForeignTradeCollection from './pages/ForeignTradeCollection';
 import CollectJobs from './pages/CollectJobs';
 import CollectSocial from './pages/CollectSocial';
+import ForeignTradeCleaning from './pages/ForeignTradeCleaning';
 import ForeignTradeImport from './pages/ForeignTradeImport';
 
 function useIsForeignTrade() {
@@ -50,6 +51,7 @@ export default function App() {
         {/* 外贸部采集 */}
         <Route path="/collect-jobs" element={<CollectJobs />} />
         <Route path="/collect-social" element={<CollectSocial />} />
+        <Route path="/ft-cleaning" element={<ForeignTradeCleaning />} />
         <Route path="/ft-import" element={<ForeignTradeImport />} />
         {/* 共用 */}
         <Route path="/creators-info" element={<Navigate to="/recommendations" replace />} />

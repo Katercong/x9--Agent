@@ -1,7 +1,7 @@
 import {
   Home, BarChart3, Telescope, Sparkles,
   ArrowDownToLine, TrendingUp, Bot, Users, Store, Radar, FileSpreadsheet, MailCheck,
-  Briefcase, Heart,
+  Briefcase, Heart, Wand2,
   type LucideIcon,
 } from 'lucide-react';
 import type { Language } from '@/lib/i18n';
@@ -41,6 +41,7 @@ const menuText: Record<Language, Record<string, string>> = {
     ftCollectData: '数据采集',
     ftCollectJobs: '采集 · 招聘网站',
     ftCollectSocial: '采集 · 小红书抖音',
+    ftCleaning: '数据清洗',
     ftRecommendations: '线索推荐',
   },
   en: {
@@ -59,6 +60,7 @@ const menuText: Record<Language, Record<string, string>> = {
     ftCollectData: 'Data Collection',
     ftCollectJobs: 'Recruitment Sites',
     ftCollectSocial: 'Xiaohongshu / Douyin',
+    ftCleaning: 'Data Cleaning',
     ftRecommendations: 'Lead Recommendations',
   },
 };
@@ -101,6 +103,7 @@ function buildForeignTradePortalMenu(language: Language): MenuEntry[] {
         { key: 'collection', label: t.collection, to: '/collection', icon: Telescope },
         { key: 'collect-jobs', label: t.ftCollectJobs, to: '/collect-jobs', icon: Briefcase },
         { key: 'collect-social', label: t.ftCollectSocial, to: '/collect-social', icon: Heart },
+        { key: 'ft-cleaning', label: t.ftCleaning, to: '/ft-cleaning', icon: Wand2 },
         { key: 'ft-import', label: t.collectImport, to: '/ft-import', icon: FileSpreadsheet },
       ],
     },
@@ -133,6 +136,7 @@ const pageMetaByLanguage: Record<Language, Record<string, PageMeta>> = {
     '/assistant': { title: 'AI 助手', subtitle: '智能问答与运维指引' },
     '/collect-jobs': { title: '采集 · 招聘网站', subtitle: '51job / 智联 / 大泉州 · 公司客户与跨境人才' },
     '/collect-social': { title: '采集 · 小红书抖音', subtitle: '博主 / 笔记 / 评论 · 联系方式与采购意向' },
+    '/ft-cleaning': { title: '数据清洗', subtitle: '外贸线索清洗状态、联系方式提取与 GPT 判定' },
     '/ft-import': { title: '采集 · 表格导入', subtitle: 'CSV / XLSX 批量导入线索 · 分级与质量分布' },
   },
   en: {
@@ -150,6 +154,7 @@ const pageMetaByLanguage: Record<Language, Record<string, PageMeta>> = {
     '/assistant': { title: 'AI Assistant', subtitle: 'Smart Q&A and operations guidance' },
     '/collect-jobs': { title: 'Recruitment Sites', subtitle: '51job / Zhaopin / QZRC · company clients and cross-border talent' },
     '/collect-social': { title: 'Xiaohongshu / Douyin', subtitle: 'Creators / notes / comments · contacts and purchase intent' },
+    '/ft-cleaning': { title: 'Data Cleaning', subtitle: 'Lead cleaning status, contact extraction, and GPT judgment' },
     '/ft-import': { title: 'Table Import', subtitle: 'CSV / XLSX batch import with tier and quality distribution' },
   },
 };

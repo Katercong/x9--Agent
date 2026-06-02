@@ -9,6 +9,7 @@ import {
   Heart,
   Radio,
   Users,
+  Wand2,
   type LucideIcon,
 } from 'lucide-react';
 import { KpiCard } from '@/components/kpi/KpiCard';
@@ -93,9 +94,10 @@ export default function Collection() {
             <h3 className="sec-title !mb-0">数据采集总览</h3>
             <span className="text-xxs text-muted">招聘网站 / 小红书抖音 / 表格导入 三类采集渠道统一入口</span>
           </div>
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 xl:grid-cols-4 gap-4">
             <ChannelCard icon={Briefcase} accent={ACCENTS.jobs} title="招聘网站采集" subtitle="51job / 智联 / 大泉州" to="/collect-jobs" channel="jobs" />
             <ChannelCard icon={Heart} accent={ACCENTS.social} title="小红书 / 抖音采集" subtitle="博主 / 笔记 / 评论 · 采购意向" to="/collect-social" channel="social" />
+            <CleaningChannelCard />
             <ImportChannelCard />
           </div>
         </section>
@@ -155,6 +157,30 @@ function ChannelCard({
   );
 }
 
+function CleaningChannelCard() {
+  const accent = ACCENTS.social;
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-4 py-3 border-b border-border">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-md flex items-center justify-center shrink-0" style={{ background: accent.dim, color: accent.key }}>
+              <Wand2 size={19} />
+            </div>
+            <div className="min-w-0">
+              <h4 className="text-sm font-semibold text-text truncate">数据清洗</h4>
+              <div className="text-xxs text-muted truncate">重新清洗 / 联系方式 / GPT 判定</div>
+            </div>
+          </div>
+          <Link to="/ft-cleaning" className="chip text-xxs shrink-0">详情 <ArrowUpRight size={11} /></Link>
+        </div>
+      </div>
+      <div className="p-4 text-xs text-muted">招聘线索评分、社媒联系方式提取、原始快照补处理。</div>
+      <div className="h-1" style={{ background: accent.key }} />
+    </div>
+  );
+}
+
 function ImportChannelCard() {
   const accent = ACCENTS.import;
   return (
@@ -170,7 +196,7 @@ function ImportChannelCard() {
               <div className="text-xxs text-muted truncate">CSV / XLSX 批量导入线索</div>
             </div>
           </div>
-          <Link to="/collect-import" className="chip text-xxs shrink-0">详情 <ArrowUpRight size={11} /></Link>
+          <Link to="/ft-import" className="chip text-xxs shrink-0">详情 <ArrowUpRight size={11} /></Link>
         </div>
       </div>
       <div className="p-4 text-xs text-muted">支持下载模板、字段映射与入库前预检，导入后自动评分分级。</div>

@@ -8,6 +8,8 @@ trade department. Empty tables return honest zeros — no fabricated data.
 Endpoints (all department-scoped via the request's department_code):
   GET /api/local/foreign-trade/dashboard          → KPI cards + tier / status / source / decision / platform breakdowns + 7d trend
   GET /api/local/foreign-trade/collection         → per-channel stats + paginated recent leads for the collection panels
+  GET /api/local/foreign-trade/cleaning/status    → cleaning readiness + backlog
+  POST /api/local/foreign-trade/cleaning/run      → deterministic cleaning backfill, optional GPT judge
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -29,6 +31,7 @@ from ..models.social_lead import (
 )
 from ..models.talent_lead import TalentLead
 from ..services.departments import current_department_code, current_user, department_where
+from ..services.foreign_trade_cleaning_service import get_cleaning_status, run_cleaning
 
 router = APIRouter(prefix="/api/local/foreign-trade", tags=["foreign-trade"])
 
@@ -50,8 +53,12 @@ STATUS_LABELS = {
 SOURCE_ORDER = ("jobs", "social", "import")
 SOURCE_LABELS = {"jobs": "招聘网站", "social": "小红书抖音", "import": "表格导入"}
 
-DECISION_ORDER = ("high_priority", "follow_up", "nurture", "ignore")
+DECISION_ORDER = ("target_customer", "potential", "irrelevant", "error", "high_priority", "follow_up", "nurture", "ignore")
 DECISION_LABELS = {
+    "target_customer": "目标客户",
+    "potential": "潜在线索",
+    "irrelevant": "无关",
+    "error": "判定失败",
     "high_priority": "高优先",
     "follow_up": "待跟进",
     "nurture": "培育",
@@ -191,7 +198,7 @@ def _build_dashboard(db: Session, department_code: str | None) -> dict[str, Any]
 
     # ---- social GPT judgments ----
     decision_counts = _group_counts(db, XhsAiJudgment, XhsAiJudgment.decision, department_code)
-    high_intent = int(decision_counts.get("high_priority", 0))
+    high_intent = int(decision_counts.get("target_customer", 0) + decision_counts.get("high_priority", 0))
     social_contacts = _count(db, XhsExtractedContact, department_code)
 
     source_counts = {
@@ -264,6 +271,32 @@ def foreign_trade_collection(
     if channel == "social":
         return _social_collection(db, department_code, limit, offset)
     return _jobs_collection(db, department_code, limit, offset)
+
+
+@router.get("/cleaning/status")
+def foreign_trade_cleaning_status(
+    request: Request,
+    _user: dict = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return get_cleaning_status(db, current_department_code(request))
+
+
+@router.post("/cleaning/run")
+def foreign_trade_cleaning_run(
+    request: Request,
+    body: dict[str, Any] | None = Body(default=None),
+    _user: dict = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    payload = body or {}
+    return run_cleaning(
+        db,
+        current_department_code(request),
+        include_gpt=bool(payload.get("include_gpt")),
+        force_gpt=bool(payload.get("force_gpt")),
+        gpt_limit=int(payload["gpt_limit"]) if payload.get("gpt_limit") else None,
+    )
 
 
 def _jobs_collection(db: Session, department_code: str | None, limit: int, offset: int) -> dict[str, Any]:

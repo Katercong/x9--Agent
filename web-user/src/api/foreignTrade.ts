@@ -1,7 +1,7 @@
 // Foreign-trade department data for the portal: the desktop backend's
 // /api/local/foreign-trade/* endpoints (recruitment + social-media lead
 // aggregation that replaces the TikTok-creator dashboard).
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
 
 export interface BreakdownRow {
@@ -70,6 +70,53 @@ export interface CollectionResponse {
   items: LeadItem[];
 }
 
+export interface CleaningChannel {
+  key: string;
+  name: string;
+  total: number;
+  cleaned: number;
+  pending: number;
+  with_contact?: number;
+  unjudged_with_contact?: number;
+}
+
+export interface CleaningStatus {
+  ok: boolean;
+  generated_at: string;
+  scope: { type: string; department_code: string | null };
+  summary: {
+    company_total: number;
+    talent_total: number;
+    social_total: number;
+    raw_snapshots: number;
+    contacts_total: number;
+    judgments_total: number;
+    ready_total: number;
+    needs_cleaning: number;
+    unjudged_with_contact: number;
+    openai_configured: boolean;
+  };
+  channels: CleaningChannel[];
+  raw: {
+    total: number;
+    queued: number;
+  };
+}
+
+export interface CleaningRunResult {
+  ok: boolean;
+  run_id: string;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+  include_gpt: boolean;
+  company: Record<string, number>;
+  talent: Record<string, number>;
+  social: Record<string, number>;
+  gpt: Record<string, unknown>;
+  status: CleaningStatus;
+}
+
 export function useForeignTradeDashboard() {
   return useQuery({
     queryKey: ['foreign-trade', 'dashboard'],
@@ -88,5 +135,24 @@ export function useForeignTradeCollection(params: { channel: LeadChannel; limit?
         offset: params.offset ?? 0,
       }),
     refetchInterval: 60_000,
+  });
+}
+
+export function useForeignTradeCleaningStatus() {
+  return useQuery({
+    queryKey: ['foreign-trade', 'cleaning', 'status'],
+    queryFn: () => api.get<CleaningStatus>('/foreign-trade/cleaning/status'),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useRunForeignTradeCleaning() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { include_gpt?: boolean; force_gpt?: boolean; gpt_limit?: number } = {}) =>
+      api.post<CleaningRunResult>('/foreign-trade/cleaning/run', body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['foreign-trade'] });
+    },
   });
 }
