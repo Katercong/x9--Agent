@@ -178,6 +178,8 @@ def _write_request_log(method: str, path: str, status_code: int, duration_ms: in
     """
     if not _should_log_request(path):
         return
+    if _should_skip_request_log(path):
+        return
     try:
         with SessionLocal() as db:
             db.add(
@@ -224,6 +226,17 @@ def _should_redirect_to_public_host(request: Request) -> bool:
         return False
     accept = request.headers.get("accept", "")
     return not accept or "text/html" in accept or "*/*" in accept
+
+
+def _should_skip_request_log(path: str) -> bool:
+    if path == "/health":
+        return True
+    if path.startswith(("/assets/", "/portal/assets/")):
+        return True
+    return path in {
+        "/api/local/extension/heartbeat",
+        "/api/local/extension/launcher-heartbeat",
+    } or path.startswith("/api/local/extension/commands/pending")
 
 
 @app.middleware("http")

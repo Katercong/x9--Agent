@@ -385,7 +385,10 @@ def _auto_process_creator(db: Session, creator_id: str) -> dict[str, Any]:
     if creator is None:
         return {"ok": False, "error": "creator_not_found"}
     try:
-        out = run_for_creator(db, creator)
+        # Keep the hot ingest path bounded. The default repeat-discovery pass
+        # scans raw_observations.raw_json, which is a large audit table and is
+        # appropriate for batch processing, not per-upload request handling.
+        out = run_for_creator(db, creator, repeat_discovery={})
         db.commit()
         return {"ok": True, **out}
     except Exception as exc:

@@ -344,25 +344,28 @@ def _repeat_discovery_for_creators(db: Session, creators: list[Creator]) -> dict
         .where(RawObservation.platform.in_(platforms))
         .execution_options(yield_per=200)
     )
-    for platform_value, raw_json, search_keyword, content_hash_value in stream:
-        payload = _load_payload(raw_json)
-        if not payload:
-            continue
-        creator_data = payload.get("creator") or {}
-        cid = creator_keys.get((
-            (payload.get("platform") or platform_value or "tiktok").lower(),
-            _norm_handle(creator_data.get("handle")),
-        ))
-        if cid:
-            # Build a minimal observation-like object so the existing
-            # _add_repeat_observation signature stays the same.
-            obs_shim = type("ObsShim", (), {
-                "platform": platform_value,
-                "search_keyword": search_keyword,
-                "content_hash": content_hash_value,
-            })()
-            _add_repeat_observation(states[cid], payload, obs_shim)
-        payload = None
+    try:
+        for platform_value, raw_json, search_keyword, content_hash_value in stream:
+            payload = _load_payload(raw_json)
+            if not payload:
+                continue
+            creator_data = payload.get("creator") or {}
+            cid = creator_keys.get((
+                (payload.get("platform") or platform_value or "tiktok").lower(),
+                _norm_handle(creator_data.get("handle")),
+            ))
+            if cid:
+                # Build a minimal observation-like object so the existing
+                # _add_repeat_observation signature stays the same.
+                obs_shim = type("ObsShim", (), {
+                    "platform": platform_value,
+                    "search_keyword": search_keyword,
+                    "content_hash": content_hash_value,
+                })()
+                _add_repeat_observation(states[cid], payload, obs_shim)
+            payload = None
+    finally:
+        stream.close()
 
     return {cid: _finalize_repeat_state(state) for cid, state in states.items()}
 
