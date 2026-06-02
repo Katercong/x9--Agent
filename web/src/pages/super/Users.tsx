@@ -23,6 +23,21 @@ const STATUS_OPTIONS = [
 ];
 const STATUS_LABEL: Record<string, string> = Object.fromEntries(STATUS_OPTIONS.map((s) => [s.v, s.l]));
 const NEEDS_DEPT = (role: string) => role === 'department_admin' || role === 'department_user';
+const DEPARTMENT_OPTIONS = [
+  { v: 'cross_border', l: '跨境部' },
+  { v: 'foreign_trade', l: '外贸部' },
+];
+const DEPARTMENT_BY_NAME: Record<string, string> = {
+  跨境部: 'cross_border',
+  外贸部: 'foreign_trade',
+};
+
+function normalizedDepartmentCode(user: AuthUserRow) {
+  const code = (user.department_code || '').trim();
+  if (DEPARTMENT_OPTIONS.some((item) => item.v === code)) return code;
+  const name = (user.department_name || '').trim();
+  return DEPARTMENT_BY_NAME[name] || 'cross_border';
+}
 
 const permMatrix = [
   { module: '产品库', su: '读写', co: '只读', dp: '读写', usr: '只读', ro: '只读' },
@@ -138,7 +153,7 @@ function PendingRegistrations({ onChanged }: { onChanged: () => void }) {
 
 function EditUserModal({ user, onClose, onSaved }: { user: AuthUserRow; onClose: () => void; onSaved: () => void }) {
   const [role, setRole] = useState(ROLE_OPTIONS.some((r) => r.v === user.role) ? user.role : 'department_user');
-  const [dept, setDept] = useState(user.department_name || 'cross_border');
+  const [dept, setDept] = useState(normalizedDepartmentCode(user));
   const [displayName, setDisplayName] = useState(user.display_name || '');
   const [status, setStatus] = useState(user.approval_status || 'active');
   const [active, setActive] = useState(user.is_active);
@@ -155,7 +170,7 @@ function EditUserModal({ user, onClose, onSaved }: { user: AuthUserRow; onClose:
         is_active: active,
         approval_status: status,
       };
-      if (NEEDS_DEPT(role) && dept.trim()) body.department_code = dept.trim();
+      if (NEEDS_DEPT(role)) body.department_code = dept;
       await authApi.patchUser(user.id, body as never);
       onSaved();
       onClose();
@@ -184,7 +199,9 @@ function EditUserModal({ user, onClose, onSaved }: { user: AuthUserRow; onClose:
           {NEEDS_DEPT(role) && (
             <label className="block">
               <span className="text-xxs text-muted">部门代码（部门角色必填）</span>
-              <input className="mt-1 w-full text-xs border border-line rounded px-2 py-1.5" value={dept} onChange={(e) => setDept(e.target.value)} placeholder="cross_border" />
+              <select className="mt-1 w-full text-xs border border-line rounded px-2 py-1.5 bg-white" value={dept} onChange={(e) => setDept(e.target.value)}>
+                {DEPARTMENT_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
+              </select>
             </label>
           )}
           <label className="block">

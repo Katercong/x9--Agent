@@ -76,6 +76,7 @@ export interface AuthUserRow {
   base_role?: string;
   approval_status: string; // active | pending | rejected | disabled
   is_active: boolean;
+  department_code?: string | null;
   department_name?: string | null;
   stats?: AuthUserStats;
 }
