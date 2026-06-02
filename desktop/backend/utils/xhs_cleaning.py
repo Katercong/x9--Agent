@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import math
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -20,6 +21,8 @@ URL_RE = re.compile(r"(?i)\bhttps?://[^\s<>'\"]+")
 WECHAT_RE = re.compile(r"(?i)(?:微信|vx|v信|wechat)[:：\s]*([a-z][-_a-z0-9]{5,19})")
 
 INTERNAL_URL_HOSTS = ("xiaohongshu.com", "xhslink.com", "douyin.com", "iesdouyin.com")
+MAX_SOCIAL_METRIC = 10**12
+COUNT_TOKEN_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)(?:\s*)(万|w|千|k|亿|m|b)?", re.IGNORECASE)
 
 
 def clean_text(value: Any) -> str | None:
@@ -33,21 +36,38 @@ def clean_text(value: Any) -> str | None:
 def parse_count_text(value: Any) -> int | None:
     if value is None:
         return None
-    text = str(value).strip().lower()
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if not math.isfinite(float(value)):
+            return None
+        number = int(value)
+        return number if 0 <= number <= MAX_SOCIAL_METRIC else None
+    text = str(value).strip().lower().replace(",", "")
     if not text:
         return None
-    multiplier = 1
-    if text.endswith("万") or text.endswith("w"):
-        multiplier = 10000
-    elif text.endswith("千") or text.endswith("k"):
-        multiplier = 1000
-    digits = re.sub(r"[^\d.]", "", text)
-    if not digits:
+    matches = list(COUNT_TOKEN_RE.finditer(text))
+    if not matches:
         return None
+    # A full profile stats blob can contain account IDs plus several metrics.
+    # Without a target label, treating all digits as one number creates BIGINT
+    # overflows and bad counts; let callers extract the labeled token first.
+    if len(matches) > 1 and not any(match.group(2) for match in matches):
+        return None
+    match = next((item for item in matches if item.group(2)), matches[0])
+    multiplier = 1
+    unit = (match.group(2) or "").lower()
+    if unit in {"万", "w"}:
+        multiplier = 10000
+    elif unit in {"千", "k"}:
+        multiplier = 1000
+    elif unit in {"亿", "b"}:
+        multiplier = 100000000
+    elif unit == "m":
+        multiplier = 1000000
     try:
-        return int(float(digits) * multiplier)
+        number = int(float(match.group(1)) * multiplier)
     except ValueError:
         return None
+    return number if 0 <= number <= MAX_SOCIAL_METRIC else None
 
 
 def stable_hash(payload: Any) -> str:

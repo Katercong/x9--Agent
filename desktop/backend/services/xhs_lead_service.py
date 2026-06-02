@@ -93,6 +93,41 @@ def _parse_dt(value: Any) -> datetime | None:
     return None
 
 
+COUNT_UNIT_RE = r"(?:万|w|千|k|亿|m|b)?"
+COUNT_VALUE_RE = rf"\d+(?:\.\d+)?\s*{COUNT_UNIT_RE}"
+
+
+def _trim_count_text(value: Any) -> str | None:
+    text = clean_text(value)
+    return text[:80] if text else None
+
+
+def _extract_labeled_count_text(value: Any, labels: tuple[str, ...]) -> str | None:
+    text = clean_text(value)
+    if not text:
+        return None
+    label_re = "|".join(re.escape(label) for label in labels if label)
+    if not label_re:
+        return None
+    before = re.search(rf"(?P<count>{COUNT_VALUE_RE})\s*(?P<label>{label_re})", text, flags=re.IGNORECASE)
+    if before:
+        return _trim_count_text(before.group("count"))
+    after = re.search(rf"(?P<label>{label_re})\s*[:：]?\s*(?P<count>{COUNT_VALUE_RE})", text, flags=re.IGNORECASE)
+    if after:
+        return _trim_count_text(after.group("count"))
+    return None
+
+
+def _metric_text(value: Any, stats_text: Any, labels: tuple[str, ...]) -> str | None:
+    # Plugin DOM fallbacks sometimes send the whole profile text into one metric
+    # field. Prefer a label-adjacent number from that text, then keep short raw
+    # values like "309" or "1.2万".
+    labeled = _extract_labeled_count_text(value, labels) or _extract_labeled_count_text(stats_text, labels)
+    if labeled:
+        return labeled
+    return _trim_count_text(value)
+
+
 def _dept(payload: dict[str, Any], department_code: str | None) -> str:
     return department_code or payload.get("department_code") or DEFAULT_DEPARTMENT
 
@@ -512,16 +547,26 @@ def _upsert_user(
     user.location_text = clean_text(raw.get("location") or raw.get("location_text") or raw.get("ip_location")) or user.location_text
     user.gender_text = clean_text(raw.get("gender") or raw.get("gender_text")) or user.gender_text
     stats_text = " ".join(str(x) for x in _list(raw.get("stats_text")))
-    follower_text = raw.get("follower_count") or raw.get("follower_count_text") or raw.get("fans") or raw.get("fans_count")
-    following_text = raw.get("following_count") or raw.get("following_count_text")
-    liked_text = raw.get("liked_collect_count") or raw.get("liked_collect_count_text")
-    note_text = raw.get("note_count") or raw.get("note_count_text")
-    if not follower_text and "粉丝" in stats_text:
-        follower_text = stats_text
-    if not following_text and "关注" in stats_text:
-        following_text = stats_text
-    if not liked_text and ("获赞" in stats_text or "喜欢" in stats_text):
-        liked_text = stats_text
+    follower_text = _metric_text(
+        raw.get("follower_count") or raw.get("follower_count_text") or raw.get("fans") or raw.get("fans_count"),
+        stats_text,
+        ("粉丝", "followers", "fans"),
+    )
+    following_text = _metric_text(
+        raw.get("following_count") or raw.get("following_count_text"),
+        stats_text,
+        ("关注", "following"),
+    )
+    liked_text = _metric_text(
+        raw.get("liked_collect_count") or raw.get("liked_collect_count_text"),
+        stats_text,
+        ("获赞与收藏", "获赞", "喜欢", "点赞", "likes"),
+    )
+    note_text = _metric_text(
+        raw.get("note_count") or raw.get("note_count_text"),
+        stats_text,
+        ("作品", "笔记", "视频", "posts", "notes"),
+    )
     fc = parse_count_text(follower_text)
     if fc is not None:
         user.follower_count = fc
