@@ -84,7 +84,7 @@ def _run_once(departments: Iterable[str | None] | None = None) -> list[dict]:
 
 def _run() -> None:
     startup_delay = max(0.0, _env_float("X9_FT_AUTO_JUDGE_STARTUP_DELAY_SECONDS", 5.0))
-    interval = max(5.0, _env_float("X9_FT_AUTO_JUDGE_INTERVAL_SECONDS", 60.0))
+    interval = max(5.0, _env_float("X9_FT_AUTO_JUDGE_INTERVAL_SECONDS", 20.0))
     if startup_delay:
         time.sleep(startup_delay)
     while True:

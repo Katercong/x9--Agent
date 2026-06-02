@@ -58,7 +58,7 @@ def get_cleaning_status(db: Session, department_code: str | None = None) -> dict
         or_(XhsRawSnapshot.clean_status.is_(None), XhsRawSnapshot.clean_status != "cleaned"),
     )
     contacts_total = _count(db, XhsExtractedContact, department_code)
-    judgments_total = _count(db, XhsAiJudgment, department_code)
+    judgments_total = _count(db, XhsAiJudgment, department_code, XhsAiJudgment.prompt_version == PROMPT_VERSION)
     social_with_contact = _count(db, XhsUser, department_code, XhsUser.has_contact == 1)
     social_cleaned = _count(db, XhsUser, department_code, XhsUser.clean_status == "cleaned")
     company_scored = _count(db, CompanyLead, department_code, CompanyLead.score > 0)

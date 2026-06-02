@@ -51,6 +51,9 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 const DECISION_LABELS: Record<string, string> = {
   target_customer: '目标客户',
+  experienced_seller: '经验卖家',
+  logistics_partner: '物流伙伴',
+  supplier_peer: '供应方同行',
   high_priority: '高意向',
   potential: '潜在线索',
   follow_up: '待跟进',
@@ -93,9 +96,9 @@ function countText(value: number | null | undefined): string {
 
 function decisionTone(value?: string | null): 'good' | 'warn' | 'bad' | 'info' | 'muted' {
   const key = clean(value);
-  if (key === 'target_customer' || key === 'high_priority') return 'good';
-  if (key === 'potential' || key === 'follow_up' || key === 'nurture') return 'warn';
-  if (key === 'irrelevant' || key === 'ignore' || key === 'error') return 'bad';
+  if (key === 'target_customer' || key === 'experienced_seller' || key === 'high_priority') return 'good';
+  if (key === 'potential' || key === 'follow_up' || key === 'nurture' || key === 'logistics_partner') return 'warn';
+  if (key === 'supplier_peer' || key === 'irrelevant' || key === 'ignore' || key === 'error') return 'bad';
   return 'muted';
 }
 
@@ -224,6 +227,7 @@ function JudgmentCell({ row }: { row: LeadItem }) {
       <div className="flex flex-wrap items-center gap-2">
         <Pill tone={decisionTone(row.decision)}>{label}</Pill>
         {row.fit_score !== null && row.fit_score !== undefined ? <span className="num text-sm font-semibold text-text">{row.fit_score}</span> : null}
+        {row.customer_priority ? <Pill tone={decisionTone(row.decision)}>{row.customer_priority}</Pill> : null}
         {row.fit_level ? <Pill tone="muted">{row.fit_level}</Pill> : null}
         {row.intent_type ? <Pill tone="info">{row.intent_type}</Pill> : null}
       </div>

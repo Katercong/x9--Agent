@@ -38,6 +38,7 @@ from ..models.social_lead import (
 from ..models.talent_lead import TalentLead
 from ..services.departments import current_department_code, current_user, department_where
 from ..services.foreign_trade_cleaning_service import get_cleaning_status, run_cleaning
+from ..services.xhs_lead_service import PROMPT_VERSION
 from ..utils.foreign_trade_scoring_scheduler import request_auto_score
 
 router = APIRouter(prefix="/api/local/foreign-trade", tags=["foreign-trade"])
@@ -60,9 +61,24 @@ STATUS_LABELS = {
 SOURCE_ORDER = ("jobs", "social", "import")
 SOURCE_LABELS = {"jobs": "招聘网站", "social": "小红书抖音", "import": "表格导入"}
 
-DECISION_ORDER = ("target_customer", "potential", "irrelevant", "error", "high_priority", "follow_up", "nurture", "ignore")
+DECISION_ORDER = (
+    "target_customer",
+    "experienced_seller",
+    "logistics_partner",
+    "supplier_peer",
+    "potential",
+    "irrelevant",
+    "error",
+    "high_priority",
+    "follow_up",
+    "nurture",
+    "ignore",
+)
 DECISION_LABELS = {
     "target_customer": "目标客户",
+    "experienced_seller": "经验卖家",
+    "logistics_partner": "物流伙伴",
+    "supplier_peer": "供应方同行",
     "potential": "潜在线索",
     "irrelevant": "无关",
     "error": "判定失败",
@@ -114,6 +130,15 @@ def _count(db: Session, model, department_code: str | None, *conditions) -> int:
 def _group_counts(db: Session, model, column, department_code: str | None) -> dict[str, int]:
     stmt = select(column, func.count()).group_by(column)
     stmt = _scope(stmt, model, department_code)
+    out: dict[str, int] = {}
+    for value, count in db.execute(stmt).all():
+        out[str(value or "").strip()] = int(count or 0)
+    return out
+
+
+def _current_judgment_decision_counts(db: Session, department_code: str | None) -> dict[str, int]:
+    stmt = select(XhsAiJudgment.decision, func.count()).where(XhsAiJudgment.prompt_version == PROMPT_VERSION).group_by(XhsAiJudgment.decision)
+    stmt = _scope(stmt, XhsAiJudgment, department_code)
     out: dict[str, int] = {}
     for value, count in db.execute(stmt).all():
         out[str(value or "").strip()] = int(count or 0)
@@ -289,8 +314,12 @@ def _build_dashboard(db: Session, department_code: str | None) -> dict[str, Any]
     contacted = sum(status_counts.get(k, 0) for k in ("contacted", "replied", "signed"))
 
     # ---- social GPT judgments ----
-    decision_counts = _group_counts(db, XhsAiJudgment, XhsAiJudgment.decision, department_code)
-    high_intent = int(decision_counts.get("target_customer", 0) + decision_counts.get("high_priority", 0))
+    decision_counts = _current_judgment_decision_counts(db, department_code)
+    high_intent = int(
+        decision_counts.get("target_customer", 0)
+        + decision_counts.get("experienced_seller", 0)
+        + decision_counts.get("high_priority", 0)
+    )
     social_contacts = _count(db, XhsExtractedContact, department_code)
 
     source_counts = {
@@ -541,13 +570,14 @@ def _social_collection(db: Session, department_code: str | None, limit: int, off
         "sources": _count(db, XhsUserSource, department_code),
         "history_posts": _count(db, XhsUserHistoryPost, department_code),
         "contacts": _count(db, XhsExtractedContact, department_code),
-        "judgments": _count(db, XhsAiJudgment, department_code),
+        "judgments": _count(db, XhsAiJudgment, department_code, XhsAiJudgment.prompt_version == PROMPT_VERSION),
         "cleaned": _count(db, XhsUser, department_code, XhsUser.clean_status == "cleaned"),
         "high_intent": _count(
             db,
             XhsAiJudgment,
             department_code,
-            XhsAiJudgment.decision.in_(("target_customer", "high_priority")),
+            XhsAiJudgment.prompt_version == PROMPT_VERSION,
+            XhsAiJudgment.decision.in_(("target_customer", "experienced_seller", "high_priority")),
         ),
     }
     stmt = _scope(
@@ -591,7 +621,7 @@ def _social_items(db: Session, users: list[XhsUser]) -> list[dict[str, Any]]:
     judgments: dict[str, XhsAiJudgment] = {}
     for judgment in db.scalars(
         select(XhsAiJudgment)
-        .where(XhsAiJudgment.user_id.in_(user_ids))
+        .where(XhsAiJudgment.user_id.in_(user_ids), XhsAiJudgment.prompt_version == PROMPT_VERSION)
         .order_by(XhsAiJudgment.user_id, XhsAiJudgment.created_at.desc())
     ).all():
         if judgment.user_id not in judgments:
@@ -636,6 +666,7 @@ def _social_items(db: Session, users: list[XhsUser]) -> list[dict[str, Any]]:
             "decision": j.decision if j else None,
             "intent_type": j.intent_type if j else None,
             "judgment": j.judgment if j else None,
+            "customer_priority": _json_object(j.judgment).get("customer_priority") if j else None,
             "judged_at": _iso(j.created_at) if j else None,
             "created_at": _iso(collected_at),
         })
@@ -711,6 +742,7 @@ def _social_items_complete(db: Session, users: list[XhsUser]) -> list[dict[str, 
             "intent_type": j.intent_type if j else None,
             "judgment": j.judgment if j else None,
             "judgment_data": judgment_data,
+            "customer_priority": judgment_data.get("customer_priority") if isinstance(judgment_data, dict) else None,
             "judgment_evidence": _first_text(
                 judgment_data.get("evidence") if isinstance(judgment_data, dict) else None,
                 judgment_data.get("reason") if isinstance(judgment_data, dict) else None,
@@ -852,7 +884,7 @@ def _latest_judgments(db: Session, user_ids: list[str]) -> dict[str, XhsAiJudgme
     judgments: dict[str, XhsAiJudgment] = {}
     for judgment in db.scalars(
         select(XhsAiJudgment)
-        .where(XhsAiJudgment.user_id.in_(user_ids))
+        .where(XhsAiJudgment.user_id.in_(user_ids), XhsAiJudgment.prompt_version == PROMPT_VERSION)
         .order_by(XhsAiJudgment.user_id, XhsAiJudgment.created_at.desc())
     ).all():
         if judgment.user_id not in judgments:

@@ -13,8 +13,11 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any
+from urllib.parse import unquote
 
 import httpx
 from sqlalchemy import func, select
@@ -51,7 +54,25 @@ from ..utils.xhs_cleaning import (
     stable_hash,
 )
 
-PROMPT_VERSION = "xhs-b2b-us-dropship-fit-v5"
+PROMPT_VERSION = "xhs-b2b-us-dropship-fit-v6"
+
+NEED_KEYWORDS = (
+    "无货源", "没有货源", "没货源", "找货源", "求货源", "货源怎么找", "求推荐货源",
+    "想做跨境", "想做电商", "想开店", "想开网店", "新手", "小白", "怎么做跨境",
+    "怎么做电商", "想做", "求带", "副业",
+)
+STRONG_NEED_KEYWORDS = ("无货源", "没有货源", "没货源", "找货源", "求货源", "货源怎么找", "求推荐货源")
+ACTIVE_SELLER_KEYWORDS = (
+    "亚马逊", "amazon", "temu", "tiktok shop", "tk shop", "shopify", "独立站", "美区",
+    "跨境卖家", "店铺", "出单", "爆单", "选品", "运营", "开店", "电商实战",
+)
+LOGISTICS_KEYWORDS = ("物流", "货代", "报关", "清关", "海外仓", "头程", "尾程", "fba", "仓储", "快递")
+SUPPLIER_KEYWORDS = (
+    "源头工厂", "厂家", "供应商", "批发", "供货", "一件代发", "代发服务", "支持代发",
+    "招代理", "招商", "档口", "工厂直供", "你卖我发货", "可代发", "拿货",
+)
+TRAINING_KEYWORDS = ("培训", "课程", "割韭菜", "学费", "陪跑", "私教", "训练营", "招商加盟")
+CONSUMER_KEYWORDS = ("自用", "求链接", "在哪里买", "好看", "种草", "晒单", "买过", "已下单")
 
 
 def _uid() -> str:
@@ -81,6 +102,226 @@ def _dump_json(value: Any) -> str:
 
 def _list(value: Any) -> list:
     return value if isinstance(value, list) else []
+
+
+def _env_int(name: str, default: int, *, minimum: int = 0, maximum: int | None = None) -> int:
+    raw = os.getenv(name, "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        value = default
+    value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def _decode_for_scoring(value: Any) -> str:
+    text = clean_text(value)
+    if not text:
+        return ""
+    try:
+        return unquote(text)
+    except Exception:
+        return text
+
+
+def _keyword_hits(text: str, words: tuple[str, ...]) -> list[str]:
+    lower = text.lower()
+    hits: list[str] = []
+    for word in words:
+        if word.lower() in lower and word not in hits:
+            hits.append(word)
+    return hits
+
+
+def _fit_level(score: int | None) -> str:
+    score = int(score or 0)
+    if score >= 80:
+        return "high"
+    if score >= 60:
+        return "medium"
+    if score >= 40:
+        return "low"
+    return "irrelevant"
+
+
+def _rule_priority(decision: str, score: int) -> str:
+    if decision == "target_customer" and score >= 90:
+        return "A+"
+    if decision == "target_customer":
+        return "A"
+    if decision == "experienced_seller":
+        return "B"
+    if decision == "logistics_partner":
+        return "C"
+    if decision == "supplier_peer":
+        return "D"
+    return "E"
+
+
+def _rule_based_judge(user: XhsUser, texts: list[str]) -> dict[str, Any]:
+    evidence_text = "\n".join(_decode_for_scoring(v) for v in texts if _decode_for_scoring(v))
+    profile_text = " ".join(
+        _decode_for_scoring(v)
+        for v in [user.username_clean, user.account_clean, user.bio_clean, user.last_keyword, evidence_text]
+        if _decode_for_scoring(v)
+    )
+    hits = {
+        "need": _keyword_hits(profile_text, NEED_KEYWORDS),
+        "strong_need": _keyword_hits(profile_text, STRONG_NEED_KEYWORDS),
+        "active_seller": _keyword_hits(profile_text, ACTIVE_SELLER_KEYWORDS),
+        "logistics": _keyword_hits(profile_text, LOGISTICS_KEYWORDS),
+        "supplier": _keyword_hits(profile_text, SUPPLIER_KEYWORDS),
+        "training": _keyword_hits(profile_text, TRAINING_KEYWORDS),
+        "consumer": _keyword_hits(profile_text, CONSUMER_KEYWORDS),
+    }
+
+    has_need = bool(hits["need"])
+    has_strong_need = bool(hits["strong_need"])
+    has_active = bool(hits["active_seller"])
+    has_logistics = bool(hits["logistics"])
+    has_supplier = bool(hits["supplier"])
+    has_training = bool(hits["training"])
+    has_consumer = bool(hits["consumer"])
+
+    decision = "irrelevant"
+    intent_type = "other"
+    score = 20
+    cap = 100
+    reason = "没有明显跨境电商采购、货源或合作需求证据。"
+
+    if has_training:
+        decision = "irrelevant"
+        intent_type = "training_agency"
+        score = 25
+        cap = 39
+        reason = "命中培训/课程/陪跑类信号，不作为一件代发客户优先跟进。"
+    elif has_supplier and not (has_strong_need or has_active):
+        decision = "supplier_peer"
+        intent_type = "peer_supplier"
+        score = 38
+        cap = 49
+        reason = "更像源头工厂、批发商、供应商或提供一件代发的一方，按同行/上游处理。"
+    elif has_logistics and not (has_need or has_active):
+        decision = "logistics_partner"
+        intent_type = "logistics_partner"
+        score = 56
+        cap = 64
+        reason = "命中物流、货代、海外仓等合作伙伴信号，排在客户线索之后。"
+    elif has_strong_need:
+        decision = "target_customer"
+        intent_type = "no_source_starter"
+        score = 95 if has_active else 92
+        reason = "明确出现无货源、找货源、求货源等需求，是一件代发商家最优先客户。"
+    elif has_need:
+        decision = "target_customer"
+        intent_type = "sourcing_need"
+        score = 84
+        reason = "出现想做跨境/电商小白/新手/开店等意向，适合主动确认货源需求。"
+    elif has_active:
+        decision = "experienced_seller"
+        intent_type = "active_cross_border_seller"
+        score = 72
+        reason = "已有跨境或电商平台、店铺、选品、运营等经验，作为第二优先客户。"
+    elif has_logistics:
+        decision = "logistics_partner"
+        intent_type = "logistics_partner"
+        score = 54
+        cap = 64
+        reason = "有物流/货代相关信号，可进入合作伙伴队列。"
+    elif has_supplier:
+        decision = "supplier_peer"
+        intent_type = "peer_supplier"
+        score = 35
+        cap = 49
+        reason = "出现供货/批发/工厂/代发服务信号，按上游或同行线索处理。"
+    elif has_consumer:
+        decision = "irrelevant"
+        intent_type = "consumer"
+        score = 20
+        cap = 34
+        reason = "更像消费种草或自用购买语境。"
+
+    score = min(score, cap)
+    return {
+        "fit_score": score,
+        "fit_level": _fit_level(score),
+        "decision": decision,
+        "intent_type": intent_type,
+        "customer_priority": _rule_priority(decision, score),
+        "hard_cap": cap,
+        "reason": reason,
+        "hits": hits,
+    }
+
+
+def _compact_judge_texts(texts: list[str], *, limit: int = 20, max_chars: int = 280) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in texts:
+        text = _decode_for_scoring(value)
+        if not text:
+            continue
+        text = " ".join(text.split())
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text[:max_chars])
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _normalize_judge_result(parsed: dict[str, Any], rule: dict[str, Any]) -> dict[str, Any]:
+    out = dict(parsed or {})
+    try:
+        score = int(round(float(out.get("fit_score")))) if out.get("fit_score") is not None else int(rule["fit_score"])
+    except (TypeError, ValueError):
+        score = int(rule["fit_score"])
+
+    rule_decision = str(rule.get("decision") or "irrelevant")
+    cap = int(rule.get("hard_cap") or 100)
+    hard_decisions = {"supplier_peer", "logistics_partner", "irrelevant"}
+    if rule_decision in hard_decisions:
+        score = min(score, cap)
+        out["decision"] = rule_decision
+        out["intent_type"] = rule.get("intent_type")
+    elif rule_decision == "target_customer":
+        score = max(score, int(rule["fit_score"]))
+        out["decision"] = "target_customer"
+        out["intent_type"] = out.get("intent_type") or rule.get("intent_type")
+    elif rule_decision == "experienced_seller" and out.get("decision") in {None, "", "potential", "irrelevant"}:
+        score = max(score, int(rule["fit_score"]))
+        out["decision"] = "experienced_seller"
+        out["intent_type"] = rule.get("intent_type")
+
+    score = max(0, min(100, score))
+    decision = clean_text(out.get("decision")) or rule_decision
+    out["fit_score"] = score
+    out["fit_level"] = clean_text(out.get("fit_level")) or _fit_level(score)
+    if out["fit_level"] not in {"high", "medium", "low", "irrelevant"}:
+        out["fit_level"] = _fit_level(score)
+    out["decision"] = decision
+    out["intent_type"] = clean_text(out.get("intent_type")) or rule.get("intent_type")
+    out["customer_priority"] = clean_text(out.get("customer_priority")) or _rule_priority(decision, score)
+    out["rule_signals"] = rule
+    out["evidence"] = clean_text(out.get("evidence")) or rule.get("reason")
+    out["suggestion"] = clean_text(out.get("suggestion")) or _suggestion_for_decision(decision)
+    return out
+
+
+def _suggestion_for_decision(decision: str) -> str:
+    return {
+        "target_customer": "优先私信确认正在做的平台、目标市场、缺货源品类，并介绍一件代发合作方式。",
+        "experienced_seller": "询问当前店铺平台、主卖品类和供应链痛点，推荐可代发新品或补充货源。",
+        "logistics_partner": "进入物流伙伴队列，确认线路、价格、时效和可服务区域。",
+        "supplier_peer": "按供应商/同行归档，除非需要补充上游货源，否则不进入客户优先跟进。",
+        "irrelevant": "暂不跟进。",
+    }.get(decision, "进一步确认真实业务需求后再决定是否跟进。")
 
 
 def _keyword(payload: dict[str, Any], row: dict[str, Any] | None = None) -> str | None:
@@ -779,11 +1020,7 @@ def count_unjudged_social_users(db: Session, department_code: str | None = None)
 
 
 def auto_judge_unjudged_social(db: Session, *, department_code: str | None = None, limit: int | None = None) -> dict[str, Any]:
-    raw_limit = os.getenv("X9_FT_AUTO_JUDGE_LIMIT", "10").strip()
-    try:
-        resolved_limit = int(raw_limit)
-    except ValueError:
-        resolved_limit = 10
+    resolved_limit = _env_int("X9_FT_AUTO_JUDGE_LIMIT", 40, minimum=0, maximum=200)
     if limit is not None:
         resolved_limit = limit
     if resolved_limit <= 0:
@@ -817,31 +1054,40 @@ def _openai_cfg() -> dict[str, str] | None:
 
 
 _JUDGE_SYSTEM = (
-    "你是跨境电商 B2B 选品/供应链 BD 助手。我们要找的是【有美区一件代发 / 跨境采购需求】的人："
-    "跨境电商卖家（亚马逊 / TikTok Shop / Temu / Shopify / 独立站，尤其美区）、明确有货源采购/供应链/一件代发需求、"
-    "在小红书/抖音主动找货源或做美区电商的人。降分/排除：纯消费者、平台官方/大牌旗舰店、同行供应商、"
-    "纯内容创作者/网红、招聘/求职/培训/中介。\n"
-    "只返回 JSON，字段：fit_score(0-100)、fit_level(high/medium/low)、decision(target_customer/potential/irrelevant)、"
-    "intent_type(sourcing/dropship/cross_border_ecom/consumer/peer_supplier/other)、evidence、suggestion。"
-    "evidence 与 suggestion 用简体中文。档位：80-100 high=明确美区跨境卖家且明确找货源/代发；60-79 medium=有背景或意向但信息不全；"
-    "40-59 low=有一点相关性需确认；0-39 irrelevant=消费者/同行/无关。"
+    "你是给一件代发商家服务的跨境电商 BD 线索判定助手。我们的客户不是供应商，而是需要货源/代发服务的人。\n"
+    "优先级：A+ 最优先=想做跨境电商/电商但无货源、正在找货源、求推荐货源、小白新手想开店；"
+    "A=有跨境/电商意向，需进一步确认货源需求；B=已经在做亚马逊/Temu/TikTok Shop/Shopify/独立站/国内电商，有选品或供应链优化机会；"
+    "C=物流、货代、海外仓、清关等合作伙伴；D=源头工厂、批发、供应商、招商、提供一件代发、招代理等上游/同行；"
+    "E=培训课程、陪跑中介、纯消费者、无业务相关内容。\n"
+    "硬规则：看到“支持一件代发/源头工厂/厂家直供/批发/招代理/你卖我发货”等，通常是供应方，不得判为 A/A+ 客户；"
+    "看到“无货源/没货源/找货源/求货源/想做跨境/小白怎么做/想开网店”等，才是最优先客户。物流公司最多 C 级，培训/课程最多 E 级。\n"
+    "只返回 JSON，字段：fit_score(0-100)、fit_level(high/medium/low/irrelevant)、"
+    "decision(target_customer/experienced_seller/logistics_partner/supplier_peer/irrelevant)、"
+    "intent_type(no_source_starter/sourcing_need/active_cross_border_seller/logistics_partner/peer_supplier/training_agency/consumer/other)、"
+    "customer_priority(A+/A/B/C/D/E)、evidence、suggestion。evidence 和 suggestion 用简体中文。"
 )
 
 
 def _judge_one(cfg: dict[str, str], user: XhsUser, texts: list[str]) -> dict[str, Any] | None:
+    rule = _rule_based_judge(user, texts)
+    evidence_texts = _compact_judge_texts(texts)
     payload = {
         "model": cfg["model"],
         "temperature": 0.1,
+        "max_tokens": _env_int("X9_FT_GPT_MAX_TOKENS", 420, minimum=160, maximum=1000),
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": _JUDGE_SYSTEM},
             {"role": "user", "content": json.dumps({
                 "prompt_version": PROMPT_VERSION,
                 "username": user.username_clean,
+                "account": user.account_clean or user.xhs_user_id,
                 "bio": user.bio_clean,
                 "follower_count": user.follower_count,
                 "location": user.location_text,
-                "evidence_texts": [t for t in texts if t][:20],
+                "platform": user.platform,
+                "rule_precheck": rule,
+                "evidence_texts": evidence_texts,
             }, ensure_ascii=False)},
         ],
     }
@@ -854,7 +1100,61 @@ def _judge_one(cfg: dict[str, str], user: XhsUser, texts: list[str]) -> dict[str
         resp.raise_for_status()
         content = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
     parsed = json.loads(content)
+    parsed = _normalize_judge_result(parsed, rule)
     return {"parsed": parsed, "raw": content}
+
+
+def _judge_texts_for_user(db: Session, user: XhsUser) -> list[str]:
+    texts: list[str] = [
+        user.username_clean or "",
+        user.account_clean or "",
+        user.bio_clean or "",
+        user.last_keyword or "",
+    ]
+    texts.extend(
+        row for row in db.scalars(
+            select(XhsComment.content_clean)
+            .where(XhsComment.user_id == user.id)
+            .order_by(XhsComment.created_at.desc())
+            .limit(20)
+        ).all() if row
+    )
+    for keyword, evidence in db.execute(
+        select(XhsUserSource.keyword, XhsUserSource.evidence_text)
+        .where(XhsUserSource.user_id == user.id)
+        .order_by(XhsUserSource.created_at.desc())
+        .limit(12)
+    ).all():
+        if keyword:
+            texts.append(str(keyword))
+        if evidence:
+            texts.append(str(evidence))
+    for title, desc in db.execute(
+        select(XhsNote.title_clean, XhsNote.desc_clean)
+        .where(XhsNote.author_user_id == user.id)
+        .order_by(XhsNote.created_at.desc())
+        .limit(8)
+    ).all():
+        if title:
+            texts.append(str(title))
+        if desc:
+            texts.append(str(desc))
+    return [t for t in texts if clean_text(t)]
+
+
+def _judge_user_view(user: XhsUser) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=user.id,
+        department_code=user.department_code,
+        platform=user.platform,
+        username_clean=user.username_clean,
+        account_clean=user.account_clean,
+        xhs_user_id=user.xhs_user_id,
+        bio_clean=user.bio_clean,
+        follower_count=user.follower_count,
+        location_text=user.location_text,
+        last_keyword=user.last_keyword,
+    )
 
 
 def judge_users_with_gpt(db: Session, *, department_code: str | None = None, limit: int = 10, force: bool = False) -> dict[str, Any]:
@@ -867,29 +1167,27 @@ def judge_users_with_gpt(db: Session, *, department_code: str | None = None, lim
         stmt = stmt.where(XhsUser.department_code == department_code)
     candidates = list(db.scalars(stmt.order_by(XhsUser.created_at.desc()).limit(limit)).all())
 
-    judged = 0
+    jobs: list[tuple[XhsUser, SimpleNamespace, list[str]]] = []
     for user in candidates:
-        if judged >= limit:
+        if len(jobs) >= limit:
             break
         if not force:
             existing = db.scalar(select(XhsAiJudgment.id).where(XhsAiJudgment.user_id == user.id, XhsAiJudgment.prompt_version == PROMPT_VERSION))
             if existing:
                 continue
-        comment_texts = [
-            row for row in db.scalars(
-                select(XhsComment.content_clean).where(XhsComment.user_id == user.id).limit(20)
-            ).all() if row
-        ]
-        try:
-            result = _judge_one(cfg, user, [user.bio_clean or "", *comment_texts])
-        except Exception as exc:  # noqa: BLE001
+        jobs.append((user, _judge_user_view(user), _judge_texts_for_user(db, user)))
+
+    concurrency = min(_env_int("X9_FT_GPT_CONCURRENCY", 4, minimum=1, maximum=12), max(len(jobs), 1))
+
+    def persist_result(user: XhsUser, result: dict[str, Any] | None, error: Exception | None = None) -> bool:
+        if error is not None:
             db.add(XhsAiJudgment(
                 id=_uid(), department_code=user.department_code, platform=user.platform, user_id=user.id,
                 model=cfg["model"], prompt_version=PROMPT_VERSION, decision="error",
-                judgment=None, raw_response=str(exc)[:1000],
+                judgment=None, raw_response=str(error)[:1000],
             ))
             db.commit()
-            continue
+            return False
         p = result["parsed"] if result else {}
         try:
             fit_score = int(round(float(p.get("fit_score")))) if p.get("fit_score") is not None else None
@@ -906,5 +1204,33 @@ def judge_users_with_gpt(db: Session, *, department_code: str | None = None, lim
             raw_response=(result["raw"] if result else None),
         ))
         db.commit()
-        judged += 1
-    return {"ok": True, "judged": judged}
+        return True
+
+    judged = 0
+    errors = 0
+    if concurrency <= 1 or len(jobs) <= 1:
+        for user, view, texts in jobs:
+            try:
+                result = _judge_one(cfg, view, texts)
+            except Exception as exc:  # noqa: BLE001
+                errors += 1
+                persist_result(user, None, exc)
+                continue
+            judged += 1 if persist_result(user, result) else 0
+        return {"ok": True, "judged": judged, "errors": errors, "concurrency": concurrency}
+
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ft-gpt-judge") as executor:
+        futures = {
+            executor.submit(_judge_one, cfg, view, texts): user
+            for user, view, texts in jobs
+        }
+        for future in as_completed(futures):
+            user = futures[future]
+            try:
+                result = future.result()
+            except Exception as exc:  # noqa: BLE001
+                errors += 1
+                persist_result(user, None, exc)
+                continue
+            judged += 1 if persist_result(user, result) else 0
+    return {"ok": True, "judged": judged, "errors": errors, "concurrency": concurrency}

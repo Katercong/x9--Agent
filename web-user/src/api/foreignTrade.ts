@@ -159,6 +159,7 @@ export interface LeadItem {
   fit_level?: string | null;
   decision?: string | null;
   intent_type?: string | null;
+  customer_priority?: string | null;
   judgment?: string | null;
   judgment_data?: Record<string, unknown> | null;
   judgment_evidence?: string | null;
