@@ -13,6 +13,7 @@ from .extension_command import ExtensionCommand
 from .extension_run_progress import ExtensionRunProgress
 from .extension_session import ExtensionSession
 from .followup_task import FollowupTask
+from .foreign_trade_contact import ForeignTradeContactRecord
 from .gmail_account import GmailAccount
 from .gmail_sync_state import GmailSyncState
 from .outreach_email import OutreachEmail
@@ -65,6 +66,7 @@ __all__ = [
     "ExtensionRunProgress",
     "ExtensionSession",
     "FollowupTask",
+    "ForeignTradeContactRecord",
     "GmailAccount",
     "GmailSyncState",
     "OutreachEmail",

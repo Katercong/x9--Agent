@@ -353,6 +353,7 @@ def _ensure_foreign_trade_model_columns(conn) -> None:
         "xhs_user_history_posts",
         "xhs_extracted_contacts",
         "xhs_ai_judgments",
+        "foreign_trade_contact_records",
     ]
     for table_name in foreign_trade_tables:
         table = Base.metadata.tables.get(table_name)

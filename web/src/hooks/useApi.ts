@@ -1,4 +1,4 @@
-import { useQuery, type UseQueryOptions } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
 import { endpoints } from '@/api/endpoints';
 import { authApi } from '@/api/authClient';
 import type { ListResponse } from '@/api/types';
@@ -72,6 +72,62 @@ export function useDepartmentDashboardSummary() {
 
 export function useUnifiedDashboard() {
   return useQuery({ queryKey: ['dashboard', 'unified'], queryFn: () => endpoints.unifiedDashboard() });
+}
+
+export function useOutreachTracking(params?: Params) {
+  return useQuery({
+    queryKey: ['outreach', 'tracking', params],
+    queryFn: async () => {
+      const pageSize = 200;
+      const first = await endpoints.outreachTracking({ ...params, limit: pageSize, offset: 0 });
+      const items = [...(first.items ?? [])];
+      while (items.length < first.total && items.length < 1000) {
+        const next = await endpoints.outreachTracking({ ...params, limit: pageSize, offset: items.length });
+        if (!next.items?.length) break;
+        items.push(...next.items);
+      }
+      return { ...first, limit: items.length, offset: 0, items };
+    },
+  });
+}
+
+export function useOutreachArchive(params?: Params) {
+  return useQuery({ queryKey: ['outreach', 'archive', params], queryFn: () => endpoints.outreachArchive(params) });
+}
+
+export function useReplyOutreachArchive() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Parameters<typeof endpoints.replyOutreachArchive>[1] }) =>
+      endpoints.replyOutreachArchive(id, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['outreach', 'tracking'] });
+      qc.invalidateQueries({ queryKey: ['outreach', 'archive'] });
+      qc.invalidateQueries({ queryKey: ['dashboard', 'unified'] });
+      qc.invalidateQueries({ queryKey: ['gmail', 'reply-sync-status'] });
+    },
+  });
+}
+
+export function useGmailReplySyncStatus() {
+  return useQuery({
+    queryKey: ['gmail', 'reply-sync-status'],
+    queryFn: () => endpoints.gmailReplySyncStatus(),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useGmailSyncReplies() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body?: Parameters<typeof endpoints.gmailSyncReplies>[0]) => endpoints.gmailSyncReplies(body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['gmail', 'reply-sync-status'] });
+      qc.invalidateQueries({ queryKey: ['outreach', 'tracking'] });
+      qc.invalidateQueries({ queryKey: ['outreach', 'archive'] });
+      qc.invalidateQueries({ queryKey: ['dashboard', 'unified'] });
+    },
+  });
 }
 
 export function useAnalyticsMe(days = 30) {

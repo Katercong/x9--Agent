@@ -18,12 +18,13 @@ import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal, get_db
-from ..models.company_lead import CompanyLead
+from ..models.company_lead import CompanyLead, CompanyObservation
+from ..models.foreign_trade_contact import ForeignTradeContactRecord
 from ..models.social_lead import (
     XhsAiJudgment,
     XhsComment,
@@ -62,6 +63,10 @@ SOURCE_ORDER = ("jobs", "social", "import")
 SOURCE_LABELS = {"jobs": "招聘网站", "social": "小红书抖音", "import": "表格导入"}
 
 DECISION_ORDER = (
+    "high_priority",
+    "follow_up",
+    "nurture",
+    "ignore",
     "target_customer",
     "experienced_seller",
     "logistics_partner",
@@ -69,10 +74,6 @@ DECISION_ORDER = (
     "potential",
     "irrelevant",
     "error",
-    "high_priority",
-    "follow_up",
-    "nurture",
-    "ignore",
 )
 DECISION_LABELS = {
     "target_customer": "目标客户",
@@ -87,6 +88,14 @@ DECISION_LABELS = {
     "nurture": "培育",
     "ignore": "忽略",
 }
+CUSTOMER_RECOMMENDATION_DECISIONS = (
+    "high_priority",
+    "follow_up",
+    "nurture",
+    "target_customer",
+    "experienced_seller",
+    "potential",
+)
 
 PLATFORM_LABELS = {
     "51job": "前程无忧",
@@ -110,6 +119,15 @@ PLATFORM_ALIASES = {
 # Recruitment platforms feed the "jobs" source; table imports use this marker.
 IMPORT_SOURCE_TYPES = ("table_import", "csv_import", "xlsx_import")
 CHINA_TZ = timezone(timedelta(hours=8))
+CONTACT_STATUSES = {
+    "pending_contact",
+    "contact_started",
+    "follow_up",
+    "replied",
+    "interested",
+    "invalid",
+    "converted",
+}
 
 
 def _scope(stmt, model, department_code: str | None):
@@ -137,12 +155,31 @@ def _group_counts(db: Session, model, column, department_code: str | None) -> di
 
 
 def _current_judgment_decision_counts(db: Session, department_code: str | None) -> dict[str, int]:
-    stmt = select(XhsAiJudgment.decision, func.count()).where(XhsAiJudgment.prompt_version == PROMPT_VERSION).group_by(XhsAiJudgment.decision)
+    prompt_version = _active_judgment_prompt_version(db, department_code)
+    stmt = select(XhsAiJudgment.decision, func.count()).where(XhsAiJudgment.prompt_version == prompt_version).group_by(XhsAiJudgment.decision)
     stmt = _scope(stmt, XhsAiJudgment, department_code)
     out: dict[str, int] = {}
     for value, count in db.execute(stmt).all():
         out[str(value or "").strip()] = int(count or 0)
     return out
+
+
+def _active_judgment_prompt_version(db: Session, department_code: str | None) -> str:
+    current_stmt = select(func.count()).select_from(XhsAiJudgment).where(
+        XhsAiJudgment.prompt_version == PROMPT_VERSION
+    )
+    current_stmt = _scope(current_stmt, XhsAiJudgment, department_code)
+    if int(db.scalar(current_stmt) or 0) > 0:
+        return PROMPT_VERSION
+
+    fallback_stmt = select(XhsAiJudgment.prompt_version).where(XhsAiJudgment.prompt_version.isnot(None))
+    fallback_stmt = _scope(fallback_stmt, XhsAiJudgment, department_code)
+    row = db.execute(
+        fallback_stmt.group_by(XhsAiJudgment.prompt_version)
+        .order_by(func.max(XhsAiJudgment.created_at).desc())
+        .limit(1)
+    ).first()
+    return str(row[0]) if row and row[0] else PROMPT_VERSION
 
 
 def _today() -> date:
@@ -316,9 +353,8 @@ def _build_dashboard(db: Session, department_code: str | None) -> dict[str, Any]
     # ---- social GPT judgments ----
     decision_counts = _current_judgment_decision_counts(db, department_code)
     high_intent = int(
-        decision_counts.get("target_customer", 0)
-        + decision_counts.get("experienced_seller", 0)
-        + decision_counts.get("high_priority", 0)
+        decision_counts.get("high_priority", 0)
+        + decision_counts.get("follow_up", 0)
     )
     social_contacts = _count(db, XhsExtractedContact, department_code)
 
@@ -382,6 +418,7 @@ def _merge_tier(*buckets: dict[str, int]) -> dict[str, int]:
 def foreign_trade_collection(
     request: Request,
     channel: str = Query(default="jobs"),
+    recommended: bool = Query(default=False),
     limit: int = Query(default=20, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     _user: dict = Depends(current_user),
@@ -390,8 +427,29 @@ def foreign_trade_collection(
     department_code = current_department_code(request)
     channel = (channel or "jobs").lower().strip()
     if channel == "social":
-        return _social_collection(db, department_code, limit, offset)
+        return _social_collection(db, department_code, limit, offset, recommended=recommended)
     return _jobs_collection(db, department_code, limit, offset)
+
+
+@router.get("/social-users/{user_id}")
+def foreign_trade_social_user_detail(
+    user_id: str,
+    request: Request,
+    _user: dict = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    department_code = current_department_code(request)
+    stmt = _scope(select(XhsUser).where(XhsUser.id == user_id), XhsUser, department_code)
+    user = db.scalar(stmt)
+    if user is None:
+        raise HTTPException(status_code=404, detail="social user not found")
+    prompt_version = _active_judgment_prompt_version(db, department_code)
+    items = _social_items_complete(db, [user], prompt_version=prompt_version)
+    return {
+        "ok": True,
+        "prompt_version": prompt_version,
+        "item": items[0] if items else None,
+    }
 
 
 @router.get("/cleaning/status")
@@ -426,6 +484,301 @@ def foreign_trade_cleaning_run(
         force_gpt=bool(payload.get("force_gpt")),
         gpt_limit=int(payload["gpt_limit"]) if payload.get("gpt_limit") else None,
     )
+
+
+@router.get("/followups")
+def foreign_trade_followups(
+    request: Request,
+    lead_type: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    _user: dict = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    department_code = current_department_code(request)
+    stmt = select(ForeignTradeContactRecord)
+    if department_code is not None:
+        stmt = stmt.where(ForeignTradeContactRecord.department_code == department_code)
+    if lead_type:
+        stmt = stmt.where(ForeignTradeContactRecord.lead_type == lead_type)
+    if status and status != "all":
+        stmt = stmt.where(ForeignTradeContactRecord.status == status)
+
+    total = int(db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+    rows = db.scalars(
+        stmt.order_by(
+            func.coalesce(
+                ForeignTradeContactRecord.last_followup_at,
+                ForeignTradeContactRecord.opened_at,
+                ForeignTradeContactRecord.updated_at,
+                ForeignTradeContactRecord.created_at,
+            ).desc()
+        ).limit(limit).offset(offset)
+    ).all()
+
+    counts_stmt = select(ForeignTradeContactRecord.status, func.count()).group_by(ForeignTradeContactRecord.status)
+    if department_code is not None:
+        counts_stmt = counts_stmt.where(ForeignTradeContactRecord.department_code == department_code)
+    counts = {str(key or "pending_contact"): int(value or 0) for key, value in db.execute(counts_stmt).all()}
+    return {
+        "ok": True,
+        "total": total,
+        "counts": counts,
+        "items": [_contact_record_item(row) for row in rows],
+    }
+
+
+@router.post("/recommendations/{lead_type}/{lead_id}/start-contact")
+def foreign_trade_start_contact(
+    lead_type: str,
+    lead_id: str,
+    request: Request,
+    body: dict[str, Any] | None = Body(default=None),
+    user: dict = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    lead_type = _normalize_lead_type(lead_type)
+    department_code = current_department_code(request)
+    now = _utc_now_naive()
+    payload = body or {}
+
+    if lead_type == "customer":
+        lead = _find_social_lead(db, lead_id, department_code)
+        card = _social_contact_card(db, lead)
+    else:
+        lead = _find_company_lead(db, lead_id, department_code)
+        card = _company_contact_card(db, lead)
+        if getattr(lead, "status", None) in {None, "", "new"}:
+            lead.status = "contacted"
+
+    record = _find_contact_record(db, card["department_code"], lead_type, lead_id)
+    if record is None:
+        record = ForeignTradeContactRecord(
+            department_code=card["department_code"],
+            lead_type=lead_type,
+            lead_id=lead_id,
+        )
+        db.add(record)
+
+    record.lead_name = card.get("lead_name")
+    record.platform = card.get("platform")
+    record.account = card.get("account")
+    record.profile_url = card.get("profile_url")
+    record.comment_url = payload.get("comment_url") or card.get("comment_url")
+    record.source_url = payload.get("source_url") or card.get("source_url")
+    record.contact_label = payload.get("contact_label") or card.get("contact_label")
+    record.status = "contact_started"
+    record.owner_user_id = str(user.get("id") or "")
+    record.owner_name = _first_text(user.get("display_name"), user.get("username"), user.get("email"), "")
+    record.opened_count = int(record.opened_count or 0) + 1
+    record.opened_at = now
+    record.updated_at = now
+    record.metadata_json = json.dumps({
+        "last_action": "start_contact",
+        "source": "portal_recommendations",
+        "client_payload": payload,
+    }, ensure_ascii=False)
+    db.commit()
+    db.refresh(record)
+
+    open_url = _first_text(record.profile_url, record.source_url, record.comment_url)
+    return {"ok": True, "item": _contact_record_item(record), "open_url": open_url}
+
+
+@router.post("/followups/{record_id}/submit")
+def foreign_trade_submit_followup(
+    record_id: str,
+    request: Request,
+    body: dict[str, Any] | None = Body(default=None),
+    user: dict = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    payload = body or {}
+    department_code = current_department_code(request)
+    stmt = select(ForeignTradeContactRecord).where(ForeignTradeContactRecord.id == record_id)
+    if department_code is not None:
+        stmt = stmt.where(ForeignTradeContactRecord.department_code == department_code)
+    record = db.scalar(stmt)
+    if record is None:
+        raise HTTPException(status_code=404, detail="followup record not found")
+
+    status = _normalize_contact_status(payload.get("status") or record.status)
+    now = _utc_now_naive()
+    record.status = status
+    record.followup_result = _first_text(payload.get("result"), payload.get("followup_result"), status)
+    record.followup_note = _first_text(payload.get("note"), payload.get("followup_note"), record.followup_note, "")
+    record.next_followup_at = _parse_client_datetime(payload.get("next_followup_at"))
+    record.last_followup_at = now
+    record.updated_at = now
+    record.owner_user_id = record.owner_user_id or str(user.get("id") or "")
+    record.owner_name = record.owner_name or _first_text(user.get("display_name"), user.get("username"), user.get("email"), "")
+
+    if record.lead_type == "company":
+        company = db.get(CompanyLead, record.lead_id)
+        if company is not None:
+            company.status = _company_status_from_contact(status, company.status)
+
+    db.commit()
+    db.refresh(record)
+    return {"ok": True, "item": _contact_record_item(record)}
+
+
+def _normalize_lead_type(value: str) -> str:
+    key = (value or "").strip().lower()
+    if key in {"customer", "social", "xhs", "douyin"}:
+        return "customer"
+    if key in {"company", "company_lead"}:
+        return "company"
+    raise HTTPException(status_code=400, detail="lead_type must be customer or company")
+
+
+def _normalize_contact_status(value: Any) -> str:
+    key = _text(value) or "follow_up"
+    if key == "contacted":
+        key = "contact_started"
+    if key not in CONTACT_STATUSES:
+        raise HTTPException(status_code=400, detail="invalid followup status")
+    return key
+
+
+def _find_social_lead(db: Session, lead_id: str, department_code: str | None) -> XhsUser:
+    stmt = select(XhsUser).where(XhsUser.id == lead_id)
+    stmt = _scope(stmt, XhsUser, department_code)
+    lead = db.scalar(stmt)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="customer lead not found")
+    return lead
+
+
+def _find_company_lead(db: Session, lead_id: str, department_code: str | None) -> CompanyLead:
+    stmt = select(CompanyLead).where(CompanyLead.id == lead_id)
+    stmt = _scope(stmt, CompanyLead, department_code)
+    lead = db.scalar(stmt)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="company lead not found")
+    return lead
+
+
+def _find_contact_record(
+    db: Session,
+    department_code: str,
+    lead_type: str,
+    lead_id: str,
+) -> ForeignTradeContactRecord | None:
+    return db.scalar(
+        select(ForeignTradeContactRecord).where(
+            ForeignTradeContactRecord.department_code == department_code,
+            ForeignTradeContactRecord.lead_type == lead_type,
+            ForeignTradeContactRecord.lead_id == lead_id,
+        )
+    )
+
+
+def _social_contact_card(db: Session, lead: XhsUser) -> dict[str, Any]:
+    comments = _recent_comments_by_user(db, [lead.id]).get(lead.id, [])
+    contacts = _contacts_by_user(db, [lead.id]).get(lead.id, [])
+    platform = _first_text(lead.platform, "xhs")
+    account = _first_text(lead.account_clean, getattr(lead, "account", None), lead.xhs_user_id, lead.external_user_id, lead.id)
+    platform_label = "抖音号" if platform == "douyin" else "小红书号"
+    return {
+        "department_code": _first_text(getattr(lead, "department_code", None), "foreign_trade"),
+        "lead_name": _first_text(lead.username_clean, getattr(lead, "username", None), account),
+        "platform": platform,
+        "account": account,
+        "profile_url": _first_text(lead.canonical_profile_url, getattr(lead, "profile_url", None), ""),
+        "comment_url": _first_text(comments[0].get("note_url") if comments else None, ""),
+        "source_url": _first_text(comments[0].get("note_url") if comments else None, ""),
+        "contact_label": _first_text(
+            _contact_display([{"type": c.get("type"), "value": c.get("value")} for c in contacts]),
+            f"{platform_label}: {account}",
+        ),
+    }
+
+
+def _company_contact_card(db: Session, lead: CompanyLead) -> dict[str, Any]:
+    contacts = _contact_items(
+        ("email", lead.contact_email),
+        ("phone", lead.contact_phone),
+        ("wechat", lead.hr_wechat),
+    )
+    source_url = _latest_company_source_url(db, lead.id)
+    return {
+        "department_code": _first_text(getattr(lead, "department_code", None), "foreign_trade"),
+        "lead_name": _first_text(lead.company_name, lead.platform_company_id, lead.id),
+        "platform": _first_text(lead.platform, lead.source_type, "company"),
+        "account": _first_text(lead.platform_company_id, lead.contact_email, ""),
+        "profile_url": source_url,
+        "comment_url": "",
+        "source_url": source_url,
+        "contact_label": _first_text(_contact_display(contacts), lead.contact_name, lead.contact_email, lead.contact_phone, "待补充联系方式"),
+    }
+
+
+def _latest_company_source_url(db: Session, company_lead_id: str) -> str:
+    return _first_text(
+        db.scalar(
+            select(CompanyObservation.source_url)
+            .where(CompanyObservation.company_lead_id == company_lead_id)
+            .order_by(CompanyObservation.scraped_at.desc())
+            .limit(1)
+        ),
+        "",
+    )
+
+
+def _contact_record_item(record: ForeignTradeContactRecord) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "department_code": record.department_code,
+        "lead_type": record.lead_type,
+        "lead_id": record.lead_id,
+        "lead_name": record.lead_name,
+        "platform": record.platform,
+        "account": record.account,
+        "profile_url": record.profile_url,
+        "comment_url": record.comment_url,
+        "source_url": record.source_url,
+        "contact_label": record.contact_label,
+        "status": record.status,
+        "owner_user_id": record.owner_user_id,
+        "owner_name": record.owner_name,
+        "opened_count": int(record.opened_count or 0),
+        "opened_at": _iso(record.opened_at),
+        "last_followup_at": _iso(record.last_followup_at),
+        "next_followup_at": _iso(record.next_followup_at),
+        "followup_result": record.followup_result,
+        "followup_note": record.followup_note,
+        "created_at": _iso(record.created_at),
+        "updated_at": _iso(record.updated_at),
+    }
+
+
+def _company_status_from_contact(contact_status: str, current: str | None) -> str:
+    if contact_status in {"converted", "interested"}:
+        return "replied"
+    if contact_status == "invalid":
+        return "dropped"
+    if contact_status in {"contact_started", "follow_up", "replied"}:
+        return "contacted"
+    return current or "new"
+
+
+def _utc_now_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _parse_client_datetime(value: Any) -> datetime | None:
+    text = _text(value)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=CHINA_TZ)
+    return parsed.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _jobs_collection(db: Session, department_code: str | None, limit: int, offset: int) -> dict[str, Any]:
@@ -557,10 +910,21 @@ def _talent_item(t: TalentLead) -> dict[str, Any]:
     }
 
 
-def _social_collection(db: Session, department_code: str | None, limit: int, offset: int) -> dict[str, Any]:
+def _social_collection(
+    db: Session,
+    department_code: str | None,
+    limit: int,
+    offset: int,
+    *,
+    recommended: bool = False,
+) -> dict[str, Any]:
     user_total = _count(db, XhsUser, department_code)
+    prompt_version = _active_judgment_prompt_version(db, department_code)
+    recommended_total = _recommended_social_total(db, department_code, prompt_version)
     stats = {
         "total": user_total,
+        "recommended_total": recommended_total,
+        "judgment_prompt_version": prompt_version,
         "today": _today_count(db, XhsUser, department_code),
         "runs": _count(db, XhsCollectionRun, department_code),
         "with_contact": _count(db, XhsUser, department_code, XhsUser.has_contact == 1),
@@ -570,24 +934,79 @@ def _social_collection(db: Session, department_code: str | None, limit: int, off
         "sources": _count(db, XhsUserSource, department_code),
         "history_posts": _count(db, XhsUserHistoryPost, department_code),
         "contacts": _count(db, XhsExtractedContact, department_code),
-        "judgments": _count(db, XhsAiJudgment, department_code, XhsAiJudgment.prompt_version == PROMPT_VERSION),
+        "judgments": _count(db, XhsAiJudgment, department_code, XhsAiJudgment.prompt_version == prompt_version),
         "cleaned": _count(db, XhsUser, department_code, XhsUser.clean_status == "cleaned"),
         "high_intent": _count(
             db,
             XhsAiJudgment,
             department_code,
-            XhsAiJudgment.prompt_version == PROMPT_VERSION,
-            XhsAiJudgment.decision.in_(("target_customer", "experienced_seller", "high_priority")),
+            XhsAiJudgment.prompt_version == prompt_version,
+            XhsAiJudgment.decision.in_(("high_priority", "follow_up")),
         ),
     }
-    stmt = _scope(
-        select(XhsUser).order_by(
-            func.coalesce(XhsUser.last_seen_at, XhsUser.first_seen_at, XhsUser.created_at).desc()
-        ),
-        XhsUser, department_code,
-    ).limit(limit).offset(offset)
-    users = list(db.scalars(stmt).all())
-    return {"ok": True, "channel": "social", "stats": stats, "total": user_total, "items": _social_items_complete(db, users)}
+    if recommended:
+        users = _recommended_social_users(db, department_code, prompt_version, limit, offset)
+        total = recommended_total
+    else:
+        stmt = _scope(
+            select(XhsUser).order_by(
+                func.coalesce(XhsUser.last_seen_at, XhsUser.first_seen_at, XhsUser.created_at).desc()
+            ),
+            XhsUser, department_code,
+        ).limit(limit).offset(offset)
+        users = list(db.scalars(stmt).all())
+        total = user_total
+    return {"ok": True, "channel": "social", "stats": stats, "total": total, "items": _social_items_complete(db, users, prompt_version=prompt_version)}
+
+
+def _recommended_social_total(db: Session, department_code: str | None, prompt_version: str) -> int:
+    stmt = select(func.count(func.distinct(XhsAiJudgment.user_id))).where(
+        XhsAiJudgment.prompt_version == prompt_version,
+        XhsAiJudgment.user_id.isnot(None),
+        XhsAiJudgment.decision.in_(CUSTOMER_RECOMMENDATION_DECISIONS),
+    )
+    stmt = _scope(stmt, XhsAiJudgment, department_code)
+    return int(db.scalar(stmt) or 0)
+
+
+def _recommended_social_users(
+    db: Session,
+    department_code: str | None,
+    prompt_version: str,
+    limit: int,
+    offset: int,
+) -> list[XhsUser]:
+    fetch_limit = max((limit + offset) * 5, 300)
+    stmt = select(XhsAiJudgment).where(
+        XhsAiJudgment.prompt_version == prompt_version,
+        XhsAiJudgment.user_id.isnot(None),
+        XhsAiJudgment.decision.in_(CUSTOMER_RECOMMENDATION_DECISIONS),
+    )
+    stmt = _scope(stmt, XhsAiJudgment, department_code)
+    judgments = db.scalars(
+        stmt.order_by(
+            func.coalesce(XhsAiJudgment.fit_score, 0).desc(),
+            XhsAiJudgment.created_at.desc(),
+        ).limit(fetch_limit)
+    ).all()
+    ordered_ids: list[str] = []
+    seen: set[str] = set()
+    for judgment in judgments:
+        user_id = judgment.user_id
+        if not user_id or user_id in seen:
+            continue
+        seen.add(user_id)
+        ordered_ids.append(user_id)
+    page_ids = ordered_ids[offset:offset + limit]
+    if not page_ids:
+        return []
+    users = {
+        user.id: user
+        for user in db.scalars(
+            _scope(select(XhsUser).where(XhsUser.id.in_(page_ids)), XhsUser, department_code)
+        ).all()
+    }
+    return [users[user_id] for user_id in page_ids if user_id in users]
 
 
 def _social_items(db: Session, users: list[XhsUser]) -> list[dict[str, Any]]:
@@ -673,7 +1092,7 @@ def _social_items(db: Session, users: list[XhsUser]) -> list[dict[str, Any]]:
     return items
 
 
-def _social_items_complete(db: Session, users: list[XhsUser]) -> list[dict[str, Any]]:
+def _social_items_complete(db: Session, users: list[XhsUser], prompt_version: str | None = None) -> list[dict[str, Any]]:
     if not users:
         return []
     user_ids = [u.id for u in users]
@@ -682,7 +1101,7 @@ def _social_items_complete(db: Session, users: list[XhsUser]) -> list[dict[str, 
     notes_by_user = _recent_notes_by_user(db, user_ids)
     sources_by_user = _sources_by_user(db, user_ids)
     history_by_user = _history_by_user(db, user_ids)
-    judgments = _latest_judgments(db, user_ids)
+    judgments = _latest_judgments(db, user_ids, prompt_version or PROMPT_VERSION)
 
     items: list[dict[str, Any]] = []
     for u in users:
@@ -880,11 +1299,11 @@ def _history_by_user(db: Session, user_ids: list[str]) -> dict[str, list[dict[st
     return out
 
 
-def _latest_judgments(db: Session, user_ids: list[str]) -> dict[str, XhsAiJudgment]:
+def _latest_judgments(db: Session, user_ids: list[str], prompt_version: str = PROMPT_VERSION) -> dict[str, XhsAiJudgment]:
     judgments: dict[str, XhsAiJudgment] = {}
     for judgment in db.scalars(
         select(XhsAiJudgment)
-        .where(XhsAiJudgment.user_id.in_(user_ids), XhsAiJudgment.prompt_version == PROMPT_VERSION)
+        .where(XhsAiJudgment.user_id.in_(user_ids), XhsAiJudgment.prompt_version == prompt_version)
         .order_by(XhsAiJudgment.user_id, XhsAiJudgment.created_at.desc())
     ).all():
         if judgment.user_id not in judgments:

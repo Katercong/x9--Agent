@@ -33,7 +33,7 @@ const menuText: Record<Language, Record<string, string>> = {
     collectShop: '采集 · TikTok Shop',
     collectLeads: '采集 · X9 线索',
     collectImport: '采集 · 表格导入',
-    recommendations: '新达人推荐库',
+    recommendations: '客户推荐',
     emails: '邮件跟踪系统',
     export: '数据工具',
     hotkw: 'TikTok 热搜',
@@ -42,7 +42,7 @@ const menuText: Record<Language, Record<string, string>> = {
     ftCollectJobs: '采集 · 招聘网站',
     ftCollectSocial: '采集 · 小红书抖音',
     ftCleaning: '数据清洗',
-    ftRecommendations: '线索推荐',
+    ftRecommendations: '客户推荐',
   },
   en: {
     workbench: 'Workbench',
@@ -52,7 +52,7 @@ const menuText: Record<Language, Record<string, string>> = {
     collectShop: 'TikTok Shop',
     collectLeads: 'X9 Leads',
     collectImport: 'Table Import',
-    recommendations: 'New Creator Recommendations',
+    recommendations: 'Client Recommendations',
     emails: 'Email Tracking System',
     export: 'Data Tools',
     hotkw: 'TikTok Trends',
@@ -61,7 +61,7 @@ const menuText: Record<Language, Record<string, string>> = {
     ftCollectJobs: 'Recruitment Sites',
     ftCollectSocial: 'Xiaohongshu / Douyin',
     ftCleaning: 'Data Cleaning',
-    ftRecommendations: 'Lead Recommendations',
+    ftRecommendations: 'Client Recommendations',
   },
 };
 
@@ -108,7 +108,7 @@ function buildForeignTradePortalMenu(language: Language): MenuEntry[] {
       ],
     },
     { key: 'recommendations', label: t.ftRecommendations, to: '/recommendations', icon: Sparkles },
-    { key: 'emails', label: t.emails, to: '/emails', icon: MailCheck },
+    { key: 'emails', label: language === 'en' ? 'Follow-ups' : '建联跟进', to: '/emails', icon: MailCheck },
     { key: 'export', label: t.export, to: '/export', icon: ArrowDownToLine },
     { key: 'assistant', label: t.assistant, to: '/assistant', icon: Bot },
   ];
@@ -129,8 +129,10 @@ const pageMetaByLanguage: Record<Language, Record<string, PageMeta>> = {
     '/collect-leads': { title: '采集 · X9 线索', subtitle: 'www.tiktok.com 卡片流 · 联系方式覆盖与趋势' },
     '/collect-import': { title: '采集 · 表格导入', subtitle: 'CSV / XLSX 批量导入 · 国家 / Tier / 质量分布' },
     '/creators-info': { title: '新达人推荐库', subtitle: '已合并到只展示未建联达人的推荐页面' },
-    '/recommendations': { title: '新达人推荐库', subtitle: '只推荐未建联、未发送邮件的达人 · 点击达人进入详情与邮件建联' },
-    '/emails': { title: '邮件跟踪系统', subtitle: '按达人和邮件线程跟踪建联进度，优先处理待跟进记录' },
+    '/recommendations': { title: '客户推荐', subtitle: '客户推荐和公司推荐统一管理，点击名片发起建联并进入跟进流程' },
+    '/ft-recommendations-preview': { title: '客户推荐', subtitle: '客户推荐和公司推荐统一管理，点击名片发起建联并进入跟进流程' },
+    '/emails': { title: '建联跟进系统', subtitle: '客户推荐和公司推荐的建联状态、跟进备注与下一步动作' },
+    '/ft-followups-preview': { title: '建联跟进系统', subtitle: '客户推荐和公司推荐的建联状态、跟进备注与下一步动作' },
     '/export': { title: '数据工具', subtitle: '导出文件、下载模板，正式导入统一到表格导入页' },
     '/hotkw': { title: 'TikTok 热搜', subtitle: '热门关键词与增长趋势' },
     '/assistant': { title: 'AI 助手', subtitle: '智能问答与运维指引' },
@@ -147,8 +149,10 @@ const pageMetaByLanguage: Record<Language, Record<string, PageMeta>> = {
     '/collect-leads': { title: 'X9 Leads Collection', subtitle: 'TikTok card feed, contact coverage, and trend monitoring' },
     '/collect-import': { title: 'Table Import', subtitle: 'CSV / XLSX batch import with country, tier, and quality distribution' },
     '/creators-info': { title: 'New Creator Recommendations', subtitle: 'Merged into the uncontacted creator recommendation page' },
-    '/recommendations': { title: 'New Creator Recommendations', subtitle: 'Only uncontacted creators without sent emails, with detail and email outreach' },
-    '/emails': { title: 'Email Tracking System', subtitle: 'Track outreach by creator and email thread with follow-ups prioritized' },
+    '/recommendations': { title: 'Client Recommendations', subtitle: 'Manage customer and company recommendations with contact-card outreach' },
+    '/ft-recommendations-preview': { title: 'Client Recommendations', subtitle: 'Manage customer and company recommendations with contact-card outreach' },
+    '/emails': { title: 'Follow-up System', subtitle: 'Track foreign-trade customer and company outreach status' },
+    '/ft-followups-preview': { title: 'Follow-up System', subtitle: 'Track foreign-trade customer and company outreach status' },
     '/export': { title: 'Data Tools', subtitle: 'Export files, download templates, and route formal imports to Table Import' },
     '/hotkw': { title: 'TikTok Trends', subtitle: 'Trending keywords and growth signals' },
     '/assistant': { title: 'AI Assistant', subtitle: 'Smart Q&A and operations guidance' },
@@ -166,6 +170,11 @@ export function getPageMeta(pathname: string, language: Language): PageMeta {
     return language === 'en'
       ? { title: 'Creator Detail', subtitle: 'Recommendation evidence, review signals, and email outreach' }
       : { title: '达人详情', subtitle: '推荐判断、证据复核与邮件建联' };
+  }
+  if (pathname.startsWith('/social-users/')) {
+    return language === 'en'
+      ? { title: 'Customer Detail', subtitle: 'Cleaned social profile, evidence chain, and GPT judgment' }
+      : { title: '客户详情', subtitle: '小红书/抖音清洗资料、互动证据链与 GPT 意向判定' };
   }
   if (pathname.startsWith('/emails/')) {
     return language === 'en'

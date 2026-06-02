@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -21,58 +22,44 @@ import {
 import { KpiCard } from '@/components/kpi/KpiCard';
 import { Pill } from '@/components/Pill';
 import { AsyncState } from '@/components/states/States';
-import { useCreators, useResource, useUnifiedDashboard } from '@/hooks/useApi';
+import {
+  useGmailReplySyncStatus,
+  useGmailSyncReplies,
+  useOutreachArchive,
+  useOutreachTracking,
+  useReplyOutreachArchive,
+} from '@/hooks/useApi';
 import { formatDateTime, maskEmail, shortRelative } from '@/lib/format';
-import type { Creator, UnifiedDashboardGmailAccount } from '@/api/types';
+import type { GmailReplySyncAccount, OutreachArchiveItem, OutreachTrackingItem } from '@/api/types';
 
-interface OutreachEmail {
-  id: string;
-  creator_id: string | number;
-  to_email: string;
-  from_email?: string | null;
-  subject: string;
-  body: string;
-  body_format?: string | null;
-  status: string;
-  gmail_message_id?: string | null;
-  gmail_thread_id?: string | null;
-  error_message?: string | null;
-  created_by?: string | null;
-  sent_at?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-type ThreadStatus = 'waiting' | 'replied' | 'draft' | 'failed' | 'syncing' | 'missing_sender';
+type ThreadStatus = 'waiting' | 'replied' | 'syncing' | 'missing_sender';
+type NoticeTone = 'good' | 'bad' | 'info';
 
 interface EmailThread {
   id: string;
   creatorId: string;
-  creator?: Creator;
+  creatorHandle: string | null;
+  creatorDisplayName: string | null;
   creatorEmail: string;
   senderEmail: string | null;
   subject: string;
   status: ThreadStatus;
+  currentStatus: string;
   gmailThreadId: string | null;
-  gmailMessageId: string | null;
+  latestEmailId: string | null;
   bdOwner: string | null;
-  createdBy: string | null;
-  firstSentAt: string | null;
   lastActivityAt: string | null;
   lastCheckedAt: string | null;
   nextCheckAt: string | null;
-  messages: OutreachEmail[];
-  lastBody: string;
-  errorMessage: string | null;
+  latestDirection: string | null;
+  needsFollowup: boolean;
+  emailCount: number;
+  lastPreview: string | null;
 }
-
-const PAGE_SIZE = 500;
 
 const STATUS_META: Record<ThreadStatus, { label: string; tone: 'good' | 'warn' | 'bad' | 'info' | 'muted'; icon: typeof Clock }> = {
   waiting: { label: '待回复', tone: 'warn', icon: Clock },
   replied: { label: '已回复', tone: 'good', icon: Reply },
-  draft: { label: '草稿', tone: 'muted', icon: PenLine },
-  failed: { label: '异常', tone: 'bad', icon: AlertTriangle },
   syncing: { label: '同步中', tone: 'info', icon: RefreshCw },
   missing_sender: { label: '缺少发件邮箱', tone: 'bad', icon: XCircle },
 };
@@ -81,7 +68,7 @@ const STATUS_FILTERS: Array<{ key: 'all' | ThreadStatus; label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'waiting', label: '待回复' },
   { key: 'replied', label: '已回复' },
-  { key: 'failed', label: '异常' },
+  { key: 'syncing', label: '同步中' },
   { key: 'missing_sender', label: '缺少邮箱' },
 ];
 
@@ -92,28 +79,20 @@ export default function Emails() {
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [draftSubject, setDraftSubject] = useState('');
   const [draftBody, setDraftBody] = useState('');
-  const [composerNote, setComposerNote] = useState('');
+  const [composerNote, setComposerNote] = useState<{ text: string; tone: NoticeTone } | null>(null);
   const [syncNote, setSyncNote] = useState('');
 
-  const emails = useResource<OutreachEmail>('outreach_emails', {
-    limit: PAGE_SIZE,
-    offset: 0,
-    order_by: 'created_at:desc',
+  const tracking = useOutreachTracking({
+    q: query.trim() || undefined,
+    from_email: senderFilter === 'all' ? undefined : senderFilter,
   });
-  const creators = useCreators({ limit: PAGE_SIZE, offset: 0 });
-  const unified = useUnifiedDashboard();
-
-  const creatorMap = useMemo(() => {
-    const map = new Map<string, Creator>();
-    (creators.data?.items ?? []).forEach((creator) => {
-      map.set(String(creator.id), creator);
-    });
-    return map;
-  }, [creators.data?.items]);
+  const syncStatus = useGmailReplySyncStatus();
+  const syncReplies = useGmailSyncReplies();
+  const reply = useReplyOutreachArchive();
 
   const threads = useMemo(
-    () => buildThreads(emails.data?.items ?? [], creatorMap),
-    [emails.data?.items, creatorMap],
+    () => buildThreads(tracking.data?.items ?? [], syncStatus.data?.background?.running),
+    [tracking.data?.items, syncStatus.data?.background?.running],
   );
 
   const senderOptions = useMemo(
@@ -121,23 +100,9 @@ export default function Emails() {
     [threads],
   );
 
-  const filteredThreads = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return threads.filter((thread) => {
-      const statusMatch = statusFilter === 'all' || thread.status === statusFilter;
-      const senderMatch = senderFilter === 'all' || thread.senderEmail === senderFilter;
-      const creatorName = thread.creator?.handle || thread.creator?.display_name || thread.creatorId;
-      const text = [
-        creatorName,
-        thread.creatorEmail,
-        thread.senderEmail,
-        thread.subject,
-        thread.bdOwner,
-        thread.createdBy,
-      ].join(' ').toLowerCase();
-      return statusMatch && senderMatch && (!needle || text.includes(needle));
-    });
-  }, [query, senderFilter, statusFilter, threads]);
+  const filteredThreads = useMemo(() => (
+    threads.filter((thread) => statusFilter === 'all' || thread.status === statusFilter)
+  ), [statusFilter, threads]);
 
   const selectedThread = useMemo(() => {
     if (selectedThreadId) {
@@ -147,35 +112,117 @@ export default function Emails() {
     return filteredThreads[0] ?? threads[0] ?? null;
   }, [filteredThreads, selectedThreadId, threads]);
 
+  const archive = useOutreachArchive({
+    creator_id: selectedThread?.creatorId ?? '__none__',
+    limit: 100,
+    offset: 0,
+  });
+
+  const accounts = useMemo(
+    () => syncStatus.data?.items ?? syncStatus.data?.accounts ?? [],
+    [syncStatus.data?.accounts, syncStatus.data?.items],
+  );
+
+  const messages = useMemo(
+    () => messagesForThread(archive.data?.items ?? [], selectedThread),
+    [archive.data?.items, selectedThread],
+  );
+
+  const senderStatus = useMemo(
+    () => senderStatusFor(selectedThread?.senderEmail, accounts),
+    [accounts, selectedThread?.senderEmail],
+  );
+
+  const replySourceId = useMemo(
+    () => selectReplySourceId(messages, selectedThread),
+    [messages, selectedThread],
+  );
+
   useEffect(() => {
     if (!selectedThread) {
       setDraftSubject('');
       setDraftBody('');
+      setComposerNote(null);
       return;
     }
-    setDraftSubject(`Re: ${stripReplyPrefix(selectedThread.subject)}`);
-    setDraftBody(buildFollowUpDraft(selectedThread));
-    setComposerNote('');
+    const saved = loadLocalDraft(selectedThread);
+    setDraftSubject(saved?.subject || `Re: ${stripReplyPrefix(selectedThread.subject)}`);
+    setDraftBody(saved?.body || buildFollowUpDraft(selectedThread));
+    setComposerNote(null);
   }, [selectedThread?.id]);
 
-  const gmailAccounts = unified.data?.gmail_sync.accounts ?? [];
+  useEffect(() => {
+    if (selectedThreadId && !threads.some((thread) => thread.id === selectedThreadId)) {
+      setSelectedThreadId(null);
+    }
+  }, [selectedThreadId, threads]);
+
   const kpis = useMemo(() => {
     const waiting = threads.filter((thread) => thread.status === 'waiting').length;
     const replied = threads.filter((thread) => thread.status === 'replied').length;
-    const riskyAccounts = gmailAccounts.filter((account) => account.reauthorization_required || !account.readonly_scope).length;
+    const riskyAccounts = accounts.filter((account) => !isReadableAccount(account)).length;
     const missingSender = threads.filter((thread) => thread.status === 'missing_sender').length;
     return { waiting, replied, riskyAccounts, missingSender };
-  }, [gmailAccounts, threads]);
+  }, [accounts, threads]);
 
-  const isLoading = emails.isLoading || creators.isLoading;
-  const error = emails.error || creators.error;
+  const handleSync = async () => {
+    setSyncNote('');
+    try {
+      const result = await syncReplies.mutateAsync({ limit_per_account: 2500 });
+      const running = result.running || result.background?.running;
+      setSyncNote(`${running ? '同步已启动' : '同步已提交'} · ${formatDateTime(new Date())}`);
+      await Promise.all([tracking.refetch(), syncStatus.refetch()]);
+    } catch (error) {
+      setSyncNote(`同步失败：${errorMessage(error)}`);
+    }
+  };
+
+  const handleSave = () => {
+    if (!selectedThread) return;
+    saveLocalDraft(selectedThread, draftSubject, draftBody);
+    setComposerNote({ text: '草稿已保存到当前浏览器', tone: 'good' });
+  };
+
+  const handleSend = async () => {
+    if (!selectedThread || !replySourceId) {
+      setComposerNote({ text: '找不到可回复的邮件记录', tone: 'bad' });
+      return;
+    }
+    if (!senderStatus.canSend) {
+      setComposerNote({ text: senderStatus.reason, tone: 'bad' });
+      return;
+    }
+    if (!draftBody.trim()) {
+      setComposerNote({ text: '正文不能为空', tone: 'bad' });
+      return;
+    }
+    try {
+      await reply.mutateAsync({
+        id: replySourceId,
+        body: {
+          subject: draftSubject.trim() || `Re: ${stripReplyPrefix(selectedThread.subject)}`,
+          body: draftBody.trim(),
+          body_format: 'plain',
+        },
+      });
+      clearLocalDraft(selectedThread);
+      setComposerNote({ text: '已发送回复，并写入沟通记录', tone: 'good' });
+      await Promise.all([tracking.refetch(), archive.refetch(), syncStatus.refetch()]);
+    } catch (error) {
+      setComposerNote({ text: `发送失败：${errorMessage(error)}`, tone: 'bad' });
+    }
+  };
+
+  const isLoading = tracking.isLoading;
+  const error = tracking.error;
+  const totalThreads = tracking.data?.total ?? threads.length;
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-        <KpiCard label="跟踪达人" value={threads.length} subLabel="已发送邮件自动归档" icon={Inbox} iconBg="#e0f2fe" iconColor="#0284c7" />
-        <KpiCard label="待回复" value={kpis.waiting} subLabel="按原发件邮箱检查" icon={Clock} iconBg="#fef3c7" iconColor="#ca8a04" />
-        <KpiCard label="已有回复" value={kpis.replied} subLabel="进入沟通跟进" icon={CheckCircle2} iconBg="#dcfce7" iconColor="#16a34a" />
+        <KpiCard label="跟踪达人" value={totalThreads} subLabel="已发送邮件自动归档" icon={Inbox} iconBg="#e0f2fe" iconColor="#0284c7" />
+        <KpiCard label="待回复" value={kpis.waiting} subLabel="按真实入站回复检查" icon={Clock} iconBg="#fef3c7" iconColor="#ca8a04" />
+        <KpiCard label="已有回复" value={kpis.replied} subLabel="Gmail 回信或待跟进" icon={CheckCircle2} iconBg="#dcfce7" iconColor="#16a34a" />
         <KpiCard label="授权风险" value={kpis.riskyAccounts + kpis.missingSender} subLabel="缺少只读或发件邮箱" icon={ShieldCheck} iconBg="#fee2e2" iconColor="#dc2626" />
       </div>
 
@@ -218,35 +265,44 @@ export default function Emails() {
               ))}
             </select>
           </div>
-          <button type="button" className="btn ml-auto" onClick={() => setSyncNote(`同步检查已排队 · ${formatDateTime(new Date())}`)}>
-            <RefreshCw size={12} />
-            立即同步
+          <button type="button" className="btn ml-auto" onClick={handleSync} disabled={syncReplies.isPending}>
+            <RefreshCw size={12} className={syncReplies.isPending ? 'animate-spin' : ''} />
+            {syncReplies.isPending ? '同步中' : '立即同步'}
           </button>
-          <button type="button" className="btn btn-primary">
+          <Link to="/d/creators" className="btn btn-primary">
             <Send size={12} />
             新建建联
-          </button>
+          </Link>
         </div>
-        <AccountStrip accounts={gmailAccounts} note={syncNote} />
+        <AccountStrip accounts={accounts} note={syncNote} />
       </div>
 
       <AsyncState loading={isLoading} error={error} isEmpty={threads.length === 0} height={420}>
         <div className="grid grid-cols-1 xl:grid-cols-[minmax(340px,0.95fr)_minmax(420px,1.25fr)_minmax(340px,0.9fr)] gap-3 items-start">
           <ThreadList
             threads={filteredThreads}
+            total={tracking.data?.total ?? filteredThreads.length}
             selectedThreadId={selectedThread?.id ?? null}
             onSelect={(thread) => setSelectedThreadId(thread.id)}
           />
-          <ConversationPanel thread={selectedThread} accounts={gmailAccounts} />
+          <ConversationPanel
+            thread={selectedThread}
+            accounts={accounts}
+            messages={messages}
+            loading={archive.isLoading && Boolean(selectedThread)}
+            error={archive.error}
+          />
           <ComposerPanel
             thread={selectedThread}
             subject={draftSubject}
             body={draftBody}
             note={composerNote}
+            senderStatus={senderStatus}
+            isSending={reply.isPending}
             onSubjectChange={setDraftSubject}
             onBodyChange={setDraftBody}
-            onSave={() => setComposerNote('草稿已暂存')}
-            onSend={() => setComposerNote('已进入发送确认')}
+            onSave={handleSave}
+            onSend={handleSend}
           />
         </div>
       </AsyncState>
@@ -254,34 +310,53 @@ export default function Emails() {
   );
 }
 
-function AccountStrip({ accounts, note }: { accounts: UnifiedDashboardGmailAccount[]; note: string }) {
-  if (accounts.length === 0 && !note) return null;
+function AccountStrip({ accounts, note }: { accounts: GmailReplySyncAccount[]; note: string }) {
+  if (accounts.length === 0 && !note) {
+    return (
+      <div className="px-4 py-2 border-t border-line flex items-center gap-2 overflow-x-auto">
+        <span className="text-xxs text-muted whitespace-nowrap">邮箱授权池</span>
+        <a href={gmailAuthorizeHref()} className="inline-flex items-center gap-1.5 rounded border border-blue-100 bg-blue-50 px-2 py-1 text-xxs font-semibold text-blue-700 whitespace-nowrap">
+          授权 Gmail
+        </a>
+      </div>
+    );
+  }
   return (
     <div className="px-4 py-2 border-t border-line flex items-center gap-2 overflow-x-auto">
       <span className="text-xxs text-muted whitespace-nowrap">邮箱授权池</span>
       {accounts.map((account) => {
-        const healthy = Boolean(account.readonly_scope && !account.reauthorization_required && account.is_active);
+        const healthy = isReadableAccount(account);
         return (
           <span key={account.account_id} className="inline-flex items-center gap-1.5 border border-line rounded px-2 py-1 text-xxs bg-white whitespace-nowrap">
             <span className={`w-1.5 h-1.5 rounded-full ${healthy ? 'bg-green-500' : 'bg-red-500'}`} />
             {account.email}
-            <span className={healthy ? 'text-green-700' : 'text-red-600'}>
-              {healthy ? '可读写' : '需重连'}
+            <span className={healthy ? 'text-green-700' : 'text-red-700'}>
+              {healthy ? '已完整授权' : '未授权'}
             </span>
+            {!healthy && (
+              <a
+                href={gmailAuthorizeHref(account.email)}
+                className="rounded bg-red-100 px-1.5 py-0.5 font-semibold text-red-800 hover:bg-red-200"
+              >
+                立即授权
+              </a>
+            )}
           </span>
         );
       })}
-      {note && <span className="text-xxs text-good ml-auto whitespace-nowrap">{note}</span>}
+      {note && <span className={`text-xxs ml-auto whitespace-nowrap ${note.includes('失败') ? 'text-bad' : 'text-good'}`}>{note}</span>}
     </div>
   );
 }
 
 function ThreadList({
   threads,
+  total,
   selectedThreadId,
   onSelect,
 }: {
   threads: EmailThread[];
+  total: number;
   selectedThreadId: string | null;
   onSelect: (thread: EmailThread) => void;
 }) {
@@ -290,9 +365,9 @@ function ThreadList({
       <div className="px-4 py-3 border-b border-line flex items-center justify-between gap-2">
         <div>
           <h3 className="text-sm font-semibold text-gray-800">达人邮件线程</h3>
-          <div className="text-xxs text-muted">按达人邮箱 + 原发件邮箱归档</div>
+          <div className="text-xxs text-muted">按达人 + Gmail 线程归档真实回信</div>
         </div>
-        <Pill tone="info">{threads.length} 条</Pill>
+        <Pill tone="info">{total} 条</Pill>
       </div>
       <div className="max-h-[680px] overflow-y-auto divide-y divide-line/70">
         {threads.length === 0 ? (
@@ -352,9 +427,15 @@ function ThreadButton({ thread, selected, onClick }: { thread: EmailThread; sele
 function ConversationPanel({
   thread,
   accounts,
+  messages,
+  loading,
+  error,
 }: {
   thread: EmailThread | null;
-  accounts: UnifiedDashboardGmailAccount[];
+  accounts: GmailReplySyncAccount[];
+  messages: OutreachArchiveItem[];
+  loading: boolean;
+  error: unknown;
 }) {
   if (!thread) return <EmptyPanel title="沟通历史" />;
   const meta = STATUS_META[thread.status];
@@ -382,7 +463,7 @@ function ConversationPanel({
         <Fact icon={<Mail size={12} />} label="达人邮箱" value={thread.creatorEmail} />
         <Fact icon={<Lock size={12} />} label="锁定发件" value={thread.senderEmail || '未锁定'} tone={thread.senderEmail ? 'normal' : 'bad'} />
         <Fact icon={<History size={12} />} label="Gmail Thread" value={thread.gmailThreadId || '待回写'} />
-        <Fact icon={<RefreshCw size={12} />} label="下次检查" value={thread.nextCheckAt ? formatDateTime(thread.nextCheckAt) : '10 分钟轮询'} />
+        <Fact icon={<RefreshCw size={12} />} label="下次检查" value={thread.nextCheckAt ? formatDateTime(thread.nextCheckAt) : '等待同步'} />
       </div>
 
       <div className="p-4">
@@ -390,30 +471,27 @@ function ConversationPanel({
           <div className="text-xs font-semibold text-gray-800">沟通记录</div>
           <div className="flex items-center gap-1.5">
             {account && (
-              <Pill tone={account.readonly_scope && !account.reauthorization_required ? 'good' : 'bad'}>
-                {account.readonly_scope && !account.reauthorization_required ? '可同步' : '需授权'}
+              <Pill tone={isReadableAccount(account) ? 'good' : 'bad'}>
+                {isReadableAccount(account) ? '可同步' : '需授权'}
               </Pill>
             )}
-            <Pill tone="muted">{thread.messages.length} 封</Pill>
+            <Pill tone="muted">{messages.length || thread.emailCount} 封</Pill>
           </div>
         </div>
         <div className="space-y-3 max-h-[480px] overflow-y-auto pr-1">
-          {thread.messages.map((message) => (
+          {loading && <SystemCheckpoint icon={<RefreshCw size={13} className="animate-spin" />} title="正在加载沟通记录" meta="从邮件归档读取真实入站/出站消息" />}
+          {Boolean(error) && <SystemCheckpoint icon={<AlertTriangle size={13} />} title="沟通记录加载失败" meta={errorMessage(error)} tone="bad" />}
+          {!loading && !error && messages.map((message) => (
             <MessageRow key={message.id} message={message} />
           ))}
+          {!loading && !error && messages.length === 0 && (
+            <MessageRow message={fallbackMessage(thread)} />
+          )}
           {thread.status === 'waiting' && (
             <SystemCheckpoint
               icon={<Clock size={13} />}
               title="等待达人回复"
               meta={thread.lastCheckedAt ? `最近检查 ${formatDateTime(thread.lastCheckedAt)}` : '等待首次同步'}
-            />
-          )}
-          {thread.status === 'failed' && (
-            <SystemCheckpoint
-              icon={<AlertTriangle size={13} />}
-              title="发送或同步异常"
-              meta={thread.errorMessage || '需要人工确认授权和线程状态'}
-              tone="bad"
             />
           )}
         </div>
@@ -427,6 +505,8 @@ function ComposerPanel({
   subject,
   body,
   note,
+  senderStatus,
+  isSending,
   onSubjectChange,
   onBodyChange,
   onSave,
@@ -435,19 +515,26 @@ function ComposerPanel({
   thread: EmailThread | null;
   subject: string;
   body: string;
-  note: string;
+  note: { text: string; tone: NoticeTone } | null;
+  senderStatus: { canSend: boolean; canSync: boolean; reason: string };
+  isSending: boolean;
   onSubjectChange: (value: string) => void;
   onBodyChange: (value: string) => void;
   onSave: () => void;
   onSend: () => void;
 }) {
-  const disabled = !thread || !thread.senderEmail;
+  const disabled = !thread || !thread.senderEmail || !senderStatus.canSend || isSending;
+  const noteClass = note?.tone === 'bad'
+    ? 'text-bad bg-red-50 border-red-100'
+    : note?.tone === 'info'
+      ? 'text-blue-700 bg-blue-50 border-blue-100'
+      : 'text-good bg-green-50 border-green-100';
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-3 border-b border-line flex items-center justify-between gap-2">
         <div>
           <h3 className="text-sm font-semibold text-gray-800">邮件编辑</h3>
-          <div className="text-xxs text-muted">强制使用建联发件邮箱</div>
+          <div className="text-xxs text-muted">同线程回复，发件邮箱按原建联记录锁定</div>
         </div>
         <Pill tone={disabled ? 'bad' : 'good'}>
           <Lock size={10} />
@@ -456,8 +543,13 @@ function ComposerPanel({
       </div>
 
       <div className="p-4 space-y-3">
-        <ReadonlyField label="From" value={thread?.senderEmail || '缺少发件邮箱'} bad={!thread?.senderEmail} />
+        <ReadonlyField label="From" value={thread?.senderEmail || '缺少发件邮箱'} bad={!thread?.senderEmail || !senderStatus.canSend} />
         <ReadonlyField label="To" value={thread?.creatorEmail || '未选择达人'} />
+        {!senderStatus.canSync && thread && (
+          <div className="rounded border border-red-100 bg-red-50 px-3 py-2 text-xxs text-red-700">
+            {senderStatus.reason}
+          </div>
+        )}
         <label className="block">
           <span className="text-xxs text-muted">Subject</span>
           <input
@@ -484,18 +576,18 @@ function ComposerPanel({
             <PenLine size={12} />
             保存草稿
           </button>
-          <button type="button" className="btn justify-center" disabled={!thread}>
+          <button type="button" className="btn justify-center" disabled title="当前跟踪页暂未接入 AI 润色">
             <Sparkles size={12} />
             AI润色
           </button>
           <button type="button" className="btn btn-primary justify-center" disabled={disabled} onClick={onSend}>
-            <Send size={12} />
-            发送
+            <Send size={12} className={isSending ? 'animate-pulse' : ''} />
+            {isSending ? '发送中' : '发送'}
           </button>
         </div>
         {note && (
-          <div className="text-xxs text-good bg-green-50 border border-green-100 rounded px-3 py-2">
-            {note}
+          <div className={`text-xxs border rounded px-3 py-2 ${noteClass}`}>
+            {note.text}
           </div>
         )}
       </div>
@@ -503,24 +595,28 @@ function ComposerPanel({
   );
 }
 
-function MessageRow({ message }: { message: OutreachEmail }) {
-  const sentAt = message.sent_at || message.created_at || message.updated_at;
-  const failed = message.status === 'failed';
+function MessageRow({ message }: { message: OutreachArchiveItem }) {
+  const sentAt = mailTime(message);
+  const direction = messageDirection(message);
+  const failed = direction === 'bounce' || message.status === 'failed';
+  const inbound = direction === 'inbound';
+  const Icon = failed ? AlertTriangle : inbound ? Inbox : Send;
+  const iconClass = failed ? 'bg-red-50 text-red-600' : inbound ? 'bg-green-50 text-green-700' : 'bg-blue-50 text-blue-600';
   return (
     <div className="flex items-start gap-3">
-      <div className={`w-8 h-8 rounded flex items-center justify-center shrink-0 ${failed ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
-        {failed ? <AlertTriangle size={15} /> : <Send size={15} />}
+      <div className={`w-8 h-8 rounded flex items-center justify-center shrink-0 ${iconClass}`}>
+        <Icon size={15} />
       </div>
       <div className="min-w-0 flex-1 border border-line rounded p-3 bg-white">
         <div className="flex items-center justify-between gap-2">
           <div className="text-xs font-semibold text-gray-900 truncate">{message.subject || '无主题'}</div>
-          <Pill tone={failed ? 'bad' : message.status === 'sent' ? 'good' : 'muted'}>{statusLabel(message.status)}</Pill>
+          <Pill tone={failed ? 'bad' : inbound ? 'warn' : 'good'}>{messageStatusLabel(message)}</Pill>
         </div>
         <div className="text-xxs text-muted mt-1">
-          {message.from_email || '未选择'} → {message.to_email} · {formatDateTime(sentAt)}
+          {message.from_email || '未选择'} → {message.to_email || '—'} · {formatDateTime(sentAt)}
         </div>
         <div className="text-xs text-gray-700 mt-2 whitespace-pre-line line-clamp-4">
-          {message.body || message.error_message || '—'}
+          {messagePreview(message)}
         </div>
       </div>
     </div>
@@ -594,72 +690,95 @@ function EmptyPanel({ title }: { title: string }) {
   );
 }
 
-function buildThreads(rows: OutreachEmail[], creatorMap: Map<string, Creator>): EmailThread[] {
-  const groups = new Map<string, OutreachEmail[]>();
-  rows
-    .filter((row) => row.to_email)
-    .forEach((row) => {
-      const creatorId = String(row.creator_id);
-      const key = row.gmail_thread_id || [
-        creatorId,
-        normalizeEmail(row.to_email),
-        normalizeEmail(row.from_email || 'pending'),
-      ].join(':');
-      const list = groups.get(key) ?? [];
-      list.push(row);
-      groups.set(key, list);
-    });
-
-  return Array.from(groups.entries())
-    .map(([id, messages]) => {
-      const ordered = [...messages].sort((a, b) => timestamp(a) - timestamp(b));
-      const first = ordered[0];
-      const latest = ordered[ordered.length - 1];
-      const creatorId = String(latest.creator_id || first.creator_id);
-      const creator = creatorMap.get(creatorId);
-      const senderEmail = latest.from_email || first.from_email || null;
-      const status = deriveThreadStatus(ordered, creator, senderEmail);
-      const lastActivityAt = latest.sent_at || latest.updated_at || latest.created_at || null;
-      return {
-        id,
-        creatorId,
-        creator,
-        creatorEmail: latest.to_email || first.to_email,
-        senderEmail,
-        subject: latest.subject || first.subject || '',
-        status,
-        gmailThreadId: latest.gmail_thread_id || first.gmail_thread_id || null,
-        gmailMessageId: latest.gmail_message_id || first.gmail_message_id || null,
-        bdOwner: creator?.owner_bd || null,
-        createdBy: latest.created_by || first.created_by || null,
-        firstSentAt: first.sent_at || first.created_at || null,
-        lastActivityAt,
-        lastCheckedAt: lastActivityAt,
-        nextCheckAt: addMinutes(lastActivityAt, 10),
-        messages: ordered,
-        lastBody: latest.body || '',
-        errorMessage: latest.error_message || null,
-      } satisfies EmailThread;
-    })
-    .sort((a, b) => dateValue(b.lastActivityAt) - dateValue(a.lastActivityAt));
+function buildThreads(rows: OutreachTrackingItem[], backgroundSyncing?: boolean): EmailThread[] {
+  return rows.map((row) => {
+    const senderEmail = row.from_email || null;
+    const status = deriveThreadStatus(row, senderEmail, backgroundSyncing);
+    const lastActivityAt = row.latest_message_at || row.latest_inbound_at || row.latest_outbound_at || null;
+    return {
+      id: row.gmail_thread_id || [row.creator_id, normalizeEmail(row.to_email || row.creator_email || ''), normalizeEmail(senderEmail || 'pending')].join(':'),
+      creatorId: String(row.creator_id),
+      creatorHandle: row.creator_handle || null,
+      creatorDisplayName: row.creator_display_name || null,
+      creatorEmail: row.to_email || row.creator_email || '',
+      senderEmail,
+      subject: row.last_subject || '',
+      status,
+      currentStatus: row.current_status || '',
+      gmailThreadId: row.gmail_thread_id || null,
+      latestEmailId: row.latest_email_id || null,
+      bdOwner: row.owner_bd || null,
+      lastActivityAt,
+      lastCheckedAt: row.latest_inbound_at || row.latest_outbound_at || lastActivityAt,
+      nextCheckAt: addMinutes(lastActivityAt, 10),
+      latestDirection: row.latest_direction || null,
+      needsFollowup: Boolean(row.needs_followup),
+      emailCount: Number(row.email_count || 1),
+      lastPreview: row.last_preview || null,
+    } satisfies EmailThread;
+  });
 }
 
-function deriveThreadStatus(messages: OutreachEmail[], creator: Creator | undefined, senderEmail: string | null): ThreadStatus {
-  if (!senderEmail && messages.some((message) => message.status === 'sent')) return 'missing_sender';
-  if (messages.some((message) => message.status === 'failed')) return 'failed';
-  if (messages.some((message) => message.status === 'queued')) return 'syncing';
-  if (messages.every((message) => message.status === 'draft')) return 'draft';
-  const creatorStatus = `${creator?.current_status || ''}`.toLowerCase();
-  if (creatorStatus.includes('回复') || creatorStatus.includes('replied') || creatorStatus.includes('沟通')) return 'replied';
+function deriveThreadStatus(row: OutreachTrackingItem, senderEmail: string | null, backgroundSyncing?: boolean): ThreadStatus {
+  if (!senderEmail) return 'missing_sender';
+  if (backgroundSyncing && row.latest_direction !== 'inbound' && !row.latest_inbound_at) return 'syncing';
+  if (row.needs_followup || row.latest_direction === 'inbound' || row.latest_inbound_at) return 'replied';
+  const currentStatus = `${row.current_status || ''}`.toLowerCase();
+  if (/(沟通|已寄样|样品|视频|授权|广告|communicat|sample|published|authorized)/.test(currentStatus)) return 'replied';
   return 'waiting';
 }
 
+function messagesForThread(rows: OutreachArchiveItem[], thread: EmailThread | null): OutreachArchiveItem[] {
+  if (!thread) return [];
+  return thread.gmailThreadId
+    ? rows.filter((row) => row.gmail_thread_id === thread.gmailThreadId)
+    : rows;
+}
+
+function fallbackMessage(thread: EmailThread): OutreachArchiveItem {
+  return {
+    id: thread.latestEmailId || thread.id,
+    creator_id: thread.creatorId,
+    to_email: thread.creatorEmail,
+    from_email: thread.senderEmail,
+    subject: thread.subject || '无主题',
+    body_preview: thread.lastPreview || '暂无正文预览',
+    body_format: 'plain',
+    status: thread.latestDirection === 'inbound' ? 'inbound' : 'sent',
+    direction: thread.latestDirection === 'inbound' ? 'inbound' : 'outbound',
+    sent_at: thread.lastActivityAt,
+    created_at: thread.lastActivityAt,
+    gmail_thread_id: thread.gmailThreadId,
+  };
+}
+
+function selectReplySourceId(messages: OutreachArchiveItem[], thread: EmailThread | null): string | null {
+  const inbound = messages.find((message) => messageDirection(message) === 'inbound');
+  const outbound = messages.find((message) => messageDirection(message) !== 'bounce');
+  return inbound?.id || outbound?.id || thread?.latestEmailId || null;
+}
+
+function senderStatusFor(senderEmail: string | null | undefined, accounts: GmailReplySyncAccount[]): { canSend: boolean; canSync: boolean; reason: string } {
+  if (!senderEmail) return { canSend: false, canSync: false, reason: '缺少锁定发件邮箱，不能发送同线程回复' };
+  const account = accounts.find((item) => item.email?.toLowerCase() === senderEmail.toLowerCase());
+  if (!account) return { canSend: false, canSync: false, reason: '发件邮箱未授权，请先完成 Gmail 授权' };
+  if (!isReadableAccount(account)) {
+    return { canSend: false, canSync: false, reason: '该邮箱未完成完整授权，请先重新授权后再发送或同步回信。' };
+  }
+  return { canSend: true, canSync: true, reason: '已锁定发件邮箱' };
+}
+
+function isReadableAccount(account: GmailReplySyncAccount): boolean {
+  const status = `${account.status || ''}`.toLowerCase();
+  return Boolean(account.has_readonly_scope && status !== 'needs_reauth' && !account.error);
+}
+
 function creatorLabel(thread: EmailThread): string {
-  return thread.creator?.handle || thread.creator?.display_name || `creator-${thread.creatorId}`;
+  return thread.creatorDisplayName || thread.creatorHandle || `creator-${thread.creatorId}`;
 }
 
 function buildFollowUpDraft(thread: EmailThread): string {
-  const name = thread.creator?.display_name || thread.creator?.handle || 'there';
+  const name = thread.creatorDisplayName || thread.creatorHandle || 'there';
   return [
     `Hi ${name},`,
     '',
@@ -676,7 +795,16 @@ function stripReplyPrefix(subject: string): string {
   return (subject || '').replace(/^(\s*(re|fw|fwd):\s*)+/i, '').trim() || 'Collaboration with X9';
 }
 
-function statusLabel(status: string): string {
+function messageDirection(message: OutreachArchiveItem): string {
+  const value = `${message.direction || message.status || ''}`.toLowerCase();
+  if (value === 'inbound' || value === 'bounce') return value;
+  return 'outbound';
+}
+
+function messageStatusLabel(message: OutreachArchiveItem): string {
+  const direction = messageDirection(message);
+  if (direction === 'inbound') return '达人回复';
+  if (direction === 'bounce') return '退信';
   const map: Record<string, string> = {
     draft: '草稿',
     queued: '队列中',
@@ -684,15 +812,41 @@ function statusLabel(status: string): string {
     failed: '失败',
     cancelled: '已取消',
   };
-  return map[status] || status || '未知';
+  return map[message.status] || '已发送';
+}
+
+function messagePreview(message: OutreachArchiveItem): string {
+  const body = 'body' in message ? String((message as OutreachArchiveItem & { body?: string | null }).body || '') : '';
+  return message.body_preview || plainText(body, message.body_format) || '—';
+}
+
+function plainText(value: string, format?: string | null): string {
+  if (!value) return '';
+  let text = value;
+  if ((format || '').toLowerCase() === 'html' || /<\/?[a-z][\s\S]*>/i.test(value)) {
+    text = value
+      .replace(/<(br|\/p|\/div|\/li)\b[^>]*>/gi, '\n')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ');
+  }
+  return decodeHtml(text).replace(/\s+/g, ' ').trim();
+}
+
+function decodeHtml(value: string): string {
+  return value
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
 }
 
 function statusBorder(status: ThreadStatus): string {
   const map: Record<ThreadStatus, string> = {
     waiting: 'border-l-amber-400',
     replied: 'border-l-green-500',
-    draft: 'border-l-gray-300',
-    failed: 'border-l-red-500',
     syncing: 'border-l-blue-500',
     missing_sender: 'border-l-red-500',
   };
@@ -703,8 +857,8 @@ function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-function timestamp(row: OutreachEmail): number {
-  return dateValue(row.sent_at || row.updated_at || row.created_at);
+function mailTime(row: OutreachArchiveItem): string | null {
+  return row.sent_at || row.created_at || null;
 }
 
 function dateValue(value: string | null | undefined): number {
@@ -717,4 +871,40 @@ function addMinutes(value: string | null | undefined, minutes: number): string |
   const base = dateValue(value);
   if (!base) return null;
   return new Date(base + minutes * 60_000).toISOString();
+}
+
+function draftStorageKey(thread: EmailThread): string {
+  return `x9-email-thread-draft:${thread.id}`;
+}
+
+function loadLocalDraft(thread: EmailThread): { subject: string; body: string } | null {
+  try {
+    const raw = window.localStorage.getItem(draftStorageKey(thread));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { subject?: unknown; body?: unknown };
+    if (typeof parsed.subject === 'string' && typeof parsed.body === 'string') {
+      return { subject: parsed.subject, body: parsed.body };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function saveLocalDraft(thread: EmailThread, subject: string, body: string) {
+  window.localStorage.setItem(draftStorageKey(thread), JSON.stringify({ subject, body }));
+}
+
+function clearLocalDraft(thread: EmailThread) {
+  window.localStorage.removeItem(draftStorageKey(thread));
+}
+
+function gmailAuthorizeHref(email?: string | null): string {
+  const label = email ? `email-sync:${email}` : 'email-sync';
+  return `/api/local/outreach/gmail/connect?label=${encodeURIComponent(label)}&return_to=${encodeURIComponent('/d/emails')}`;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error || '未知错误');
 }

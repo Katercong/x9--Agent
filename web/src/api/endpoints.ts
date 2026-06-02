@@ -15,8 +15,12 @@ import type {
   VersionInfo,
   ApiItems,
   DepartmentDashboardSummary,
+  GmailReplySyncStatus,
   UnifiedDashboardResponse,
   AnalyticsSummary,
+  OutreachArchiveDetail,
+  OutreachArchiveItem,
+  OutreachTrackingResponse,
   SystemMetrics,
 } from './types';
 
@@ -81,6 +85,21 @@ export const endpoints = {
     api.get<DepartmentDashboardSummary>(`${LOCAL}/dashboard/department-summary`),
   unifiedDashboard: () =>
     api.get<UnifiedDashboardResponse>(`${LOCAL}/dashboard/unified`),
+  outreachTracking: (params?: Record<string, unknown>) =>
+    api.get<OutreachTrackingResponse>(`${LOCAL}/outreach/tracking`, params),
+  outreachArchive: (params?: Record<string, unknown>) =>
+    api.get<ListResponse<OutreachArchiveItem>>(`${LOCAL}/outreach/archive`, params),
+  outreachArchiveDetail: (id: string) =>
+    api.get<{ ok: boolean; item: OutreachArchiveDetail }>(`${LOCAL}/outreach/archive/${encodeURIComponent(id)}`),
+  replyOutreachArchive: (id: string, body: { subject?: string; body: string; body_format?: 'plain' | 'html' | string }) =>
+    api.post<{ ok: boolean; item: OutreachArchiveDetail }>(
+      `${LOCAL}/outreach/archive/${encodeURIComponent(id)}/reply`,
+      body,
+    ),
+  gmailReplySyncStatus: () =>
+    api.get<GmailReplySyncStatus>(`${LOCAL}/outreach/gmail/sync-status`),
+  gmailSyncReplies: (body?: { account_ids?: string[]; limit_per_account?: number }) =>
+    api.post<GmailReplySyncStatus>(`${LOCAL}/outreach/gmail/sync-replies`, body || {}),
   analyticsMe: (days = 30) =>
     api.get<AnalyticsSummary>(`${LOCAL}/analytics/me`, { days }),
   analyticsDepartment: (params?: { department_code?: string; days?: number }) =>

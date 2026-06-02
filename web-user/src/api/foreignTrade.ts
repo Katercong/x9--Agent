@@ -177,6 +177,12 @@ export interface CollectionResponse {
   items: LeadItem[];
 }
 
+export interface SocialUserDetailResponse {
+  ok: boolean;
+  prompt_version?: string;
+  item: LeadItem | null;
+}
+
 export interface CleaningChannel {
   key: string;
   name: string;
@@ -224,6 +230,55 @@ export interface CleaningRunResult {
   status: CleaningStatus;
 }
 
+export type ForeignTradeLeadType = 'customer' | 'company';
+
+export type ForeignTradeContactStatus =
+  | 'pending_contact'
+  | 'contact_started'
+  | 'follow_up'
+  | 'replied'
+  | 'interested'
+  | 'invalid'
+  | 'converted';
+
+export interface ForeignTradeFollowupRecord {
+  id: string;
+  department_code?: string | null;
+  lead_type: ForeignTradeLeadType;
+  lead_id: string;
+  lead_name?: string | null;
+  platform?: string | null;
+  account?: string | null;
+  profile_url?: string | null;
+  comment_url?: string | null;
+  source_url?: string | null;
+  contact_label?: string | null;
+  status: ForeignTradeContactStatus;
+  owner_user_id?: string | null;
+  owner_name?: string | null;
+  opened_count?: number;
+  opened_at?: string | null;
+  last_followup_at?: string | null;
+  next_followup_at?: string | null;
+  followup_result?: string | null;
+  followup_note?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ForeignTradeFollowupsResponse {
+  ok: boolean;
+  total: number;
+  counts: Record<string, number>;
+  items: ForeignTradeFollowupRecord[];
+}
+
+export interface StartForeignTradeContactResult {
+  ok: boolean;
+  item: ForeignTradeFollowupRecord;
+  open_url?: string | null;
+}
+
 export function useForeignTradeDashboard() {
   return useQuery({
     queryKey: ['foreign-trade', 'dashboard'],
@@ -232,16 +287,25 @@ export function useForeignTradeDashboard() {
   });
 }
 
-export function useForeignTradeCollection(params: { channel: LeadChannel; limit?: number; offset?: number }) {
+export function useForeignTradeCollection(params: { channel: LeadChannel; recommended?: boolean; limit?: number; offset?: number }) {
   return useQuery({
     queryKey: ['foreign-trade', 'collection', params],
     queryFn: () =>
       api.get<CollectionResponse>('/foreign-trade/collection', {
         channel: params.channel,
+        recommended: params.recommended,
         limit: params.limit ?? 20,
         offset: params.offset ?? 0,
       }),
     refetchInterval: 60_000,
+  });
+}
+
+export function useForeignTradeSocialUser(userId?: string | null) {
+  return useQuery({
+    queryKey: ['foreign-trade', 'social-user', userId],
+    queryFn: () => api.get<SocialUserDetailResponse>(`/foreign-trade/social-users/${encodeURIComponent(String(userId))}`),
+    enabled: Boolean(userId),
   });
 }
 
@@ -260,6 +324,75 @@ export function useRunForeignTradeCleaning() {
       api.post<CleaningRunResult>('/foreign-trade/cleaning/run', body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['foreign-trade'] });
+    },
+  });
+}
+
+export function useForeignTradeFollowups(params: {
+  lead_type?: ForeignTradeLeadType;
+  status?: ForeignTradeContactStatus | 'all';
+  limit?: number;
+  offset?: number;
+} = {}) {
+  return useQuery({
+    queryKey: ['foreign-trade', 'followups', params],
+    queryFn: () =>
+      api.get<ForeignTradeFollowupsResponse>('/foreign-trade/followups', {
+        lead_type: params.lead_type,
+        status: params.status,
+        limit: params.limit ?? 100,
+        offset: params.offset ?? 0,
+      }),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useStartForeignTradeContact() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      leadType: ForeignTradeLeadType;
+      leadId: string;
+      contact_label?: string;
+      comment_url?: string | null;
+      source_url?: string | null;
+    }) =>
+      api.post<StartForeignTradeContactResult>(
+        `/foreign-trade/recommendations/${body.leadType}/${body.leadId}/start-contact`,
+        {
+          contact_label: body.contact_label,
+          comment_url: body.comment_url,
+          source_url: body.source_url,
+        },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['foreign-trade'] });
+    },
+  });
+}
+
+export function useSubmitForeignTradeFollowup() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      recordId: string;
+      status: ForeignTradeContactStatus;
+      note?: string;
+      result?: string;
+      next_followup_at?: string;
+    }) =>
+      api.post<{ ok: boolean; item: ForeignTradeFollowupRecord }>(
+        `/foreign-trade/followups/${body.recordId}/submit`,
+        {
+          status: body.status,
+          note: body.note,
+          result: body.result,
+          next_followup_at: body.next_followup_at,
+        },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['foreign-trade', 'followups'] });
+      void queryClient.invalidateQueries({ queryKey: ['foreign-trade', 'collection'] });
     },
   });
 }

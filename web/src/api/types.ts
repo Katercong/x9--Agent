@@ -429,6 +429,110 @@ export interface UnifiedDashboardResponse {
   };
 }
 
+export interface OutreachArchiveItem {
+  id: string;
+  department_code?: string | null;
+  creator_id: string;
+  creator_handle?: string | null;
+  creator_display_name?: string | null;
+  creator_profile_url?: string | null;
+  creator_platform?: string | null;
+  to_email: string;
+  from_email?: string | null;
+  subject: string;
+  body_preview?: string | null;
+  body_format?: 'plain' | 'html' | string;
+  status: string;
+  sent_at?: string | null;
+  created_at?: string | null;
+  created_by?: string | null;
+  gmail_thread_id?: string | null;
+  gmail_message_id?: string | null;
+  parent_email_id?: string | null;
+  direction?: 'inbound' | 'outbound' | 'bounce' | string;
+}
+
+export interface OutreachArchiveDetail extends OutreachArchiveItem {
+  body: string;
+  error_message?: string | null;
+  updated_at?: string | null;
+}
+
+export interface OutreachTrackingItem {
+  creator_id: string;
+  creator_handle?: string | null;
+  creator_display_name?: string | null;
+  creator_profile_url?: string | null;
+  creator_platform?: string | null;
+  creator_email?: string | null;
+  current_status: string;
+  to_email?: string | null;
+  from_email?: string | null;
+  latest_email_id?: string | null;
+  gmail_thread_id?: string | null;
+  latest_outbound_at?: string | null;
+  latest_inbound_at?: string | null;
+  latest_message_at?: string | null;
+  latest_direction?: 'inbound' | 'outbound' | string;
+  needs_followup?: boolean;
+  email_count?: number;
+  last_subject?: string | null;
+  last_preview?: string | null;
+  owner_bd?: string | null;
+  followup_due_at?: string | null;
+  followup_age_hours?: number | null;
+}
+
+export interface OutreachTrackingResponse extends ListResponse<OutreachTrackingItem> {
+  ok?: boolean;
+  status_counts?: Record<string, number>;
+  direction_counts?: {
+    inbound?: number;
+    outbound?: number;
+    needs_followup?: number;
+  };
+}
+
+export interface GmailReplySyncAccount {
+  account_id: string;
+  email: string;
+  user_id?: string | null;
+  department_code?: string | null;
+  has_readonly_scope?: boolean;
+  status?: string;
+  error_message?: string | null;
+  last_sync_at?: string | null;
+  next_sync_at?: string | null;
+  interval_minutes?: number;
+  tracked_threads?: number;
+  stored_replies?: number;
+  stored_bounces?: number;
+  sent_rows?: number;
+  threads_checked?: number;
+  messages_seen?: number;
+  new_replies?: number;
+  new_bounces?: number;
+  errors?: number;
+  error?: string | null;
+}
+
+export interface GmailReplySyncStatus {
+  ok: boolean;
+  interval_minutes: number;
+  totals: Record<string, number>;
+  items?: GmailReplySyncAccount[];
+  accounts?: GmailReplySyncAccount[];
+  accepted?: boolean;
+  running?: boolean;
+  background?: {
+    running?: boolean;
+    started_at?: string | null;
+    finished_at?: string | null;
+    error?: string | null;
+    totals?: Record<string, number> | null;
+  };
+}
+
 export interface AnalyticsSourceCount {
   name: string;
   count: number;
