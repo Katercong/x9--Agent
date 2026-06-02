@@ -13,9 +13,21 @@ REM Chrome extension loses one heartbeat but auto-reconnects.
 
 setlocal enabledelayedexpansion
 set PORT=8000
-set PY=C:\Users\Administrator\AppData\Local\Programs\Python\Python311\python.exe
 set HERE=%~dp0
 cd /d "%HERE%\.."
+
+set "PY=python"
+if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
+if not exist ".venv\Scripts\python.exe" (
+    py -3.11 --version >NUL 2>NUL
+    if not errorlevel 1 set "PY=py -3.11"
+)
+%PY% --version >NUL 2>NUL
+if errorlevel 1 (
+    echo [ERROR] Python 3.11 not found. Install Python or add python.exe to PATH.
+    pause
+    exit /b 1
+)
 
 echo [restart_desktop] Looking up PID on :%PORT%...
 set FOUND=
@@ -37,4 +49,4 @@ set X9_PUBLIC_BASE_URL=https://usx9.us
 set X9_CANONICAL_HOST_REDIRECT=1
 
 REM Foreground uvicorn (this window stays open until Ctrl+C).
-"%PY%" -m uvicorn desktop.backend.main:app --host 127.0.0.1 --port %PORT%
+%PY% -m uvicorn desktop.backend.main:app --host 127.0.0.1 --port %PORT%

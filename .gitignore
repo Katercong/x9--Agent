@@ -82,3 +82,13 @@ logs/
 /local/
 /archive/**/data/
 /archive/**/logs/
+
+# foreign-trade-helper 运行时产物（受控 Chrome 配置 / 运行时缓存 / venv），不入库
+/desktop/foreign-trade-helper/data/
+/desktop/foreign-trade-helper/.venv/
+/desktop/foreign-trade-helper/**/__pycache__/
+
+# 前端 TS 构建缓存 / 后端调试临时输出
+*.tsbuildinfo
+/desktop/data/_*
+/desktop/data/uvicorn_*

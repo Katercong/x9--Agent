@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from x9_creator_desktop_system.backend.database import SessionLocal
+from x9_creator_desktop_system.backend import main as backend_main
 from x9_creator_desktop_system.backend.main import app
 from x9_creator_desktop_system.backend.services import auth_service
 
@@ -41,6 +42,33 @@ def test_department_user_root_goes_to_portal() -> None:
 
     assert response.status_code == 303
     assert response.headers["location"] == "/portal/"
+
+
+def test_legacy_workspace_goes_to_portal_home() -> None:
+    client = _client_for_role("route_member_workspace", "department_user")
+
+    response = client.get("/workspace/foreign-trade/", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/portal/"
+
+
+def test_missing_portal_build_does_not_loop_to_login(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(backend_main, "PORTAL_DIR", tmp_path / "missing-portal")
+
+    response = backend_main.portal_index()
+
+    assert response.status_code == 503
+    assert "Portal frontend is not built" in response.body.decode("utf-8")
+
+
+def test_super_admin_root_goes_to_workbench_dashboard() -> None:
+    client = _client_for_role("route_super_admin_root", "super_admin")
+
+    response = client.get("/", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/a/dashboard"
 
 
 def test_department_admin_can_enter_department_admin_spa() -> None:

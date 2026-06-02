@@ -18,7 +18,6 @@ from desktop.backend.services.collection_stats_service import (
     get_actor_collection_stats_map,
     get_source_stats,
 )
-from desktop.backend.services.collector_service import reprocess_raw_observations
 from desktop.backend.services import auth_service
 from desktop.backend.utils import stats_cache
 
@@ -154,19 +153,29 @@ def test_worker_self_bind_backfills_unassigned_shop_rows():
     assert session.actor_user_id == actor_id
 
 
-def test_unbound_tiktok_shop_upload_is_rejected():
+def test_unbound_tiktok_shop_upload_is_accepted_for_open_box_collection():
     init_db()
-    worker_id = "test_worker_unbound_reject"
-    payload = _shop_payload("unbound_reject_creator", worker_id)
+    worker_id = "test_worker_unbound_open_box"
+    handle = "unbound_open_box_creator"
+    payload = _shop_payload(handle, worker_id)
     client = TestClient(app)
 
     response = client.post("/api/local/collector/observations", json=payload)
 
-    assert response.status_code == 409
-    assert response.json()["detail"] == "actor_binding_required"
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] in {"inserted", "updated"}
     with SessionLocal() as db:
-        count = db.query(RawObservation).filter(RawObservation.worker_id == worker_id).count()
-    assert count == 0
+        raw = db.query(RawObservation).filter(RawObservation.worker_id == worker_id).first()
+        source = (
+            db.query(CreatorSource)
+            .filter(CreatorSource.worker_id == worker_id, CreatorSource.handle == handle)
+            .first()
+        )
+    assert raw is not None
+    assert raw.actor_user_id is None
+    assert source is not None
+    assert source.actor_user_id is None
 
 
 def test_bound_worker_upload_without_cookie_is_attributed():
@@ -192,14 +201,12 @@ def test_bound_worker_upload_without_cookie_is_attributed():
     assert raw.actor_user_id == actor_id
 
     with SessionLocal() as db:
-        result = reprocess_raw_observations(db, platform="all", queued_only=True, auto_process=False, limit=10)
         source = (
             db.query(CreatorSource)
             .filter(CreatorSource.worker_id == worker_id, CreatorSource.handle == handle)
             .order_by(CreatorSource.created_at.desc())
             .first()
         )
-    assert result["processed"] >= 1
     assert source is not None
     assert source.actor_user_id == actor_id
 

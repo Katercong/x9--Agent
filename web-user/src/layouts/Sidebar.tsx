@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { ChevronDown, ChevronsLeft, ChevronsRight, Download, X } from 'lucide-react';
 import { useUiStore } from '@/stores/uiStore';
+import { useMe } from '@/hooks/useApi';
 import { getPortalMenu, type MenuEntry, type MenuItem } from './menus';
 import { cn } from '@/lib/cn';
 
@@ -32,7 +33,9 @@ export default function Sidebar() {
   const { sidebarCollapsed, toggleSidebar, mobileDrawerOpen, closeMobileDrawer, language } = useUiStore();
   const { pathname } = useLocation();
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
-  const menu = useMemo(() => getPortalMenu(language), [language]);
+  const { data: me } = useMe();
+  const isForeignTrade = me?.user?.department_code === 'foreign_trade';
+  const menu = useMemo(() => getPortalMenu(language, isForeignTrade), [language, isForeignTrade]);
   const copy = sidebarCopy[language];
 
   const activeGroupKey = useMemo(

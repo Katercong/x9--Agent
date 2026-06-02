@@ -33,9 +33,51 @@ router = APIRouter(prefix="/api/local/extension", tags=["extension"])
 ADMIN_ROLES = {"super_admin", "company_admin", "department_admin"}
 
 
-# Directory containing the merged extension (vendor v1.0.19 + relay).
+# Directory containing the TikTok creator extension (vendor v1.0.19 + relay).
 # desktop/backend/routers/extension.py -> parents[2] = desktop/
 _EXTENSION_DIR = Path(__file__).resolve().parents[2] / "chrome-extension"
+# Merged foreign-trade extension (recruitment + Xiaohongshu/Douyin).
+_FT_EXTENSION_DIR = Path(__file__).resolve().parents[2] / "foreign-trade-extension"
+
+
+def _extension_dir_for_department(department_code: str | None) -> tuple[Path, str, str]:
+    """Pick which extension to serve by department.
+
+    foreign_trade → merged recruitment + XHS/Douyin extension.
+    everything else (incl. cross_border) → the original TikTok extension.
+    Returns (dir, zip filename, actor-config filename to personalize).
+    """
+    if normalize_department_code(department_code, default=None) == "foreign_trade" and _FT_EXTENSION_DIR.is_dir():
+        return _FT_EXTENSION_DIR, "x9-foreign-trade-extension.zip", "ft_actor.js"
+    return _EXTENSION_DIR, "x9-tk-creator-extension.zip", "x9_actor_config.js"
+
+
+def _ft_actor_config_js(payload: dict) -> str:
+    """Personalize ft_actor.js with the downloading user's department + actor."""
+    actor = payload.get("actor") or {}
+    ft_data = {
+        "department_code": (actor.get("department_code") or "foreign_trade"),
+        "actor_user_id": payload.get("actor_user_id") or actor.get("id") or "",
+        "actor_token": payload.get("actor_token") or "",
+        "actor": actor,
+        "downloaded_at": payload.get("downloaded_at") or "",
+    }
+    compat_payload = {
+        "ok": bool(payload.get("ok")),
+        "source": payload.get("source") or "download_user",
+        "actor_user_id": ft_data["actor_user_id"],
+        "actor": actor,
+        "actor_token": ft_data["actor_token"],
+        "downloaded_at": ft_data["downloaded_at"],
+    }
+    return (
+        "globalThis.__X9_FT_ACTOR__ = "
+        + json.dumps(ft_data, ensure_ascii=False, separators=(",", ":"))
+        + ";\n"
+        + "globalThis.X9_BUNDLED_ACTOR_CONFIG = "
+        + json.dumps(compat_payload, ensure_ascii=False, separators=(",", ":"))
+        + ";\n"
+    )
 
 
 def _extension_actor_token(actor_user_id: str, downloaded_at: str) -> str:
@@ -92,24 +134,26 @@ def download_extension(request: Request) -> Response:
     Builds the zip on every request — picks up any local edits to the
     extension files without needing to pre-build.
     """
-    if not _EXTENSION_DIR.is_dir():
-        raise HTTPException(status_code=500, detail=f"extension dir missing: {_EXTENSION_DIR}")
+    user = getattr(request.state, "current_user", None)
+    department_code = current_department_code(request) if user else None
+    ext_dir, zip_name, actor_file = _extension_dir_for_department(department_code)
+    if not ext_dir.is_dir():
+        raise HTTPException(status_code=500, detail=f"extension dir missing: {ext_dir}")
 
-    actor_config = _actor_config_for_user(
-        getattr(request.state, "current_user", None),
-        source="download_user",
-    )
+    actor_config = _actor_config_for_user(user, source="download_user")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(_EXTENSION_DIR.rglob("*")):
+        for path in sorted(ext_dir.rglob("*")):
             if path.is_file():
-                # Store relative path within the zip — the zip will extract to
-                # a directory named after the zip's content (each file under
-                # the root). chrome://extensions Load unpacked needs the
-                # manifest.json at the root of the extracted folder.
-                arcname = path.relative_to(_EXTENSION_DIR).as_posix()
+                # chrome://extensions "Load unpacked" needs manifest.json at the
+                # root of the extracted folder, so store paths relative to ext_dir.
+                arcname = path.relative_to(ext_dir).as_posix()
                 if arcname == "x9_actor_config.js":
+                    # TikTok extension: bundled X9 actor config (legacy shape).
                     zf.writestr(arcname, _actor_config_js(actor_config))
+                elif arcname == actor_file:
+                    # Foreign-trade extension: ft_actor.js with department + actor.
+                    zf.writestr(arcname, _ft_actor_config_js(actor_config))
                 else:
                     zf.write(path, arcname)
 
@@ -118,7 +162,7 @@ def download_extension(request: Request) -> Response:
         content=buf.read(),
         media_type="application/zip",
         headers={
-            "Content-Disposition": 'attachment; filename="x9-tk-creator-extension.zip"',
+            "Content-Disposition": f'attachment; filename="{zip_name}"',
             "Cache-Control": "no-store, max-age=0",
             "Pragma": "no-cache",
             "Vary": "Cookie",
@@ -954,7 +998,7 @@ def _x9_links(item: dict):
 
 @router.post("/x9-compat/ingest-creators")
 def x9_compat_ingest(body: dict, request: Request, db: Session = Depends(get_db)) -> dict:
-    from ..services.collector_service import queue_observation
+    from ..services.collector_service import ingest_observation
     items = body.get("items") or []
     department_code = _department_from_request(request, body.get("department_code"))
     results: list[dict] = []
@@ -1042,7 +1086,7 @@ def x9_compat_ingest(body: dict, request: Request, db: Session = Depends(get_db)
             "collected_at": collected_at,
         }
         try:
-            r = queue_observation(db, observation)
+            r = ingest_observation(db, observation)
             r["dropped_by_extension"] = current_status == "dropped"
             r["filter_reason"] = notes_meta.get("filter")
             results.append(r)

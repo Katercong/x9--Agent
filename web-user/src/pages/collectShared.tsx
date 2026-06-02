@@ -8,6 +8,8 @@ export const ACCENTS = {
   leads: { key: '#10b981', dim: 'rgba(16,185,129,0.14)', label: 'X9 线索' },
   import: { key: '#f59e0b', dim: 'rgba(245,158,11,0.14)', label: '表格导入' },
   other: { key: '#06b6d4', dim: 'rgba(6,182,212,0.14)', label: '其他' },
+  jobs: { key: '#8b5cf6', dim: 'rgba(139,92,246,0.16)', label: '招聘网站' },
+  social: { key: '#ec4899', dim: 'rgba(236,72,153,0.16)', label: '小红书抖音' },
 } as const;
 
 export type Accent = (typeof ACCENTS)[keyof typeof ACCENTS];

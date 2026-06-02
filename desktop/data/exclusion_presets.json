@@ -1,0 +1,60 @@
+{
+  "active": [
+    "default_competitors"
+  ],
+  "presets": [
+    {
+      "id": "default_self",
+      "name": "内置·贵司自有/关联公司（始终生效）",
+      "builtin": true,
+      "keywords": [
+        "蓝蜻蜓",
+        "福建蓝蜻蜓",
+        "福建蓝蜻蜓护理用品",
+        "福建蓝蜻蜓护理用品股份"
+      ]
+    },
+    {
+      "id": "default_competitors",
+      "name": "内置·明显竞品/非合作对象",
+      "builtin": true,
+      "keywords": [
+        "字节跳动",
+        "腾讯",
+        "阿里巴巴",
+        "京东",
+        "拼多多",
+        "美团",
+        "百度",
+        "tiktok shop",
+        "tiktokshop",
+        "tikTok shop",
+        "分销宝",
+        "分销中国",
+        "代运营公司",
+        "代运营服务"
+      ]
+    },
+    {
+      "id": "default_irrelevant",
+      "name": "内置·明显跨行业（教培/医疗等）",
+      "builtin": true,
+      "keywords": [
+        "教育培训",
+        "考研",
+        "K12",
+        "幼儿园",
+        "驾校",
+        "医院",
+        "诊所",
+        "牙科",
+        "房地产",
+        "二手房",
+        "中介",
+        "保险",
+        "理财",
+        "P2P"
+      ]
+    }
+  ]
+}

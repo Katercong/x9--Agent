@@ -24,12 +24,15 @@ from .routers import (
     app as app_router,
     auth,
     collector,
+    company_leads,
     creators,
     dashboard,
     data as data_router,
     db as db_router,
     export as export_router,
     extension,
+    extension_ingest_compat,
+    foreign_trade,
     imports,
     outreach,
     post_process,
@@ -38,6 +41,7 @@ from .routers import (
     review_tasks,
     shared,
     v2 as v2_router,
+    xhs_leads,
 )
 from .services import auth_service
 from .services.departments import SLUG_TO_CODE
@@ -64,6 +68,10 @@ app.include_router(db_router.router)
 app.include_router(extension.router)
 app.include_router(collector.router)
 app.include_router(dashboard.router)
+app.include_router(foreign_trade.router)
+app.include_router(company_leads.router)
+app.include_router(xhs_leads.router)
+app.include_router(extension_ingest_compat.router)
 app.include_router(post_process.process_router)
 app.include_router(process.router)
 app.include_router(post_process.creators_router)
@@ -145,7 +153,7 @@ def _admin_spa_role(path: str) -> str | None:
 def _home_for_user(user: dict) -> str:
     role = user.get("role")
     if role == "super_admin":
-        return "/a/monitor"
+        return "/a/dashboard"
     if role == "company_admin":
         return "/c/overview"
     if role == "department_admin":
@@ -593,9 +601,9 @@ def workspace_page(department_slug: str):
     if department_slug not in SLUG_TO_CODE:
         return FileResponse(UI_DIR / "login.html", headers=NO_STORE_HEADERS)
     # Merged: the legacy vanilla workspace UI is superseded by the React
-    # portal. Old /workspace/{slug}/ links now land on the portal dashboard
+    # portal. Old /workspace/{slug}/ links now land on the portal home
     # (department scope comes from the session, not the slug).
-    return RedirectResponse(url="/portal/dashboard", status_code=307)
+    return RedirectResponse(url="/portal/", status_code=303)
 
 
 @app.get("/ui/app.js")
@@ -632,14 +640,19 @@ def portal_index_redirect() -> RedirectResponse:
 
 
 @app.get("/portal/")
-def portal_index() -> FileResponse:
+def portal_index() -> Response:
     if not (PORTAL_DIR / "index.html").exists():
-        return FileResponse(UI_DIR / "login.html", headers=NO_STORE_HEADERS)
+        return Response(
+            "Portal frontend is not built. Run: cd web-user && npm run build:deploy && npm run deploy",
+            status_code=503,
+            media_type="text/plain; charset=utf-8",
+            headers=NO_STORE_HEADERS,
+        )
     return FileResponse(PORTAL_DIR / "index.html", headers=NO_STORE_HEADERS)
 
 
 @app.get("/portal/{full_path:path}")
-def portal_spa(full_path: str) -> FileResponse:
+def portal_spa(full_path: str) -> Response:
     """SPA fallback for the React portal — serve real files when present,
     otherwise return index.html so React Router can handle the route."""
     if PORTAL_DIR.exists():
@@ -649,7 +662,12 @@ def portal_spa(full_path: str) -> FileResponse:
         index = PORTAL_DIR / "index.html"
         if index.exists():
             return FileResponse(index, headers=NO_STORE_HEADERS)
-    return FileResponse(UI_DIR / "login.html", headers=NO_STORE_HEADERS)
+    return Response(
+        "Portal frontend is not built. Run: cd web-user && npm run build:deploy && npm run deploy",
+        status_code=503,
+        media_type="text/plain; charset=utf-8",
+        headers=NO_STORE_HEADERS,
+    )
 
 
 # ============================================================

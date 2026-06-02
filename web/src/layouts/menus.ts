@@ -26,6 +26,8 @@ import {
   Store,
   Radar,
   FileSpreadsheet,
+  Briefcase,
+  Heart,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -63,6 +65,26 @@ export const departmentMenu: MenuEntry[] = [
   { key: 'd-samples', label: '样品管理', to: '/d/samples', icon: Package },
   { key: 'd-videos', label: '视频管理', to: '/d/videos', icon: Video },
   { key: 'd-products', label: '产品管理', to: '/d/products', icon: ShoppingBag },
+  { key: 'd-settings', label: '设置中心', to: '/d/settings', icon: Settings },
+];
+
+// 外贸部部门菜单（招聘网站 + 小红书/抖音线索）。按登录用户 department_code 在 Sidebar 切换。
+export const foreignTradeDepartmentMenu: MenuEntry[] = [
+  { key: 'd-dashboard', label: '数据看板', to: '/d/dashboard', icon: LayoutDashboard },
+  {
+    key: 'd-ft-collect',
+    label: '数据采集',
+    icon: Radar,
+    children: [
+      { key: 'd-collect-jobs', label: '采集 · 招聘网站', to: '/d/collect-jobs', icon: Briefcase },
+      { key: 'd-collect-social', label: '采集 · 小红书抖音', to: '/d/collect-social', icon: Heart },
+      { key: 'd-ft-import', label: '采集 · 表格导入', to: '/d/ft-import', icon: FileSpreadsheet },
+    ],
+  },
+  { key: 'd-company-leads', label: '公司客户线索', to: '/d/company-leads', icon: Building2 },
+  { key: 'd-talent-leads', label: '跨境人才库', to: '/d/talent-leads', icon: Users },
+  { key: 'd-social-leads', label: '社媒线索', to: '/d/social-leads', icon: Heart },
+  { key: 'd-emails', label: '邮件管理', to: '/d/emails', icon: Mail },
   { key: 'd-settings', label: '设置中心', to: '/d/settings', icon: Settings },
 ];
 
@@ -112,6 +134,14 @@ export const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/d/videos': { title: '视频管理', subtitle: '在投视频实时表现监控' },
   '/d/products': { title: '产品管理', subtitle: 'SKU 主数据维护与文案生成' },
   '/d/settings': { title: '设置中心', subtitle: '部门成员、权限与偏好配置' },
+
+  // 外贸部专属页面
+  '/d/collect-jobs': { title: '采集 · 招聘网站', subtitle: '51job / 智联 / 大泉州 · 公司客户与跨境人才' },
+  '/d/collect-social': { title: '采集 · 小红书抖音', subtitle: '博主 / 笔记 / 评论 · 联系方式与采购意向' },
+  '/d/ft-import': { title: '采集 · 表格导入', subtitle: 'CSV / XLSX 批量导入线索 · 分级与质量分布' },
+  '/d/company-leads': { title: '公司客户线索', subtitle: '跨境商家 / 中间商 / 物流商 潜在合作客户全生命周期' },
+  '/d/talent-leads': { title: '跨境人才库', subtitle: '跨境销售 / 运营 / 供应链 / 品牌 · 美区优先' },
+  '/d/social-leads': { title: '社媒线索', subtitle: '小红书 / 抖音博主线索 · GPT 采购意向分级' },
 
   '/c/overview': { title: '公司业绩总览', subtitle: '高级 KPI · 营收 · 增长 · 异常' },
   '/c/revenue': { title: '营收与利润', subtitle: '月度营收、利润率与 SKU 贡献' },

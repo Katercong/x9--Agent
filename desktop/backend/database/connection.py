@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from ..config import DATA_DIR, EXPORT_DIR, LOG_DIR, settings
@@ -36,6 +36,16 @@ engine = create_engine(
     future=True,
     **_pool_kwargs,
 )
+
+if settings.db_url.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 
@@ -102,6 +112,8 @@ def _ensure_schema_columns() -> None:
         "extension_run_progress",
     ]
     with engine.begin() as conn:
+        _ensure_foreign_trade_model_columns(conn)
+
         for table in department_tables:
             _ensure_column(conn, table, "department_code", "VARCHAR(40)")
             _ensure_index(conn, f"ix_{table}_department_code", table, "department_code")
@@ -325,6 +337,34 @@ def _columns(conn, table: str) -> set[str]:
     return {row[0] for row in rows}
 
 
+def _ensure_foreign_trade_model_columns(conn) -> None:
+    foreign_trade_tables = [
+        "company_leads",
+        "company_observations",
+        "company_outreach_emails",
+        "talent_leads",
+        "xhs_collection_runs",
+        "xhs_raw_snapshots",
+        "xhs_users",
+        "xhs_notes",
+        "xhs_comments",
+        "xhs_extracted_contacts",
+        "xhs_ai_judgments",
+    ]
+    for table_name in foreign_trade_tables:
+        table = Base.metadata.tables.get(table_name)
+        if table is None:
+            continue
+        existing = _columns(conn, table_name)
+        for column in table.columns:
+            if column.name not in existing:
+                sql_type = column.type.compile(dialect=engine.dialect)
+                conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column.name} {sql_type}"))
+        for column in table.columns:
+            if column.index:
+                _ensure_index(conn, f"ix_{table_name}_{column.name}", table_name, column.name)
+
+
 def _ensure_column(conn, table: str, column: str, sql_type: str) -> None:
     if column in _columns(conn, table):
         return
@@ -334,7 +374,46 @@ def _ensure_column(conn, table: str, column: str, sql_type: str) -> None:
 def _ensure_column_type(conn, table: str, column: str, sql_type: str) -> None:
     if engine.dialect.name == "sqlite" or column not in _columns(conn, table):
         return
+    if _column_type_matches(conn, table, column, sql_type):
+        return
     conn.execute(text(f"ALTER TABLE {table} ALTER COLUMN {column} TYPE {sql_type}"))
+
+
+def _column_type_matches(conn, table: str, column: str, sql_type: str) -> bool:
+    if engine.dialect.name != "postgresql":
+        return False
+    row = conn.execute(
+        text("""
+        SELECT data_type, character_maximum_length
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = :table AND column_name = :column
+        """),
+        {"table": table, "column": column},
+    ).mappings().first()
+    if row is None:
+        return False
+
+    expected = sql_type.strip().upper()
+    if expected.startswith("VARCHAR"):
+        length_start = expected.find("(")
+        length_end = expected.find(")", length_start + 1)
+        expected_length = None
+        if length_start >= 0 and length_end > length_start:
+            try:
+                expected_length = int(expected[length_start + 1:length_end])
+            except ValueError:
+                return False
+        return (
+            row["data_type"] == "character varying"
+            and row["character_maximum_length"] == expected_length
+        )
+    if expected == "TEXT":
+        return row["data_type"] == "text"
+    if expected in {"INTEGER", "INT"}:
+        return row["data_type"] == "integer"
+    if expected in {"TIMESTAMP", "TIMESTAMP WITHOUT TIME ZONE"}:
+        return row["data_type"] == "timestamp without time zone"
+    return False
 
 
 def _ensure_index(conn, index_name: str, table: str, column: str) -> None:

@@ -24,6 +24,8 @@ SOURCE_KEYS = (SRC_SHOP, SRC_X9_LEADS, SRC_TABLE_IMPORT, SRC_OTHER)
 SHOP_QUEUE_LEAD_STATUS = "shop_list_seen"
 SHOP_QUEUE_CLEARED_STATUS = "shop_queue_cleared"
 SOURCE_VIDEO_SEED_PATTERN = '%"lead_status":"source_video_seen"%'
+SHOP_LIST_SEEN_PATTERN = '%"lead_status":"shop_list_seen"%'
+SHOP_PROFILE_COLLECTED_PATTERN = '%"lead_status":"shop_profile_collected"%'
 STATS_CACHE_TTL_SECONDS = 60.0
 
 
@@ -111,6 +113,11 @@ def _exclude_source_video_seed_rows(q):
         or_(
             RawObservation.lead_status.is_(None),
             ~RawObservation.lead_status.in_(["source_video_seen", SHOP_QUEUE_CLEARED_STATUS]),
+        )
+    ).where(
+        or_(
+            RawObservation.raw_json.is_(None),
+            ~RawObservation.raw_json.like(SOURCE_VIDEO_SEED_PATTERN),
         )
     )
 
@@ -430,8 +437,16 @@ def _compute_source_stats(
             stat["daily"][day.isoformat()] += 1
 
     funnel_q = select(
-        func.coalesce(func.sum(case((RawObservation.lead_status == "shop_list_seen", 1), else_=0)), 0),
-        func.coalesce(func.sum(case((RawObservation.lead_status == "shop_profile_collected", 1), else_=0)), 0),
+        func.coalesce(func.sum(case((
+            or_(
+                RawObservation.lead_status == "shop_list_seen",
+                RawObservation.raw_json.like(SHOP_LIST_SEEN_PATTERN),
+            ), 1), else_=0)), 0),
+        func.coalesce(func.sum(case((
+            or_(
+                RawObservation.lead_status == "shop_profile_collected",
+                RawObservation.raw_json.like(SHOP_PROFILE_COLLECTED_PATTERN),
+            ), 1), else_=0)), 0),
     ).where(RawObservation.platform == "tiktok_shop")
     if where_department is not None:
         funnel_q = funnel_q.where(where_department)
@@ -489,16 +504,11 @@ def get_source_stats(
     days: int = 7,
 ) -> dict[str, Any]:
     days = max(1, min(int(days or 7), 90))
-    return stats_cache.get_or_compute(
-        "collector_source_stats",
-        (department_code or "__all__", actor_filter or "__all__", days),
-        lambda: _compute_source_stats(
-            db,
-            department_code=department_code,
-            actor_filter=actor_filter,
-            days=days,
-        ),
-        ttl_seconds=STATS_CACHE_TTL_SECONDS,
+    return _compute_source_stats(
+        db,
+        department_code=department_code,
+        actor_filter=actor_filter,
+        days=days,
     )
 
 
