@@ -29,12 +29,16 @@ from ..models.social_lead import (
     XhsComment,
     XhsCollectionRun,
     XhsExtractedContact,
+    XhsNoteMedia,
     XhsNote,
+    XhsUserHistoryPost,
+    XhsUserSource,
     XhsUser,
 )
 from ..models.talent_lead import TalentLead
 from ..services.departments import current_department_code, current_user, department_where
 from ..services.foreign_trade_cleaning_service import get_cleaning_status, run_cleaning
+from ..utils.foreign_trade_scoring_scheduler import request_auto_score
 
 router = APIRouter(prefix="/api/local/foreign-trade", tags=["foreign-trade"])
 
@@ -343,7 +347,12 @@ def foreign_trade_cleaning_status(
     _user: dict = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    return get_cleaning_status(db, current_department_code(request))
+    department_code = current_department_code(request)
+    status = get_cleaning_status(db, department_code)
+    summary = status.get("summary") or {}
+    if summary.get("openai_configured") and int(summary.get("unjudged_with_contact") or 0) > 0:
+        request_auto_score(department_code)
+    return status
 
 
 @router.post("/cleaning/run")
@@ -354,10 +363,13 @@ def foreign_trade_cleaning_run(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     payload = body or {}
+    include_gpt = payload.get("include_gpt")
+    if include_gpt is None:
+        include_gpt = True
     return run_cleaning(
         db,
         current_department_code(request),
-        include_gpt=bool(payload.get("include_gpt")),
+        include_gpt=bool(include_gpt),
         force_gpt=bool(payload.get("force_gpt")),
         gpt_limit=int(payload["gpt_limit"]) if payload.get("gpt_limit") else None,
     )
@@ -501,6 +513,9 @@ def _social_collection(db: Session, department_code: str | None, limit: int, off
         "with_contact": _count(db, XhsUser, department_code, XhsUser.has_contact == 1),
         "notes": _count(db, XhsNote, department_code),
         "comments": _count(db, XhsComment, department_code),
+        "media": _count(db, XhsNoteMedia, department_code),
+        "sources": _count(db, XhsUserSource, department_code),
+        "history_posts": _count(db, XhsUserHistoryPost, department_code),
         "contacts": _count(db, XhsExtractedContact, department_code),
         "judgments": _count(db, XhsAiJudgment, department_code),
         "cleaned": _count(db, XhsUser, department_code, XhsUser.clean_status == "cleaned"),
@@ -518,7 +533,7 @@ def _social_collection(db: Session, department_code: str | None, limit: int, off
         XhsUser, department_code,
     ).limit(limit).offset(offset)
     users = list(db.scalars(stmt).all())
-    return {"ok": True, "channel": "social", "stats": stats, "total": user_total, "items": _social_items(db, users)}
+    return {"ok": True, "channel": "social", "stats": stats, "total": user_total, "items": _social_items_complete(db, users)}
 
 
 def _social_items(db: Session, users: list[XhsUser]) -> list[dict[str, Any]]:
@@ -600,6 +615,282 @@ def _social_items(db: Session, users: list[XhsUser]) -> list[dict[str, Any]]:
             "created_at": _iso(collected_at),
         })
     return items
+
+
+def _social_items_complete(db: Session, users: list[XhsUser]) -> list[dict[str, Any]]:
+    if not users:
+        return []
+    user_ids = [u.id for u in users]
+    contacts_by_user = _contacts_by_user(db, user_ids)
+    comments_by_user = _recent_comments_by_user(db, user_ids)
+    notes_by_user = _recent_notes_by_user(db, user_ids)
+    sources_by_user = _sources_by_user(db, user_ids)
+    history_by_user = _history_by_user(db, user_ids)
+    judgments = _latest_judgments(db, user_ids)
+
+    items: list[dict[str, Any]] = []
+    for u in users:
+        collected_at = u.last_seen_at or u.first_seen_at or u.created_at
+        contacts = contacts_by_user.get(u.id, [])
+        comments = comments_by_user.get(u.id, [])
+        notes = notes_by_user.get(u.id, [])
+        sources = sources_by_user.get(u.id) or _json_object_list(getattr(u, "sources_json", None), 6)
+        history = history_by_user.get(u.id) or _json_object_list(getattr(u, "history_posts_json", None), 6)
+        raw_user = _json_object(getattr(u, "raw_json", None))
+        contact_signals = _json_value(u.contact_signals, {})
+        platform_signals = _json_value(u.platform_signals, {})
+        profile_quality = _json_value(getattr(u, "profile_quality", None), {})
+        j = judgments.get(u.id)
+        judgment_data = _json_value(j.judgment if j else None, None)
+        note_count = _first_number(u.note_count, len(notes))
+        follower_count = _first_number(u.follower_count, getattr(u, "followers_count", None))
+
+        items.append({
+            "id": u.id,
+            "kind": "social",
+            "kind_label": "社媒博主",
+            "name": _first_text(u.username_clean, getattr(u, "username", None), u.account_clean, getattr(u, "account", None), u.xhs_user_id, "未命名博主"),
+            "subtitle": _first_text(u.location_text, u.account_clean, getattr(u, "account", None), ""),
+            "platform": u.platform,
+            "external_user_id": u.external_user_id,
+            "xhs_user_id": u.xhs_user_id,
+            "account": _first_text(u.account_clean, getattr(u, "account", None), u.xhs_user_id, ""),
+            "avatar_url": u.avatar_url,
+            "followers": follower_count,
+            "following": u.following_count,
+            "liked_collect_count": u.liked_collect_count,
+            "profile_note_count": note_count,
+            "notes_count": max(note_count or 0, len(notes)),
+            "source_notes_count": len(notes),
+            "comments_count": len(comments),
+            "has_contact": int(u.has_contact or 0),
+            "contact": _contact_display([{"type": c["type"], "value": c["value"]} for c in contacts]),
+            "contacts": contacts,
+            "profile_url": _first_text(u.canonical_profile_url, getattr(u, "profile_url", None), ""),
+            "bio": _first_text(u.bio_clean, getattr(u, "bio", None), raw_user.get("bio"), ""),
+            "location": u.location_text,
+            "clean_status": u.clean_status,
+            "contact_signals": _signal_terms(contact_signals),
+            "platform_signals": _signal_terms(platform_signals),
+            "contact_signals_data": contact_signals,
+            "platform_signals_data": platform_signals,
+            "profile_quality": profile_quality,
+            "recent_comments": comments,
+            "recent_notes": notes,
+            "source_samples": sources,
+            "history_posts": history,
+            "raw_user": _small_raw(raw_user),
+            "fit_score": j.fit_score if j else None,
+            "fit_level": j.fit_level if j else None,
+            "decision": j.decision if j else None,
+            "intent_type": j.intent_type if j else None,
+            "judgment": j.judgment if j else None,
+            "judgment_data": judgment_data,
+            "judgment_evidence": _first_text(
+                judgment_data.get("evidence") if isinstance(judgment_data, dict) else None,
+                judgment_data.get("reason") if isinstance(judgment_data, dict) else None,
+                "",
+            ),
+            "judgment_suggestion": judgment_data.get("suggestion") if isinstance(judgment_data, dict) else None,
+            "judged_at": _iso(j.created_at) if j else None,
+            "profile_collected_at": _iso(getattr(u, "profile_collected_at", None)),
+            "created_at": _iso(collected_at),
+        })
+    return items
+
+
+def _contacts_by_user(db: Session, user_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = {uid: [] for uid in user_ids}
+    rows = db.scalars(
+        select(XhsExtractedContact)
+        .where(XhsExtractedContact.user_id.in_(user_ids))
+        .order_by(XhsExtractedContact.created_at.desc())
+    ).all()
+    for c in rows:
+        out.setdefault(c.user_id or "", []).append({
+            "type": c.contact_type,
+            "value": c.value_raw,
+            "source": c.source_field,
+            "rule": c.rule_code,
+        })
+    return {uid: vals[:8] for uid, vals in out.items()}
+
+
+def _recent_comments_by_user(db: Session, user_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = {uid: [] for uid in user_ids}
+    rows = db.execute(
+        select(XhsComment, XhsNote)
+        .outerjoin(XhsNote, XhsComment.note_id == XhsNote.id)
+        .where(XhsComment.user_id.in_(user_ids))
+        .order_by(func.coalesce(XhsComment.last_seen_at, XhsComment.published_at, XhsComment.created_at).desc())
+    ).all()
+    for comment, note in rows:
+        bucket = out.setdefault(comment.user_id or "", [])
+        if len(bucket) >= 6:
+            continue
+        raw = _json_object(comment.raw_json)
+        bucket.append({
+            "id": comment.id,
+            "content": _first_text(comment.content_clean, getattr(comment, "content", None), raw.get("content"), ""),
+            "location": _first_text(comment.location_text, getattr(comment, "location", None), raw.get("location"), ""),
+            "like_count": comment.like_count,
+            "like_count_text": getattr(comment, "like_count_text", None) or raw.get("like_count_text"),
+            "published_at_text": getattr(comment, "published_at_text", None) or raw.get("published_at_text"),
+            "created_at": _iso(comment.published_at or comment.created_at),
+            "depth": comment.depth,
+            "note_title": _first_text(note.title_clean if note else None, raw.get("note_title"), ""),
+            "note_url": _first_text(getattr(comment, "note_url", None), note.canonical_note_url if note else None, raw.get("note_url"), raw.get("post_url"), ""),
+            "keyword": getattr(comment, "keyword", None) or raw.get("keyword"),
+        })
+    return out
+
+
+def _recent_notes_by_user(db: Session, user_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = {uid: [] for uid in user_ids}
+    rows = db.scalars(
+        select(XhsNote)
+        .where(XhsNote.author_user_id.in_(user_ids))
+        .order_by(func.coalesce(XhsNote.last_seen_at, XhsNote.published_at, XhsNote.created_at).desc())
+    ).all()
+    for note in rows:
+        bucket = out.setdefault(note.author_user_id or "", [])
+        if len(bucket) >= 6:
+            continue
+        raw = _json_object(note.raw_json)
+        images = _json_list(getattr(note, "images_json", None)) or _json_list(raw.get("image_urls"))
+        bucket.append({
+            "id": note.id,
+            "title": _first_text(note.title_clean, getattr(note, "title", None), raw.get("title"), ""),
+            "desc": _first_text(note.desc_clean, getattr(note, "content", None), raw.get("desc"), ""),
+            "url": _first_text(note.canonical_note_url, getattr(note, "url", None), raw.get("url"), raw.get("post_url"), ""),
+            "cover_url": _first_text(getattr(note, "cover_url", None), raw.get("cover_url"), images[0] if images else None, ""),
+            "images": images[:4],
+            "like_count": note.like_count,
+            "collect_count": note.collect_count,
+            "comment_count": note.comment_count,
+            "published_at_text": getattr(note, "published_at_text", None) or raw.get("published_at_text"),
+            "created_at": _iso(note.published_at or note.created_at),
+            "keyword": getattr(note, "keyword", None) or raw.get("keyword"),
+        })
+    return out
+
+
+def _sources_by_user(db: Session, user_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = {uid: [] for uid in user_ids}
+    rows = db.scalars(
+        select(XhsUserSource)
+        .where(XhsUserSource.user_id.in_(user_ids))
+        .order_by(XhsUserSource.created_at.desc())
+    ).all()
+    for source in rows:
+        bucket = out.setdefault(source.user_id, [])
+        if len(bucket) >= 6:
+            continue
+        bucket.append({
+            "source_type": source.source_type,
+            "keyword": source.keyword,
+            "evidence_text": source.evidence_text,
+            "evidence_url": source.evidence_url,
+            "evidence_images": _json_list(source.evidence_images),
+            "comment_depth": source.comment_depth,
+            "created_at": _iso(source.created_at),
+        })
+    return out
+
+
+def _history_by_user(db: Session, user_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = {uid: [] for uid in user_ids}
+    rows = db.scalars(
+        select(XhsUserHistoryPost)
+        .where(XhsUserHistoryPost.user_id.in_(user_ids))
+        .order_by(XhsUserHistoryPost.user_id, XhsUserHistoryPost.position.asc())
+    ).all()
+    for post in rows:
+        bucket = out.setdefault(post.user_id, [])
+        if len(bucket) >= 6:
+            continue
+        bucket.append({
+            "title": post.title_clean or post.title_raw,
+            "url": post.canonical_note_url,
+            "cover_url": post.cover_url,
+            "like_count": post.like_count,
+            "like_count_text": post.like_count_text,
+            "published_at_text": post.published_at_text,
+            "position": post.position,
+        })
+    return out
+
+
+def _latest_judgments(db: Session, user_ids: list[str]) -> dict[str, XhsAiJudgment]:
+    judgments: dict[str, XhsAiJudgment] = {}
+    for judgment in db.scalars(
+        select(XhsAiJudgment)
+        .where(XhsAiJudgment.user_id.in_(user_ids))
+        .order_by(XhsAiJudgment.user_id, XhsAiJudgment.created_at.desc())
+    ).all():
+        if judgment.user_id not in judgments:
+            judgments[judgment.user_id] = judgment
+    return judgments
+
+
+def _json_value(value: Any, default: Any) -> Any:
+    if value is None or value == "":
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    parsed = _json_value(value, {})
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_list(value: Any) -> list[Any]:
+    parsed = _json_value(value, [])
+    return parsed if isinstance(parsed, list) else []
+
+
+def _json_object_list(value: Any, limit: int = 6) -> list[dict[str, Any]]:
+    return [item for item in _json_list(value) if isinstance(item, dict)][:limit]
+
+
+def _signal_terms(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        terms = value.get("terms")
+        if isinstance(terms, list):
+            return [str(term) for term in terms if str(term or "").strip()][:8]
+        return [str(k) for k, v in value.items() if v][:8]
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item or "").strip()][:8]
+    return []
+
+
+def _small_raw(value: dict[str, Any]) -> dict[str, Any]:
+    keys = ("user_id", "username", "account", "profile_url", "bio", "location", "stats_text")
+    return {key: value.get(key) for key in keys if value.get(key) not in (None, "", [])}
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = _text(value)
+        if text:
+            return text
+    return ""
+
+
+def _first_number(*values: Any) -> int | None:
+    for value in values:
+        if value is None or value == "":
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _iso(value: Any) -> str | None:

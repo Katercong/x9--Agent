@@ -25,9 +25,12 @@ from .social_lead import (
     XhsCollectionRun,
     XhsComment,
     XhsExtractedContact,
+    XhsNoteMedia,
     XhsNote,
     XhsRawSnapshot,
     XhsUser,
+    XhsUserHistoryPost,
+    XhsUserSource,
 )
 from .system_log import SystemLog
 from .tag_definition import TagDefinition
@@ -48,9 +51,12 @@ __all__ = [
     "XhsCollectionRun",
     "XhsComment",
     "XhsExtractedContact",
+    "XhsNoteMedia",
     "XhsNote",
     "XhsRawSnapshot",
     "XhsUser",
+    "XhsUserHistoryPost",
+    "XhsUserSource",
     "CreatorRecommendation",
     "CreatorOutreachEvent",
     "CreatorSource",

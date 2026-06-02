@@ -7,8 +7,11 @@ the X9 xhs_* SQLAlchemy models).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 EMAIL_RE = re.compile(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b")
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -45,6 +48,108 @@ def parse_count_text(value: Any) -> int | None:
         return int(float(digits) * multiplier)
     except ValueError:
         return None
+
+
+def stable_hash(payload: Any) -> str:
+    data = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def canonical_url(value: Any) -> str | None:
+    text = clean_text(value)
+    if not text:
+        return None
+    try:
+        parts = urlsplit(text)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+    except Exception:
+        return text.split("#", 1)[0].split("?", 1)[0].rstrip("/")
+
+
+def extract_xhs_note_id(value: Any) -> str | None:
+    text = str(value or "")
+    match = re.search(r"/(?:explore|search_result)/([^/?#]+)", text)
+    return match.group(1) if match else None
+
+
+def extract_xhs_user_id(value: Any) -> str | None:
+    text = str(value or "")
+    match = re.search(r"/user/profile/([^/?#]+)", text)
+    return match.group(1) if match else None
+
+
+def extract_douyin_post_id(value: Any) -> str | None:
+    text = str(value or "")
+    match = re.search(r"/(?:video|note)/([^/?#]+)", text, flags=re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def extract_douyin_user_id(value: Any) -> str | None:
+    text = str(value or "")
+    match = re.search(r"/user/([^/?#]+)", text, flags=re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def platform_prefixed_id(platform: str, value: Any) -> str | None:
+    raw = clean_text(value)
+    if not raw:
+        return None
+    platform = (platform or "xhs").lower()
+    if platform == "xhs":
+        return raw
+    if raw.startswith(f"{platform}:"):
+        return raw
+    if raw.startswith(("http://", "https://")):
+        raw = stable_hash(raw)[:24]
+    return f"{platform}:{raw}"
+
+
+def data_quality_user(user: dict[str, Any]) -> dict[str, bool]:
+    return {
+        "has_profile_url": bool(clean_text(user.get("profile_url"))),
+        "has_bio": bool(clean_text(user.get("bio") or user.get("bio_clean"))),
+        "has_history_posts": bool(user.get("history_posts")),
+        "profile_collected": bool(user.get("profile_collected_at")),
+    }
+
+
+def data_quality_note(note: dict[str, Any]) -> dict[str, bool]:
+    return {
+        "has_title": bool(clean_text(note.get("title"))),
+        "has_desc": bool(clean_text(note.get("desc"))),
+        "has_images": bool(note.get("image_urls") or note.get("cover_url")),
+        "has_author": isinstance(note.get("author"), dict),
+    }
+
+
+def data_quality_comment(comment: dict[str, Any]) -> dict[str, bool]:
+    return {
+        "has_content": bool(clean_text(comment.get("content"))),
+        "has_user": isinstance(comment.get("user"), dict),
+        "is_reply": int(comment.get("depth") or 0) > 0,
+    }
+
+
+def extract_platform_signals(values: list[Any]) -> dict[str, Any]:
+    text = " ".join((clean_text(v) or "").lower() for v in values if clean_text(v))
+    terms = [
+        "temu",
+        "amazon",
+        "tiktok",
+        "tiktok shop",
+        "tk",
+        "独立站",
+        "跨境",
+        "货源",
+        "工厂",
+        "代发",
+        "一件代发",
+        "dropship",
+        "sourcing",
+        "shopify",
+    ]
+    found = [term for term in terms if term in text]
+    return {"terms": found}
 
 
 def normalize_url(value: Any) -> str | None:

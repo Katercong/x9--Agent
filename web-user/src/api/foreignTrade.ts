@@ -52,6 +52,45 @@ export interface ContactItem {
   rule?: string | null;
 }
 
+export interface SocialCommentEvidence {
+  id?: string;
+  content?: string;
+  location?: string;
+  like_count?: number | null;
+  like_count_text?: string | null;
+  published_at_text?: string | null;
+  created_at?: string | null;
+  depth?: number;
+  note_title?: string;
+  note_url?: string;
+  keyword?: string | null;
+}
+
+export interface SocialNoteEvidence {
+  id?: string;
+  title?: string;
+  desc?: string;
+  url?: string;
+  cover_url?: string;
+  images?: string[];
+  like_count?: number | null;
+  collect_count?: number | null;
+  comment_count?: number | null;
+  published_at_text?: string | null;
+  created_at?: string | null;
+  keyword?: string | null;
+}
+
+export interface SocialSourceEvidence {
+  source_type?: string;
+  keyword?: string | null;
+  evidence_text?: string | null;
+  evidence_url?: string | null;
+  evidence_images?: string[];
+  comment_depth?: number | null;
+  created_at?: string | null;
+}
+
 export interface LeadItem {
   id: string;
   kind: 'company' | 'talent' | 'social';
@@ -90,8 +129,15 @@ export interface LeadItem {
   tags?: string[];
   keywords?: string[];
   raw_titles?: string[];
+  external_user_id?: string | null;
+  xhs_user_id?: string | null;
+  account?: string | null;
+  avatar_url?: string | null;
   followers?: number | null;
   following?: number | null;
+  liked_collect_count?: number | null;
+  profile_note_count?: number | null;
+  source_notes_count?: number;
   notes_count?: number;
   comments_count?: number;
   has_contact?: number;
@@ -100,12 +146,24 @@ export interface LeadItem {
   clean_status?: string | null;
   contact_signals?: string[];
   platform_signals?: string[];
+  contact_signals_data?: Record<string, unknown> | unknown[];
+  platform_signals_data?: Record<string, unknown> | unknown[];
+  profile_quality?: Record<string, unknown>;
+  recent_comments?: SocialCommentEvidence[];
+  recent_notes?: SocialNoteEvidence[];
+  source_samples?: SocialSourceEvidence[];
+  history_posts?: SocialNoteEvidence[];
+  raw_user?: Record<string, unknown>;
   fit_score?: number | null;
   fit_level?: string | null;
   decision?: string | null;
   intent_type?: string | null;
   judgment?: string | null;
+  judgment_data?: Record<string, unknown> | null;
+  judgment_evidence?: string | null;
+  judgment_suggestion?: string | null;
   judged_at?: string | null;
+  profile_collected_at?: string | null;
   created_at?: string | null;
 }
 

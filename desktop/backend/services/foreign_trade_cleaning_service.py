@@ -22,16 +22,28 @@ from ..models.social_lead import (
     XhsAiJudgment,
     XhsComment,
     XhsExtractedContact,
+    XhsNoteMedia,
     XhsNote,
     XhsRawSnapshot,
     XhsUser,
+    XhsUserHistoryPost,
+    XhsUserSource,
 )
 from ..models.talent_lead import TalentLead
 from ..services.departments import department_where
 from ..services.xhs_lead_service import PROMPT_VERSION, ingest_snapshot, judge_users_with_gpt
 from ..utils.job_exclusion import check_excluded
 from ..utils.job_keyword_rules import score_company, score_talent_profile
-from ..utils.xhs_cleaning import clean_text, extract_contacts
+from ..utils.xhs_cleaning import (
+    canonical_url,
+    clean_text,
+    extract_contacts,
+    extract_douyin_user_id,
+    extract_xhs_user_id,
+    platform_prefixed_id,
+    parse_count_text,
+    stable_hash,
+)
 
 
 def get_cleaning_status(db: Session, department_code: str | None = None) -> dict[str, Any]:
@@ -268,9 +280,24 @@ def _clean_social_leads(db: Session, department_code: str | None) -> dict[str, i
     comments = db.scalars(_scoped(select(XhsComment), XhsComment, department_code)).all()
 
     contacts_added = 0
+    media_added = 0
+    history_added = 0
+    sources_added = 0
     for user in users:
         _clean_attrs(user, ["xhs_user_id", "username_clean", "account_clean", "bio_clean", "location_text"])
+        profile_url = canonical_url(getattr(user, "canonical_profile_url", None) or getattr(user, "profile_url", None))
+        if profile_url:
+            user.canonical_profile_url = profile_url
+        if not user.external_user_id:
+            user.external_user_id = (
+                extract_douyin_user_id(profile_url) if user.platform == "douyin" else extract_xhs_user_id(profile_url)
+            )
+        if not user.xhs_user_id:
+            user.xhs_user_id = platform_prefixed_id(user.platform or "xhs", user.external_user_id or user.account_clean)
+        if not user.follower_count and getattr(user, "followers_count", None):
+            user.follower_count = user.followers_count
         user.clean_status = "cleaned"
+        contacts_added += _add_platform_contact(db, dept=user.department_code, user=user)
         contacts_added += _add_contacts(
             db,
             dept=user.department_code,
@@ -279,10 +306,31 @@ def _clean_social_leads(db: Session, department_code: str | None) -> dict[str, i
             user_id=user.id,
             texts=[user.bio_clean, user.username_clean, user.account_clean],
         )
+        history_added += _add_history_posts_from_user(db, user)
 
     for note in notes:
         _clean_attrs(note, ["xhs_note_id", "title_clean", "desc_clean", "publish_location"])
+        note_raw = _json_object(getattr(note, "raw_json", None))
+        note.canonical_note_url = canonical_url(note.canonical_note_url or getattr(note, "url", None) or note_raw.get("url") or note_raw.get("post_url")) or note.canonical_note_url
+        note.search_result_url = canonical_url(getattr(note, "search_result_url", None) or note_raw.get("search_result_url")) or getattr(note, "search_result_url", None)
+        note.cover_url = clean_text(getattr(note, "cover_url", None) or note_raw.get("cover_url")) or getattr(note, "cover_url", None)
+        note.keyword = clean_text(getattr(note, "keyword", None) or note_raw.get("keyword")) or getattr(note, "keyword", None)
         user_id = note.author_user_id
+        media_added += _add_note_media_from_row(db, note)
+        if user_id:
+            sources_added += _add_user_source(
+                db,
+                dept=note.department_code,
+                platform=note.platform,
+                user_id=user_id,
+                note_id=note.id,
+                comment_id=None,
+                source_type="post_author",
+                keyword=getattr(note, "keyword", None),
+                evidence_text=note.title_clean or note.desc_clean,
+                evidence_url=note.canonical_note_url,
+                payload=_json_object(getattr(note, "raw_json", None)),
+            )
         contacts_added += _add_contacts(
             db,
             dept=note.department_code,
@@ -294,6 +342,27 @@ def _clean_social_leads(db: Session, department_code: str | None) -> dict[str, i
 
     for comment in comments:
         _clean_attrs(comment, ["xhs_comment_id", "content_clean", "location_text"])
+        comment_raw = _json_object(getattr(comment, "raw_json", None))
+        comment.note_url = canonical_url(getattr(comment, "note_url", None) or comment_raw.get("note_url") or comment_raw.get("post_url")) or getattr(comment, "note_url", None)
+        comment.keyword = clean_text(getattr(comment, "keyword", None) or comment_raw.get("keyword")) or getattr(comment, "keyword", None)
+        comment.published_at_text = clean_text(getattr(comment, "published_at_text", None) or comment_raw.get("published_at_text")) or getattr(comment, "published_at_text", None)
+        comment.location_text = clean_text(comment.location_text or getattr(comment, "location", None) or comment_raw.get("location")) or comment.location_text
+        comment.like_count_text = clean_text(getattr(comment, "like_count_text", None) or comment_raw.get("like_count_text")) or getattr(comment, "like_count_text", None)
+        if comment.user_id:
+            sources_added += _add_user_source(
+                db,
+                dept=comment.department_code,
+                platform=comment.platform,
+                user_id=comment.user_id,
+                note_id=comment.note_id,
+                comment_id=comment.id,
+                source_type="reply_author" if int(comment.depth or 0) > 0 else "comment_author",
+                keyword=getattr(comment, "keyword", None),
+                evidence_text=comment.content_clean,
+                evidence_url=getattr(comment, "note_url", None),
+                comment_depth=int(comment.depth or 0),
+                payload=_json_object(getattr(comment, "raw_json", None)),
+            )
         contacts_added += _add_contacts(
             db,
             dept=comment.department_code,
@@ -325,7 +394,193 @@ def _clean_social_leads(db: Session, department_code: str | None) -> dict[str, i
         "comments": len(comments),
         "contacts_added": contacts_added,
         "users_with_contact": users_with_contact,
+        "media_added": media_added,
+        "history_added": history_added,
+        "sources_added": sources_added,
     }
+
+
+def _add_platform_contact(db: Session, *, dept: str, user: XhsUser) -> int:
+    raw = clean_text(user.account_clean or user.xhs_user_id or user.username_clean)
+    norm = clean_text(user.account_clean or user.xhs_user_id or user.external_user_id)
+    if not raw or not norm:
+        return 0
+    exists = db.scalar(
+        select(XhsExtractedContact.id).where(
+            XhsExtractedContact.owner_type == "user",
+            XhsExtractedContact.owner_id == user.id,
+            XhsExtractedContact.contact_type == "platform_handle",
+            XhsExtractedContact.value_norm == norm.lower(),
+        )
+    )
+    if exists:
+        user.has_contact = 1
+        return 0
+    db.add(
+        XhsExtractedContact(
+            id=uuid.uuid4().hex,
+            department_code=dept,
+            owner_type="user",
+            owner_id=user.id,
+            user_id=user.id,
+            contact_type="platform_handle",
+            value_raw=raw,
+            value_norm=norm.lower(),
+            source_field="account_clean" if user.account_clean else "xhs_user_id",
+            rule_code=f"{user.platform or 'xhs'}_account",
+        )
+    )
+    user.has_contact = 1
+    return 1
+
+
+def _add_note_media_from_row(db: Session, note: XhsNote) -> int:
+    raw = _json_object(getattr(note, "raw_json", None))
+    urls: list[tuple[str, str]] = []
+    cover = clean_text(getattr(note, "cover_url", None) or raw.get("cover_url"))
+    if cover:
+        urls.append(("cover", cover))
+    for value in _json_list(getattr(note, "images_json", None)) or _json_list(raw.get("image_urls")):
+        url = clean_text(value)
+        if url:
+            urls.append(("image", url))
+    added = 0
+    seen: set[str] = set()
+    for position, (media_type, url) in enumerate(urls):
+        if url in seen:
+            continue
+        seen.add(url)
+        exists = db.scalar(select(XhsNoteMedia.id).where(XhsNoteMedia.note_id == note.id, XhsNoteMedia.url == url))
+        if exists:
+            continue
+        db.add(
+            XhsNoteMedia(
+                id=uuid.uuid4().hex,
+                department_code=note.department_code,
+                note_id=note.id,
+                media_type=media_type,
+                url=url,
+                normalized_url=canonical_url(url),
+                position=position,
+            )
+        )
+        added += 1
+    return added
+
+
+def _add_history_posts_from_user(db: Session, user: XhsUser) -> int:
+    posts = _json_list_any(getattr(user, "history_posts_json", None))
+    if not posts:
+        raw = _json_object(getattr(user, "raw_json", None))
+        posts = _json_list_any(raw.get("history_posts"))
+    added = 0
+    for position, post in enumerate(posts):
+        if not isinstance(post, dict):
+            continue
+        url = canonical_url(post.get("url") or post.get("post_url"))
+        note_id = clean_text(post.get("note_id") or post.get("post_id"))
+        xhs_note_id = platform_prefixed_id(user.platform or "xhs", note_id or url)
+        if not xhs_note_id and not url:
+            continue
+        exists = db.scalar(
+            select(XhsUserHistoryPost.id).where(
+                XhsUserHistoryPost.user_id == user.id,
+                XhsUserHistoryPost.xhs_note_id == xhs_note_id,
+            )
+        ) if xhs_note_id else None
+        if exists:
+            continue
+        db.add(
+            XhsUserHistoryPost(
+                id=uuid.uuid4().hex,
+                department_code=user.department_code,
+                platform=user.platform or "xhs",
+                user_id=user.id,
+                xhs_note_id=xhs_note_id,
+                canonical_note_url=url,
+                title_raw=clean_text(post.get("title")),
+                title_clean=clean_text(post.get("title")),
+                cover_url=clean_text(post.get("cover_url")),
+                like_count_text=clean_text(post.get("like_count_text")),
+                like_count=parse_count_text(post.get("like_count") or post.get("like_count_text")),
+                published_at_text=clean_text(post.get("published_at_text")),
+                position=position,
+            )
+        )
+        added += 1
+    return added
+
+
+def _add_user_source(
+    db: Session,
+    *,
+    dept: str,
+    platform: str,
+    user_id: str,
+    note_id: str | None,
+    comment_id: str | None,
+    source_type: str,
+    keyword: str | None,
+    evidence_text: Any,
+    evidence_url: Any,
+    payload: dict[str, Any] | None = None,
+    comment_depth: int | None = None,
+) -> int:
+    record = {
+        "user_id": user_id,
+        "note_id": note_id,
+        "comment_id": comment_id,
+        "source_type": source_type,
+        "keyword": keyword,
+        "evidence_text": clean_text(evidence_text),
+        "evidence_url": canonical_url(evidence_url),
+    }
+    digest = stable_hash(record)
+    existing_row = None
+    if comment_id:
+        existing_row = db.scalar(
+            select(XhsUserSource).where(
+                XhsUserSource.user_id == user_id,
+                XhsUserSource.comment_id == comment_id,
+                XhsUserSource.source_type == source_type,
+            )
+        )
+    elif note_id:
+        existing_row = db.scalar(
+            select(XhsUserSource).where(
+                XhsUserSource.user_id == user_id,
+                XhsUserSource.note_id == note_id,
+                XhsUserSource.source_type == source_type,
+            )
+        )
+    if existing_row is not None:
+        existing_row.keyword = keyword or existing_row.keyword
+        existing_row.evidence_text = record["evidence_text"] or existing_row.evidence_text
+        existing_row.evidence_url = record["evidence_url"] or existing_row.evidence_url
+        existing_row.source_payload = _dump_json(payload or {})
+        return 0
+    exists = db.scalar(select(XhsUserSource.id).where(XhsUserSource.source_hash == digest))
+    if exists:
+        return 0
+    db.add(
+        XhsUserSource(
+            id=uuid.uuid4().hex,
+            department_code=dept,
+            platform=platform or "xhs",
+            user_id=user_id,
+            note_id=note_id,
+            comment_id=comment_id,
+            source_type=source_type,
+            keyword=keyword,
+            evidence_text=record["evidence_text"],
+            evidence_url=record["evidence_url"],
+            evidence_images="[]",
+            comment_depth=comment_depth,
+            source_payload=_dump_json(payload or {}),
+            source_hash=digest,
+        )
+    )
+    return 1
 
 
 def _add_contacts(
@@ -423,6 +678,30 @@ def _json_list(value: Any) -> list[str]:
     if isinstance(parsed, list):
         return [str(item) for item in parsed if str(item or "").strip()]
     return [str(parsed)]
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_list_any(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if not value:
+        return []
+    try:
+        parsed = json.loads(str(value))
+    except Exception:
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def _dump_json(value: Any) -> str:

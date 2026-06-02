@@ -348,6 +348,9 @@ def _ensure_foreign_trade_model_columns(conn) -> None:
         "xhs_users",
         "xhs_notes",
         "xhs_comments",
+        "xhs_note_media",
+        "xhs_user_sources",
+        "xhs_user_history_posts",
         "xhs_extracted_contacts",
         "xhs_ai_judgments",
     ]
