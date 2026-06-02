@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..services.company_lead_service import ingest_company, ingest_talent
+from ..services.upload_queue_cleanup import attach_queue_cleanup
 from ..services.xhs_lead_service import ingest_snapshot
 
 router = APIRouter(prefix="/api", tags=["extension-ingest-compat"])
@@ -51,7 +52,12 @@ def companies_ingest(request: Request, payload: dict[str, Any] = Body(...), db: 
         lead = ingest_company(db, payload, department_code=_dept(request, payload))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "id": lead.id, "tier": lead.tier, "score": lead.score, "llm_score_status": lead.llm_score_status}
+    return attach_queue_cleanup(
+        {"ok": True, "id": lead.id, "tier": lead.tier, "score": lead.score, "llm_score_status": lead.llm_score_status},
+        payload,
+        entity="company_lead",
+        lead_id=lead.id,
+    )
 
 
 @router.post("/talents/ingest")
@@ -60,7 +66,12 @@ def talents_ingest(request: Request, payload: dict[str, Any] = Body(...), db: Se
         lead = ingest_talent(db, payload, department_code=_dept(request, payload))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "id": lead.id, "tier": lead.tier, "score": lead.score, "llm_score_status": lead.llm_score_status}
+    return attach_queue_cleanup(
+        {"ok": True, "id": lead.id, "tier": lead.tier, "score": lead.score, "llm_score_status": lead.llm_score_status},
+        payload,
+        entity="talent_lead",
+        lead_id=lead.id,
+    )
 
 
 @router.post("/xhs/ingest")

@@ -1842,7 +1842,7 @@ function markSourceVideoHandled(state, videoUrl, keyword) {
     const sameVideo = targetKey
       ? getTikTokVideoIdentityKey(video.video_url) === targetKey
       : canonicalUrl(video.video_url) === targetUrl;
-    if (sameVideo && video.search_keyword === keyword) {
+    if (sameVideo && (!keyword || video.search_keyword === keyword)) {
       video.handled = true;
       video.handled_at = now();
     }
@@ -1894,7 +1894,7 @@ function markPendingSourceVideoHandled(state, videoUrl, keyword) {
     const sameVideo = targetKey
       ? getTikTokVideoIdentityKey(item.source_video_url) === targetKey
       : canonicalUrl(item.source_video_url) === targetUrl;
-    if (sameVideo && item.search_keyword === keyword) {
+    if (sameVideo && (!keyword || item.search_keyword === keyword)) {
       item.handled = true;
     }
   }
@@ -2181,6 +2181,7 @@ async function postX9Observation(payload) {
     const detail = x9ResponseDetail(body, response.ok ? '' : `HTTP ${response.status}`);
     if (response.ok) {
       await markX9ObservationUploaded(payload);
+      await applyX9UploadQueueCleanup(payload, body);
     }
     await chrome.storage.local.set({
       x9LastObservationUpload: {
@@ -2877,6 +2878,40 @@ async function markX9ObservationUploaded(payload) {
   const uploaded = new Set(Array.isArray(stored[X9_UPLOADED_OBSERVATION_KEYS]) ? stored[X9_UPLOADED_OBSERVATION_KEYS] : []);
   uploaded.add(key);
   await chrome.storage.local.set({ [X9_UPLOADED_OBSERVATION_KEYS]: Array.from(uploaded).slice(-5000) }).catch(() => undefined);
+}
+
+async function applyX9UploadQueueCleanup(payload, responseBody) {
+  if (!payload || responseBody?.queue_cleanup?.clear_queue === false) {
+    return;
+  }
+  const cleanup = responseBody?.queue_cleanup || {};
+  const leadStatus = String(cleanup.lead_status || payload.lead_status || '');
+  const profileUrl = cleanup.profile_url || payload.creator?.profile_url || '';
+  const sourceVideoUrl = cleanup.source_video_url || payload.source_video?.video_url || '';
+  const keyword = cleanup.search_keyword || payload.search_keyword || '';
+  if (!profileUrl && !sourceVideoUrl) {
+    return;
+  }
+  const state = await getState().catch(() => null);
+  if (!state) {
+    return;
+  }
+  let changed = false;
+  if (sourceVideoUrl) {
+    markSourceVideoHandled(state, sourceVideoUrl, keyword);
+    changed = true;
+    if (leadStatus !== 'source_video_seen') {
+      markPendingSourceVideoHandled(state, sourceVideoUrl, keyword);
+    }
+  }
+  if (leadStatus !== 'source_video_seen' && profileUrl) {
+    markProfileHandled(state, profileUrl);
+    changed = true;
+  }
+  pruneHandledQueue(state);
+  if (changed) {
+    await setState(state).catch(() => undefined);
+  }
 }
 
 function saveLead(state, nextLead) {

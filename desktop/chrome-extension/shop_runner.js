@@ -699,6 +699,17 @@
     await chrome.storage.local.set({ [SHOP_PENDING_UPLOADS_KEY]: queue.slice(-SHOP_PENDING_UPLOAD_LIMIT) }).catch(() => undefined);
   }
 
+  async function clearPendingUploadForObservation(observation, meta) {
+    const key = buildPendingUploadKey(observation, meta);
+    if (!key) return;
+    const got = await chrome.storage.local.get([SHOP_PENDING_UPLOADS_KEY]).catch(() => ({}));
+    const queue = Array.isArray(got[SHOP_PENDING_UPLOADS_KEY]) ? got[SHOP_PENDING_UPLOADS_KEY] : [];
+    const keep = queue.filter((item) => item && item.key !== key);
+    if (keep.length !== queue.length) {
+      await chrome.storage.local.set({ [SHOP_PENDING_UPLOADS_KEY]: keep.slice(-SHOP_PENDING_UPLOAD_LIMIT) }).catch(() => undefined);
+    }
+  }
+
   let pendingFlushActive = false;
 
   async function flushPendingUploads(reason) {
@@ -767,6 +778,7 @@
     const kind = (meta && meta.kind) || "detail";
     return uploadObservation(observation, endpoint)
       .then(async (result) => {
+        await clearPendingUploadForObservation(observation, meta);
         const cur = await getState();
         await patchState({
           settings: Object.assign({}, cur.settings, { endpoint: result.endpoint || endpoint }),
@@ -1116,6 +1128,12 @@
             }, () => void chrome.runtime.lastError);
           }
         } catch (_) {}
+        await patchState({
+          handles: [],
+          doneHandles: [],
+          queueIndex: 0,
+          currentHandle: null,
+        });
       }
     } finally { detailLoopActive = false; }
   }

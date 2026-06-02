@@ -999,6 +999,7 @@ def _x9_links(item: dict):
 @router.post("/x9-compat/ingest-creators")
 def x9_compat_ingest(body: dict, request: Request, db: Session = Depends(get_db)) -> dict:
     from ..services.collector_service import ingest_observation
+    from ..services.upload_queue_cleanup import attach_queue_cleanup
     items = body.get("items") or []
     department_code = _department_from_request(request, body.get("department_code"))
     results: list[dict] = []
@@ -1089,10 +1090,15 @@ def x9_compat_ingest(body: dict, request: Request, db: Session = Depends(get_db)
             r = ingest_observation(db, observation)
             r["dropped_by_extension"] = current_status == "dropped"
             r["filter_reason"] = notes_meta.get("filter")
+            r = attach_queue_cleanup(r, observation, observation_id=r.get("observation_id"))
             results.append(r)
         except ValueError as exc:
             results.append({"ok": False, "reason": str(exc)})
-    return {"ok": True, "items": results, "count": len(results)}
+    return attach_queue_cleanup(
+        {"ok": True, "items": results, "count": len(results)},
+        {"lead_status": "batch"},
+        count=len(results),
+    )
 
 
 def _coerce_dt(v: str | None):

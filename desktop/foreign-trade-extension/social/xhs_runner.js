@@ -462,12 +462,14 @@
         throw new Error(`upload_failed_${response.status}: ${detail.slice(0, 200)}`);
       }
       const result = await response.json().catch(() => ({}));
+      clearFinishedQueueAfterUpload();
       const uploadInfo = {
         ok: true,
         endpoint,
         run_id: snapshot.run_id || state.runId || null,
         at: new Date().toISOString(),
-        stats: result.stats || null
+        stats: result.stats || result.counts || null,
+        queue_cleanup: result.queue_cleanup || null
       };
       patch({ ingestUpload: uploadInfo });
       await chrome.storage.local.set({ [INGEST_UPLOAD_STORAGE_KEY]: uploadInfo });
@@ -525,6 +527,14 @@
 
   function patch(values) {
     state = Object.assign({}, state, values || {});
+  }
+
+  function clearFinishedQueueAfterUpload() {
+    for (const user of Object.values(state.users || {})) {
+      if (user) user.profile_pending = false;
+    }
+    profileWaiters.clear();
+    profileRequests.clear();
   }
 
   function log(text) {

@@ -5,6 +5,7 @@ page. The browser extension POSTs collection snapshots to the ingest endpoints.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Query, Request
@@ -17,6 +18,19 @@ from ..services.departments import current_department_code, department_where
 from ..services.xhs_lead_service import ingest_snapshot, judge_users_with_gpt
 
 router = APIRouter(prefix="/api/local/xhs", tags=["xhs-leads"])
+CHINA_TZ = timezone(timedelta(hours=8))
+
+
+def _iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(CHINA_TZ).isoformat()
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 
 @router.post("/ingest")
@@ -64,7 +78,8 @@ def list_users(
         base = base.where(or_(XhsUser.username_clean.ilike(like), XhsUser.bio_clean.ilike(like), XhsUser.location_text.ilike(like)))
 
     total = int(db.scalar(select(func.count()).select_from(base.order_by(None).subquery())) or 0)
-    users = list(db.scalars(base.order_by(XhsUser.created_at.desc()).limit(limit).offset(offset)).all())
+    recent_at = func.coalesce(XhsUser.last_seen_at, XhsUser.first_seen_at, XhsUser.created_at)
+    users = list(db.scalars(base.order_by(recent_at.desc()).limit(limit).offset(offset)).all())
 
     # latest judgment per user (small page → per-user lookup is fine)
     judgments: dict[str, XhsAiJudgment] = {}
@@ -95,6 +110,6 @@ def list_users(
             "fit_level": j.fit_level if j else None,
             "decision": j.decision if j else None,
             "intent_type": j.intent_type if j else None,
-            "created_at": u.created_at.isoformat() if hasattr(u.created_at, "isoformat") else u.created_at,
+            "created_at": _iso(u.last_seen_at or u.first_seen_at or u.created_at),
         })
     return {"ok": True, "total": total, "limit": limit, "offset": offset, "items": items}

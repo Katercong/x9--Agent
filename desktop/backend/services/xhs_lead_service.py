@@ -30,6 +30,7 @@ from ..models.social_lead import (
     XhsUser,
 )
 from ..services.departments import DEFAULT_DEPARTMENT
+from ..services.upload_queue_cleanup import attach_queue_cleanup
 from ..utils.xhs_cleaning import clean_text, extract_contacts, parse_count_text
 
 PROMPT_VERSION = "xhs-b2b-us-dropship-fit-v5"
@@ -231,7 +232,14 @@ def ingest_snapshot(db: Session, payload: dict[str, Any], *, platform: str | Non
         )
 
     db.commit()
-    return {"ok": True, "platform": platform, "run_id": run.id, "counts": counts}
+    return attach_queue_cleanup(
+        {"ok": True, "platform": platform, "run_id": run.id, "counts": counts},
+        payload,
+        entity="social_snapshot",
+        platform=platform,
+        run_id=run.id,
+        counts=counts,
+    )
 
 
 # ---------------- GPT purchase-intent judge ----------------

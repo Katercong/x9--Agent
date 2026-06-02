@@ -18,9 +18,16 @@ const PLATFORM_LABELS: Record<string, string> = {
 
 const TIER_TONE: Record<string, 'good' | 'warn' | 'muted'> = { A: 'good', B: 'warn', C: 'muted' };
 
+function parseTimeMs(value: string): number {
+  const text = String(value || '').trim();
+  const hasZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(text);
+  const normalized = !hasZone && /^\d{4}-\d{2}-\d{2}[T ]/.test(text) ? `${text.replace(' ', 'T')}Z` : text;
+  return new Date(normalized).getTime();
+}
+
 function shortTime(value: string | null | undefined): string {
   if (!value) return '暂无';
-  const ts = new Date(value).getTime();
+  const ts = parseTimeMs(value);
   if (!Number.isFinite(ts)) return '暂无';
   const minutes = Math.floor((Date.now() - ts) / 60000);
   if (minutes < 1) return '刚刚';

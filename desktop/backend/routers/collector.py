@@ -24,6 +24,7 @@ from ..services.collection_stats_service import (
 )
 from ..services.departments import DEFAULT_DEPARTMENT, current_department_code, department_where
 from ..services.observation_enrichment import enrich_observation_payload, extract_shop_detail_fields
+from ..services.upload_queue_cleanup import attach_queue_cleanup
 from ..utils.contact_methods import extract_contact_methods
 from ..utils.json_utils import loads_json_list
 from ..utils.source_classify import (
@@ -226,7 +227,8 @@ def post_observation(request: Request, payload: Any = Body(...), db: Session = D
     try:
         payload = _coerce_observation_payload(payload)
         _apply_worker_binding_attribution(db, payload, request)
-        return ingest_observation(db, payload)
+        result = ingest_observation(db, payload)
+        return attach_queue_cleanup(result, payload, observation_id=result.get("observation_id"))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

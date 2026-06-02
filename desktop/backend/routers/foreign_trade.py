@@ -86,6 +86,7 @@ PLATFORM_ALIASES = {
 
 # Recruitment platforms feed the "jobs" source; table imports use this marker.
 IMPORT_SOURCE_TYPES = ("table_import", "csv_import", "xlsx_import")
+CHINA_TZ = timezone(timedelta(hours=8))
 
 
 def _scope(stmt, model, department_code: str | None):
@@ -113,13 +114,21 @@ def _group_counts(db: Session, model, column, department_code: str | None) -> di
 
 
 def _today() -> date:
-    return datetime.now().date()
+    return datetime.now(CHINA_TZ).date()
+
+
+def _china_day_bounds(day: date) -> tuple[datetime, datetime]:
+    start_china = datetime.combine(day, datetime.min.time(), tzinfo=CHINA_TZ)
+    end_china = start_china + timedelta(days=1)
+    return (
+        start_china.astimezone(timezone.utc).replace(tzinfo=None),
+        end_china.astimezone(timezone.utc).replace(tzinfo=None),
+    )
 
 
 def _today_count(db: Session, model, department_code: str | None) -> int:
     today = _today()
-    start = datetime.combine(today, datetime.min.time())
-    end = start + timedelta(days=1)
+    start, end = _china_day_bounds(today)
     return _count(
         db, model, department_code,
         model.created_at >= start,
@@ -130,18 +139,14 @@ def _today_count(db: Session, model, department_code: str | None) -> int:
 def _trend_7d(db: Session, models: list[Any], department_code: str | None) -> list[dict[str, Any]]:
     today = _today()
     days = [(today - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
-    totals = {day: 0 for day in days}
-    since = today - timedelta(days=6)
-    since_start = datetime.combine(since, datetime.min.time())
-    for model in models:
-        stmt = select(func.date(model.created_at), func.count()).group_by(func.date(model.created_at))
-        stmt = _scope(stmt, model, department_code)
-        stmt = stmt.where(model.created_at >= since_start)
-        for day_value, count in db.execute(stmt).all():
-            key = str(day_value)[:10]
-            if key in totals:
-                totals[key] += int(count or 0)
-    return [{"date": day, "count": totals[day]} for day in days]
+    rows: list[dict[str, Any]] = []
+    for day in days:
+        start, end = _china_day_bounds(date.fromisoformat(day))
+        total = 0
+        for model in models:
+            total += _count(db, model, department_code, model.created_at >= start, model.created_at < end)
+        rows.append({"date": day, "count": total})
+    return rows
 
 
 def _rows(order: tuple[str, ...], labels: dict[str, str], counts: dict[str, int]) -> list[dict[str, Any]]:
@@ -222,7 +227,7 @@ def _build_dashboard(db: Session, department_code: str | None) -> dict[str, Any]
 
     return {
         "ok": True,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(CHINA_TZ).isoformat(),
         "scope": {"type": "department" if department_code else "company", "department_code": department_code},
         "summary": {
             "total_company_leads": company_total,
@@ -312,7 +317,9 @@ def _jobs_collection(db: Session, department_code: str | None, limit: int, offse
         "with_contact": _count(db, CompanyLead, department_code, CompanyLead.contact_email.isnot(None)),
     }
     stmt = _scope(
-        select(CompanyLead).order_by(CompanyLead.created_at.desc()),
+        select(CompanyLead).order_by(
+            func.coalesce(CompanyLead.last_seen_at, CompanyLead.first_seen_at, CompanyLead.created_at).desc()
+        ),
         CompanyLead, department_code,
     ).limit(limit).offset(offset)
     items = [
@@ -327,7 +334,7 @@ def _jobs_collection(db: Session, department_code: str | None, limit: int, offse
             "score": c.score,
             "contact": c.contact_email or c.contact_phone or c.hr_wechat or "",
             "us_market": int(c.us_market_flag or 0),
-            "created_at": _iso(c.created_at),
+            "created_at": _iso(c.last_seen_at or c.first_seen_at or c.created_at),
         }
         for c in db.scalars(stmt).all()
     ]
@@ -341,10 +348,17 @@ def _social_collection(db: Session, department_code: str | None, limit: int, off
         "today": _today_count(db, XhsUser, department_code),
         "runs": _count(db, XhsCollectionRun, department_code),
         "with_contact": _count(db, XhsUser, department_code, XhsUser.has_contact == 1),
-        "high_intent": _count(db, XhsAiJudgment, department_code, XhsAiJudgment.decision == "high_priority"),
+        "high_intent": _count(
+            db,
+            XhsAiJudgment,
+            department_code,
+            XhsAiJudgment.decision.in_(("target_customer", "high_priority")),
+        ),
     }
     stmt = _scope(
-        select(XhsUser).order_by(XhsUser.created_at.desc()),
+        select(XhsUser).order_by(
+            func.coalesce(XhsUser.last_seen_at, XhsUser.first_seen_at, XhsUser.created_at).desc()
+        ),
         XhsUser, department_code,
     ).limit(limit).offset(offset)
     items = [
@@ -357,7 +371,7 @@ def _social_collection(db: Session, department_code: str | None, limit: int, off
             "followers": u.follower_count,
             "has_contact": int(u.has_contact or 0),
             "profile_url": u.canonical_profile_url,
-            "created_at": _iso(u.created_at),
+            "created_at": _iso(u.last_seen_at or u.first_seen_at or u.created_at),
         }
         for u in db.scalars(stmt).all()
     ]
@@ -368,5 +382,9 @@ def _iso(value: Any) -> str | None:
     if value is None:
         return None
     if hasattr(value, "isoformat"):
+        if isinstance(value, datetime) and value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        if isinstance(value, datetime):
+            value = value.astimezone(CHINA_TZ)
         return value.isoformat()
     return str(value)
