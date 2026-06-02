@@ -363,6 +363,34 @@ def _ensure_foreign_trade_model_columns(conn) -> None:
         for column in table.columns:
             if column.index:
                 _ensure_index(conn, f"ix_{table_name}_{column.name}", table_name, column.name)
+        _drop_unmanaged_not_null_columns(conn, table_name, set(table.columns.keys()))
+
+
+def _drop_unmanaged_not_null_columns(conn, table: str, model_columns: set[str]) -> None:
+    """Relax legacy columns left by standalone foreign-trade schemas.
+
+    The merged X9 models intentionally keep a smaller portable column set, but
+    existing PostgreSQL tables may still have old required columns such as
+    xhs_notes.task_id. New SQLAlchemy inserts do not populate those unmanaged
+    columns, so NOT NULL constraints on them block extension uploads.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    rows = conn.execute(
+        text("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = :table
+          AND is_nullable = 'NO'
+          AND column_default IS NULL
+        """),
+        {"table": table},
+    ).all()
+    for (column_name,) in rows:
+        if column_name in model_columns:
+            continue
+        conn.execute(text(f"ALTER TABLE {table} ALTER COLUMN {column_name} DROP NOT NULL"))
 
 
 def _ensure_column(conn, table: str, column: str, sql_type: str) -> None:
