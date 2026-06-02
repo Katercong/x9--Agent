@@ -111,9 +111,12 @@ def _today() -> date:
 
 def _today_count(db: Session, model, department_code: str | None) -> int:
     today = _today()
+    start = datetime.combine(today, datetime.min.time())
+    end = start + timedelta(days=1)
     return _count(
         db, model, department_code,
-        func.date(model.created_at) == today.isoformat(),
+        model.created_at >= start,
+        model.created_at < end,
     )
 
 
@@ -122,10 +125,11 @@ def _trend_7d(db: Session, models: list[Any], department_code: str | None) -> li
     days = [(today - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
     totals = {day: 0 for day in days}
     since = today - timedelta(days=6)
+    since_start = datetime.combine(since, datetime.min.time())
     for model in models:
         stmt = select(func.date(model.created_at), func.count()).group_by(func.date(model.created_at))
         stmt = _scope(stmt, model, department_code)
-        stmt = stmt.where(func.date(model.created_at) >= since.isoformat())
+        stmt = stmt.where(model.created_at >= since_start)
         for day_value, count in db.execute(stmt).all():
             key = str(day_value)[:10]
             if key in totals:
