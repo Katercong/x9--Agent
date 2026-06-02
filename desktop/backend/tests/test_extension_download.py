@@ -107,6 +107,7 @@ def test_foreign_trade_extension_download_embeds_ft_actor_config():
     assert "x9-foreign-trade-extension.zip" in response.headers["content-disposition"]
     with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
         names = set(zf.namelist())
+        root_ft_actor = zf.read("ft_actor.js").decode("utf-8")
         douyin_runner = zf.read("extension/social/douyin_runner.js").decode("utf-8")
         douyin_content = zf.read("extension/social/douyin_content.js").decode("utf-8")
         douyin_panel = zf.read("extension/social/douyin_panel.js").decode("utf-8")
@@ -119,6 +120,8 @@ def test_foreign_trade_extension_download_embeds_ft_actor_config():
         readme = zf.read("README_安装说明.txt").decode("utf-8")
     assert "extension/manifest.json" in names
     assert "extension/ft_actor.js" in names
+    assert "manifest.json" in names
+    assert "ft_actor.js" in names
     assert "extension/social/sidepanel.html" in names
     assert "extension/social/douyin_content.js" in names
     assert "extension/social/xhs_content.js" in names
@@ -147,6 +150,7 @@ def test_foreign_trade_extension_download_embeds_ft_actor_config():
     assert "helper/install_ft_helper.ps1" in readme
     config = _ft_actor_config_from_zip(response.content)
     assert config["department_code"] == "foreign_trade"
+    assert root_ft_actor.startswith("globalThis.__X9_FT_ACTOR__ = ")
     assert config["actor_user_id"] == user_id
     assert config["actor"]["username"] == "foreign_download_user"
     assert config["actor_token"].startswith("v1.")

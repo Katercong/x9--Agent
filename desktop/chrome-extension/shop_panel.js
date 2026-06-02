@@ -49,7 +49,7 @@
     if (!resp || !resp.ok) {
       setStatusPillState("error", "启动失败");
       const e = (resp && resp.error) || "unknown";
-      if (e === "active_tab_is_not_tiktok_shop") setError("请先打开 affiliate-us.tiktok.com 列表页再点开始");
+      if (e === "active_tab_is_not_tiktok_shop") setError(resp.message || "请先打开 TikTok Shop 联盟达人列表页再点开始");
       else if (e === "no_active_tab") setError("找不到活动标签页");
       else setError("启动失败：" + e);
     } else {

@@ -18,8 +18,10 @@
     AUTO_RUN_FINISHED: "TSCLB_AUTO_RUN_FINISHED",
     ERROR: "TSCLB_CS_ERROR", PROGRESS: "TSCLB_PROGRESS",
   };
-  const HOST_AFFILIATE = /(^|\.)affiliate-us\.tiktok\.com$/i;
-  const HOST_SELLER = /(^|\.)seller-us\.tiktok\.com$/i;
+  const HOST_AFFILIATE = /^affiliate-[a-z0-9-]+\.tiktok\.com$/i;
+  const HOST_SELLER = /^seller-[a-z0-9-]+\.tiktok\.com$/i;
+  const HOST_TIKTOK_GLOBAL_SHOP = /(^|\.)tiktokglobalshop\.com$/i;
+  const HOST_TIKTOK_SHOP = /(^|\.)tiktokshop\.com$/i;
   const LIST_PATH = /\/connection\/creator(?:\/?$|\/?\?)/i;
   const DETAIL_PATH = /\/connection\/creator\/detail/i;
   const DETAIL_VISIBLE_TEXT_LIMIT = 60000;
@@ -198,13 +200,20 @@
 
   function detectPageType() {
     const host = location.hostname.toLowerCase();
-    if (!HOST_AFFILIATE.test(host) && !HOST_SELLER.test(host)) return "other";
+    if (!isSupportedShopHost(host)) return "other";
     if (DETAIL_PATH.test(location.pathname)) return "creator_detail";
     if (LIST_PATH.test(location.pathname)) {
       const rows = listRowElements();
       if (rows.length >= 1) return "creator_list";
     }
     return "other";
+  }
+
+  function isSupportedShopHost(host) {
+    return HOST_AFFILIATE.test(host) ||
+      HOST_SELLER.test(host) ||
+      HOST_TIKTOK_GLOBAL_SHOP.test(host) ||
+      HOST_TIKTOK_SHOP.test(host);
   }
 
   function listRowElements() {

@@ -35,6 +35,7 @@
   const SHOP_POST_DETAIL_DELAY_MS = 300;
   const DETAIL_UPLOAD_VISIBLE_TEXT_LIMIT = 60000;
   const DETAIL_UPLOAD_LINK_LIMIT = 120;
+  const SHOP_PAGE_HINT = "请先打开 TikTok Shop 联盟达人列表页（affiliate-us.tiktok.com 或 seller.tiktokglobalshop.com）再点开始";
 
   // New collection traffic goes through usx9.us so the backend can resolve the
   // logged-in portal user and attach actor_user_id consistently.
@@ -63,6 +64,36 @@
     currentHandle: null, nextResumeAt: null, lastError: null, lastStatus: null,
     settings: DEFAULT_SETTINGS,
   };
+
+  function isTikTokUrl(url) {
+    const host = hostnameFromUrl(url);
+    return /(^|\.)tiktok\.com$/i.test(host);
+  }
+
+  function isTikTokShopUrl(url) {
+    const host = hostnameFromUrl(url);
+    if (!host) return false;
+    if (/^(affiliate|seller)-[a-z0-9-]+\.tiktok\.com$/i.test(host)) return true;
+    if (/(^|\.)tiktokglobalshop\.com$/i.test(host)) return true;
+    if (/(^|\.)tiktokshop\.com$/i.test(host)) return true;
+    return false;
+  }
+
+  function hostnameFromUrl(url) {
+    try {
+      return new URL(url || "").hostname.toLowerCase();
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function friendlyShopInjectError(error, url) {
+    const raw = String(error && error.message || error || "");
+    if (/Cannot access contents of the page|Extension manifest must request permission/i.test(raw)) {
+      return `${SHOP_PAGE_HINT}。当前页面 ${url || "unknown"} 不在插件授权范围内，请刷新/重装最新版插件后再试。`;
+    }
+    return raw;
+  }
 
   let detailLoopActive = false;
   let pendingDetailResolve = null;
@@ -412,11 +443,11 @@
         id: activeTab?.id || null,
         title: activeTab?.title || "",
         url: currentUrl,
-        isTikTok: /tiktok\.com/i.test(currentUrl),
+        isTikTok: isTikTokUrl(currentUrl),
       },
       page: {
-        isTikTok: /tiktok\.com/i.test(currentUrl),
-        isShopPage: /affiliate-us\.tiktok\.com|seller-us\.tiktok\.com/i.test(currentUrl),
+        isTikTok: isTikTokUrl(currentUrl),
+        isShopPage: isTikTokShopUrl(currentUrl),
       },
       counts: state.counts || {},
       runTimer: {
@@ -934,8 +965,14 @@
     }
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!activeTab || !activeTab.id) return { ok: false, error: "no_active_tab" };
-    if (!activeTab.url || !/affiliate-us\.tiktok\.com|seller-us\.tiktok\.com/i.test(activeTab.url)) {
-      return { ok: false, error: "active_tab_is_not_tiktok_shop", url: activeTab.url };
+    if (!activeTab.url || !isTikTokShopUrl(activeTab.url)) {
+      await patchState({
+        status: "error",
+        phase: "idle",
+        lastError: "active_tab_is_not_tiktok_shop",
+        lastStatus: SHOP_PAGE_HINT,
+      });
+      return { ok: false, error: "active_tab_is_not_tiktok_shop", message: SHOP_PAGE_HINT, url: activeTab.url };
     }
     const runId = "run-" + new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
     await setState(Object.assign({}, DEFAULT_STATE, {
@@ -955,8 +992,9 @@
         await chrome.tabs.sendMessage(activeTab.id, { type: MSG.CS_AUTO_FULL_RUN, runId, taskCount });
       } catch (e2) {
         console.error(TAG, "inject+retry failed", e2);
-        await patchState({ status: "error", phase: "idle", lastError: String(e2 && e2.message || e2) });
-        return { ok: false, error: String(e2 && e2.message || e2) };
+        const friendly = friendlyShopInjectError(e2, activeTab.url);
+        await patchState({ status: "error", phase: "idle", lastError: friendly, lastStatus: friendly });
+        return { ok: false, error: friendly, url: activeTab.url };
       }
     }
     return { ok: true, runId, taskCount };

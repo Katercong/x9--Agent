@@ -19,6 +19,10 @@
         "https://affiliate-us.tiktok.com/*",
         "https://seller-us.tiktok.com/*",
         "https://*.tiktok.com/*",
+        "https://seller.tiktokglobalshop.com/*",
+        "https://*.tiktokglobalshop.com/*",
+        "https://business.tiktokshop.com/*",
+        "https://*.tiktokshop.com/*",
         "https://usx9.us/*",
         "https://*.usx9.us/*"
     ],
@@ -34,7 +38,11 @@
                 "https://www.tiktok.com/*",
                 "https://affiliate-us.tiktok.com/*",
                 "https://seller-us.tiktok.com/*",
-                "https://*.tiktok.com/*"
+                "https://*.tiktok.com/*",
+                "https://seller.tiktokglobalshop.com/*",
+                "https://*.tiktokglobalshop.com/*",
+                "https://business.tiktokshop.com/*",
+                "https://*.tiktokshop.com/*"
             ],
             "js": ["contentScript.js", "shop_collector.js"],
             "run_at": "document_idle"

@@ -175,12 +175,16 @@ def download_extension(request: Request) -> Response:
             for path in sorted(ext_dir.rglob("*")):
                 if path.is_file():
                     rel = path.relative_to(ext_dir).as_posix()
-                    arcname = f"extension/{rel}"
                     if rel == actor_file:
-                        # Foreign-trade extension: ft_actor.js with department + actor.
-                        zf.writestr(arcname, _ft_actor_config_js(actor_config))
+                        content = _ft_actor_config_js(actor_config)
+                        # Keep the documented extension/ folder, and also put a
+                        # loadable copy at the zip root for users who pick the
+                        # outer extracted folder in chrome://extensions.
+                        zf.writestr(f"extension/{rel}", content)
+                        zf.writestr(rel, content)
                     else:
-                        zf.write(path, arcname)
+                        zf.write(path, f"extension/{rel}")
+                        zf.write(path, rel)
             for path in sorted(_FT_HELPER_DIR.rglob("*")):
                 if path.is_file() and not _should_skip_helper_file(path.relative_to(_FT_HELPER_DIR)):
                     zf.write(path, f"helper/{path.relative_to(_FT_HELPER_DIR).as_posix()}")
