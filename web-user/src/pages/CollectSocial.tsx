@@ -128,12 +128,16 @@ function Avatar({ row }: { row: LeadItem }) {
   );
 }
 
-function TagList({ items, max = 5 }: { items?: string[]; max?: number }) {
+function TagList({ items, max = 3 }: { items?: string[]; max?: number }) {
   const values = (items || []).map(clean).filter(Boolean).slice(0, max);
   if (!values.length) return null;
   return (
-    <div className="flex max-w-[480px] flex-wrap gap-1">
-      {values.map((item) => <Pill key={item} tone="muted" className="text-[10px]">{item}</Pill>)}
+    <div className="flex max-w-[300px] flex-wrap gap-1">
+      {values.map((item) => (
+        <Pill key={item} tone="muted" className="max-w-full truncate text-[10px]">
+          {item}
+        </Pill>
+      ))}
     </div>
   );
 }
@@ -156,65 +160,98 @@ function ContactList({ contacts, fallback }: { contacts?: ContactItem[]; fallbac
   );
 }
 
-function CommentEvidence({ items }: { items?: SocialCommentEvidence[] }) {
-  const rows = (items || []).filter((item) => clean(item.content)).slice(0, 4);
-  if (!rows.length) return <span className="text-xs text-muted">暂无评论证据</span>;
-  return (
-    <div className="space-y-2">
-      {rows.map((item, index) => (
-        <div key={item.id || index} className="space-y-1">
-          <div className="whitespace-normal break-words text-xs leading-5 text-text">{item.content}</div>
-          <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
-            {item.location ? <span>{item.location}</span> : null}
-            {item.published_at_text ? <span>{item.published_at_text}</span> : null}
-            {item.note_title ? <span className="max-w-[220px] truncate">来自: {item.note_title}</span> : null}
-            <ProfileLink href={item.note_url} label="原文" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+type LatestEvidence =
+  | { kind: 'comment'; item: SocialCommentEvidence; at: number; order: number }
+  | { kind: 'note'; item: SocialNoteEvidence; at: number; order: number }
+  | { kind: 'source'; item: SocialSourceEvidence; at: number; order: number };
+
+function evidenceTime(value?: string | null): number {
+  if (!clean(value)) return 0;
+  const ts = parseTimeMs(value || '');
+  return Number.isFinite(ts) ? ts : 0;
 }
 
-function NoteEvidence({ notes, history }: { notes?: SocialNoteEvidence[]; history?: SocialNoteEvidence[] }) {
-  const rows = [...(notes || []), ...(history || [])].filter((item) => clean(item.title || item.desc)).slice(0, 3);
-  if (!rows.length) return null;
-  return (
-    <div className="mt-3 space-y-2 border-t border-border pt-2">
-      {rows.map((item, index) => (
-        <div key={`${item.id || item.url || index}`} className="grid grid-cols-[38px_1fr] gap-2">
-          {item.cover_url ? (
-            <img src={item.cover_url} alt="" className="h-10 w-10 rounded object-cover" />
-          ) : (
-            <div className="flex h-10 w-10 items-center justify-center rounded bg-slate-100 text-slate-400">
-              <NotebookText size={14} />
-            </div>
-          )}
-          <div className="min-w-0">
-            <div className="truncate text-xs font-semibold text-text">{item.title || item.desc}</div>
-            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
-              {item.like_count !== null && item.like_count !== undefined ? <span>赞 {countText(item.like_count)}</span> : null}
-              {item.comment_count !== null && item.comment_count !== undefined ? <span>评 {countText(item.comment_count)}</span> : null}
-              {item.keyword ? <span>{item.keyword}</span> : null}
-              <ProfileLink href={item.url} label="查看" />
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+function pickLatestEvidence(row: LeadItem): LatestEvidence | null {
+  const candidates: LatestEvidence[] = [];
+  let order = 0;
+
+  (row.recent_comments || []).forEach((item) => {
+    if (!clean(item.content)) return;
+    candidates.push({ kind: 'comment', item, at: evidenceTime(item.created_at), order: order++ });
+  });
+  [...(row.recent_notes || []), ...(row.history_posts || [])].forEach((item) => {
+    if (!clean(item.title || item.desc)) return;
+    candidates.push({ kind: 'note', item, at: evidenceTime(item.created_at), order: order++ });
+  });
+  (row.source_samples || []).forEach((item) => {
+    if (!clean(item.evidence_text || item.keyword)) return;
+    candidates.push({ kind: 'source', item, at: evidenceTime(item.created_at), order: order++ });
+  });
+
+  if (!candidates.length) return null;
+  return [...candidates].sort((a, b) => (b.at - a.at) || (a.order - b.order))[0];
 }
 
-function SourceEvidence({ items }: { items?: SocialSourceEvidence[] }) {
-  const rows = (items || []).filter((item) => clean(item.evidence_text || item.keyword)).slice(0, 4);
-  if (!rows.length) return null;
+function LatestEvidenceCell({ row }: { row: LeadItem }) {
+  const evidence = pickLatestEvidence(row);
+  if (!evidence) return <span className="text-xs text-muted">暂无证据</span>;
+
+  if (evidence.kind === 'comment') {
+    const item = evidence.item;
+    return (
+      <div className="min-w-0 max-w-[400px] space-y-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
+          <Pill tone="info" className="text-[10px]">最新评论</Pill>
+          {item.location ? <span>{item.location}</span> : null}
+          {item.published_at_text ? <span>{item.published_at_text}</span> : null}
+          {item.note_title ? <span className="max-w-[220px] truncate">来自: {item.note_title}</span> : null}
+          <ProfileLink href={item.note_url} label="原文" />
+        </div>
+        <div className="line-clamp-3 whitespace-normal break-words text-xs leading-5 text-text">{item.content}</div>
+      </div>
+    );
+  }
+
+  if (evidence.kind === 'note') {
+    const item = evidence.item;
+    return (
+      <div className="grid min-w-0 max-w-[400px] grid-cols-[38px_minmax(0,1fr)] gap-2">
+        {item.cover_url ? (
+          <img src={item.cover_url} alt="" className="h-10 w-10 rounded object-cover" />
+        ) : (
+          <div className="flex h-10 w-10 items-center justify-center rounded bg-slate-100 text-slate-400">
+            <NotebookText size={14} />
+          </div>
+        )}
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Pill tone="info" className="text-[10px]">最新笔记</Pill>
+            {item.published_at_text ? <span className="text-[10px] text-muted">{item.published_at_text}</span> : null}
+          </div>
+          <div className="mt-1 line-clamp-2 break-words text-xs font-semibold leading-5 text-text">{item.title || item.desc}</div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
+            {item.like_count !== null && item.like_count !== undefined ? <span>赞 {countText(item.like_count)}</span> : null}
+            {item.comment_count !== null && item.comment_count !== undefined ? <span>评 {countText(item.comment_count)}</span> : null}
+            {item.keyword ? <span className="max-w-[120px] truncate">{item.keyword}</span> : null}
+            <ProfileLink href={item.url} label="查看" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const item = evidence.item;
+  const sourceText = clean(item.evidence_text) || clean(item.keyword);
+  const sourceLabel = SOURCE_LABELS[item.source_type || ''] || item.source_type || '来源';
   return (
-    <div className="mt-3 flex flex-wrap gap-1.5">
-      {rows.map((item, index) => (
-        <Pill key={`${item.source_type}-${item.keyword}-${index}`} tone="info" className="text-[10px]">
-          {SOURCE_LABELS[item.source_type || ''] || item.source_type || '来源'} · {item.keyword || clean(item.evidence_text).slice(0, 18)}
-        </Pill>
-      ))}
+    <div className="min-w-0 max-w-[400px] space-y-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Pill tone="info" className="text-[10px]">最新来源</Pill>
+        <Pill tone="muted" className="text-[10px]">{sourceLabel}</Pill>
+        {item.keyword ? <span className="max-w-[160px] truncate text-[10px] text-muted">{item.keyword}</span> : null}
+      </div>
+      <div className="line-clamp-3 break-all text-xs leading-5 text-text">{sourceText}</div>
+      <ProfileLink href={item.evidence_url} label="查看" />
     </div>
   );
 }
@@ -253,9 +290,9 @@ export default function CollectSocial() {
     {
       key: 'profile',
       header: '清洗后博主资料',
-      width: '390px',
+      width: '310px',
       cell: (row) => (
-        <div className="min-w-[340px] space-y-2">
+        <div className="min-w-0 max-w-[300px] space-y-2">
           <div className="flex items-start gap-3">
             <Avatar row={row} />
             <div className="min-w-0 flex-1">
@@ -264,14 +301,19 @@ export default function CollectSocial() {
                 {row.clean_status ? <Pill tone="muted">{row.clean_status}</Pill> : null}
                 {row.has_contact ? <Pill tone="good">已提取联系入口</Pill> : null}
               </div>
-              <div className="mt-1 whitespace-normal break-words text-sm font-semibold text-text">{row.name || '未命名博主'}</div>
+              <div className="mt-1 line-clamp-2 break-words text-sm font-semibold leading-5 text-text">{row.name || '未命名博主'}</div>
               <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xxs text-muted">
-                {row.account ? <span className="inline-flex items-center gap-1"><AtSign size={11} />{row.account}</span> : null}
+                {row.account ? (
+                  <span className="inline-flex min-w-0 max-w-full items-start gap-1">
+                    <AtSign size={11} className="mt-0.5 shrink-0" />
+                    <span className="min-w-0 break-all">{row.account}</span>
+                  </span>
+                ) : null}
                 <ProfileLink href={row.profile_url} />
               </div>
             </div>
           </div>
-          <div className="max-w-[560px] whitespace-normal break-words text-xxs leading-5 text-muted">{row.bio || '暂无简介'}</div>
+          <div className="line-clamp-2 max-w-full whitespace-normal break-words text-xxs leading-5 text-muted">{row.bio || '暂无简介'}</div>
           <TagList items={(row.platform_signals?.length ? row.platform_signals : row.contact_signals) || []} />
         </div>
       ),
@@ -279,12 +321,10 @@ export default function CollectSocial() {
     {
       key: 'evidence',
       header: '清洗证据内容',
-      width: '520px',
+      width: '430px',
       cell: (row) => (
-        <div className="min-w-[460px]">
-          <CommentEvidence items={row.recent_comments} />
-          <NoteEvidence notes={row.recent_notes} history={row.history_posts} />
-          <SourceEvidence items={row.source_samples} />
+        <div className="min-w-0 max-w-[410px]">
+          <LatestEvidenceCell row={row} />
         </div>
       ),
     },
