@@ -74,9 +74,18 @@
       await ensureManualResultPage();
       const cardTarget = searchCardTarget(opts);
       const targetText = opts.limitMode === "profiles"
-        ? `采集主页 ${opts.profileLimit} 个，最多预加载 ${cardTarget} 条视频`
+        ? `采集主页 ${opts.profileLimit} 个，优先读取当前页主页卡片`
         : `视频 ${opts.maxPosts} 条`;
       await progress("posts", `自动滚动加载当前结果页，目标 ${targetText}`);
+      if (opts.limitMode === "profiles") {
+        const directResult = await collectProfileSearchResults(opts, runId);
+        if (directResult.handled) {
+          running = false;
+          await sendDoneOnce(stopped ? "已停止" : "采集完成");
+          return { ok: true, stopped, directProfiles: directResult.count };
+        }
+        await progress("posts", "当前页未识别到主页卡片，回退为视频作者/评论主页采集");
+      }
       const cards = await collectSearchCards(cardTarget);
       if (!cards.length) throw new Error(`当前页面没有可采集的抖音视频卡片。${debugSearchCardCounts()}`);
       await progress("posts", `已锁定当前页面卡片快照：${cards.length} 条`);
@@ -204,6 +213,174 @@
       return clamp(Math.max(opts.profileLimit, opts.maxPosts || 0, 10), 1, 200, 20);
     }
     return opts.maxPosts;
+  }
+
+  async function collectProfileSearchResults(opts, runId) {
+    const target = clamp(opts.profileLimit, 1, 300, 20);
+    const cards = await collectProfileSearchCards(target);
+    if (!cards.length) return { handled: false, count: 0 };
+    await progress("profiles", `已识别主页卡片 ${cards.length}/${target}，开始逐个采集主页`);
+    const profileSeen = new Set();
+    let profileCount = 0;
+    for (const card of cards) {
+      if (stopped || profileTargetReached(profileCount, opts)) break;
+      const key = userKey(card.user);
+      if (!key || profileSeen.has(key)) continue;
+      await progress("profiles", `打开主页 ${profileCount + 1}/${target}：${card.user.username || card.user.account || key}`);
+      const ok = await openSearchProfileByUrl(card.user, runId, card.source_index);
+      if (ok) {
+        profileSeen.add(key);
+        profileCount += 1;
+      }
+      await sleep(350);
+    }
+    return { handled: true, count: profileCount };
+  }
+
+  async function collectProfileSearchCards(maxProfiles) {
+    const cards = new Map();
+    let stable = 0;
+    let lastCount = 0;
+    const scroller = getSearchResultScroller();
+    for (let round = 0; round < 35 && cards.size < maxProfiles && stable < 6 && !stopped; round += 1) {
+      collectProfileSearchCardsFromDom(cards, maxProfiles);
+      if (cards.size !== lastCount) {
+        await progress("profiles", `已加载抖音主页卡片 ${cards.size}/${maxProfiles}`);
+        stable = 0;
+        lastCount = cards.size;
+      } else {
+        stable += 1;
+      }
+      if (cards.size >= maxProfiles || stable >= 6) break;
+      scrollSearchResult(scroller, 1000);
+      await sleep(750);
+    }
+    collectProfileSearchCardsFromDom(cards, maxProfiles);
+    scrollSearchResult(scroller, -1000000);
+    await sleep(500);
+    return Array.from(cards.values()).slice(0, maxProfiles);
+  }
+
+  function collectProfileSearchCardsFromDom(cards, maxProfiles) {
+    const links = Array.from(document.querySelectorAll('a[href*="/user/"]'));
+    for (const [index, link] of links.entries()) {
+      if (cards.size >= maxProfiles) break;
+      if (!isVisible(link)) continue;
+      const profileUrl = absUrl(link.getAttribute("href") || link.href || "");
+      const userId = extractUserId(profileUrl);
+      if (!userId || !/douyin\.com\/user\//i.test(profileUrl)) continue;
+      if (looksLikeNavProfileLink(link)) continue;
+      const card = findProfileResultContainer(link) || findCardContainer(link) || link;
+      const username = pickProfileSearchUsername(card, link);
+      const bio = pickProfileSearchBio(card, username);
+      const account = pickProfileSearchAccount(card) || userId;
+      const key = userId || canonical(profileUrl);
+      if (!key || cards.has(key)) continue;
+      cards.set(key, {
+        source_index: index,
+        user: {
+          platform: "douyin",
+          username,
+          account,
+          account_raw: account,
+          user_id: userId,
+          profile_url: profileUrl,
+          avatar_url: pickAvatar(card),
+          bio,
+          stats_text: collectProfileSearchStats(card),
+          follower_count_text: pickMetricText(card, /粉丝|followers/i),
+          source_type: "search_profile",
+          keyword: detectSearchKeyword(),
+          collected_at: new Date().toISOString()
+        }
+      });
+    }
+    return cards.size;
+  }
+
+  function findProfileResultContainer(link) {
+    let node = link;
+    for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
+      if (!(node instanceof HTMLElement)) continue;
+      const profileLinks = node.querySelectorAll ? node.querySelectorAll('a[href*="/user/"]').length : 0;
+      const visible = text(node);
+      const rect = node.getBoundingClientRect();
+      if (
+        profileLinks >= 1 &&
+        rect.width >= 120 &&
+        rect.height >= 40 &&
+        visible.length >= 2 &&
+        !/首页|朋友|消息|我的|登录|注册|创作服务平台/.test(visible)
+      ) {
+        return node;
+      }
+    }
+    return null;
+  }
+
+  function looksLikeNavProfileLink(link) {
+    const href = String(link.getAttribute("href") || link.href || "");
+    const visible = text(link);
+    const rootText = text(findProfileResultContainer(link) || link);
+    if (/\/user\/self|\/user\/me/i.test(href)) return true;
+    if (/^(我|我的|登录|注册)$/.test(visible)) return true;
+    return /首页|朋友|消息|我的|发布作品|创作服务平台/.test(rootText) && rootText.length < 60;
+  }
+
+  function pickProfileSearchUsername(card, link) {
+    const candidates = [
+      text(link),
+      text(card && card.querySelector && card.querySelector('[class*="nickname"]')),
+      text(card && card.querySelector && card.querySelector('[class*="name"]')),
+      text(card && card.querySelector && card.querySelector('h1,h2,h3,strong'))
+    ];
+    for (const value of candidates) {
+      const cleaned = cleanInlineText(value).replace(/^@\s*/, "");
+      if (cleaned && cleaned.length <= 80 && !looksLikeProfileNoise(cleaned)) return cleaned;
+    }
+    return "";
+  }
+
+  function pickProfileSearchAccount(card) {
+    const visible = text(card);
+    const match = String(visible || "").match(/(?:抖音号|Douyin ID|ID)\s*[:：]?\s*([A-Za-z0-9_.-]{3,40})/i);
+    return match && match[1] ? match[1].trim() : "";
+  }
+
+  function pickProfileSearchBio(card, username) {
+    const skip = new Set([cleanInlineText(username)].filter(Boolean));
+    const values = Array.from(card && card.querySelectorAll ? card.querySelectorAll("span, div, p") : [])
+      .filter((node) => node instanceof HTMLElement && isVisible(node))
+      .map((node) => cleanInlineText(text(node)))
+      .filter((value) => value && value.length >= 4 && value.length <= 220)
+      .filter((value) => !skip.has(value.replace(/^@\s*/, "")))
+      .filter((value) => !looksLikeProfileNoise(value));
+    return unique(values).sort((a, b) => b.length - a.length)[0] || "";
+  }
+
+  function collectProfileSearchStats(card) {
+    const visible = cleanInlineText(text(card));
+    return ["关注", "粉丝", "获赞", "喜欢", "作品"]
+      .map((label) => extractProfileStat(visible, label))
+      .filter(Boolean);
+  }
+
+  async function openSearchProfileByUrl(user, runId, sourceIndex) {
+    const profileUrl = user && user.profile_url || "";
+    if (!profileUrl) return false;
+    const requestId = `douyin-search-profile-${runId || Date.now()}-${sourceIndex}-${Math.random().toString(16).slice(2)}`;
+    await sendRuntime({ type: MSG.EXPECT_PROFILE, requestId, profileUrl, user, sourceType: "search_profile" }, 5000);
+    const openResp = await sendRuntime({ type: MSG.OPEN_PROFILE_TAB, requestId, profileUrl, user }, 12000);
+    if (!openResp || !openResp.ok) {
+      await progress("profiles", `主页打开失败：${user.username || profileUrl} - ${(openResp && openResp.error) || "open failed"}`);
+      return false;
+    }
+    const resp = await sendRuntime({ type: MSG.WAIT_PROFILE, requestId, profileUrl, timeoutMs: 30000 }, 36000);
+    if (!resp || !resp.ok) {
+      await progress("profiles", `主页采集失败：${user.username || profileUrl} - ${(resp && resp.error) || "timeout"}`);
+      return false;
+    }
+    return true;
   }
 
   function collectSearchCardsFromDom(cards, maxPosts) {

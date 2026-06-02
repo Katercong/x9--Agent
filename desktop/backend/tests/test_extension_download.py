@@ -106,6 +106,7 @@ def test_foreign_trade_extension_download_embeds_ft_actor_config():
     with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
         names = set(zf.namelist())
         douyin_runner = zf.read("social/douyin_runner.js").decode("utf-8")
+        douyin_content = zf.read("social/douyin_content.js").decode("utf-8")
         xhs_runner = zf.read("social/xhs_runner.js").decode("utf-8")
     assert "ft_actor.js" in names
     assert "social/sidepanel.html" in names
@@ -113,6 +114,9 @@ def test_foreign_trade_extension_download_embeds_ft_actor_config():
     assert "social/xhs_content.js" in names
     assert 'files: ["social/douyin_content.js"]' in douyin_runner
     assert 'files: ["social/xhs_content.js"]' in xhs_runner
+    assert "collectProfileSearchResults" in douyin_content
+    assert "collectProfileSearchCards" in douyin_content
+    assert "当前页未识别到主页卡片，回退为视频作者/评论主页采集" in douyin_content
     assert 'files: ["douyin_content.js"]' not in douyin_runner
     assert 'files: ["xhs_content.js"]' not in xhs_runner
     config = _ft_actor_config_from_zip(response.content)
