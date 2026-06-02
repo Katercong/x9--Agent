@@ -34,11 +34,19 @@
       }
     } catch (_) { /* ignore */ }
   }
-  document.addEventListener("DOMContentLoaded", () => {
+  boot(() => {
     const btn = document.getElementById("langToggle");
     if (btn) {
       btn.addEventListener("click", () => setLang(getLang() === "en" ? "zh" : "en"));
     }
     apply(getLang());
   });
+
+  function boot(fn) {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", fn, { once: true });
+    } else {
+      fn();
+    }
+  }
 })();

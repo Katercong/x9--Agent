@@ -107,7 +107,10 @@ def test_foreign_trade_extension_download_embeds_ft_actor_config():
         names = set(zf.namelist())
         douyin_runner = zf.read("social/douyin_runner.js").decode("utf-8")
         douyin_content = zf.read("social/douyin_content.js").decode("utf-8")
+        douyin_panel = zf.read("social/douyin_panel.js").decode("utf-8")
         xhs_runner = zf.read("social/xhs_runner.js").decode("utf-8")
+        xhs_panel = zf.read("social/xhs_panel.js").decode("utf-8")
+        social_sidepanel = zf.read("social/sidepanel.html").decode("utf-8")
     assert "ft_actor.js" in names
     assert "social/sidepanel.html" in names
     assert "social/douyin_content.js" in names
@@ -117,6 +120,13 @@ def test_foreign_trade_extension_download_embeds_ft_actor_config():
     assert "collectProfileSearchResults" in douyin_content
     assert "collectProfileSearchCards" in douyin_content
     assert "当前页未识别到主页卡片，回退为视频作者/评论主页采集" in douyin_content
+    assert 'boot(init);' in douyin_panel
+    assert 'boot(init);' in xhs_panel
+    assert '插件后台 5 秒内没有响应' in douyin_panel
+    assert '插件后台 5 秒内没有响应' in xhs_panel
+    assert 'id="autoScrollsInput"' in social_sidepanel
+    assert 'id="autoMinDelayInput"' in social_sidepanel
+    assert 'id="restEveryInput"' in social_sidepanel
     assert 'files: ["douyin_content.js"]' not in douyin_runner
     assert 'files: ["xhs_content.js"]' not in xhs_runner
     config = _ft_actor_config_from_zip(response.content)

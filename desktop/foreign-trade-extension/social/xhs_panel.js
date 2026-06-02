@@ -5,10 +5,13 @@
     profileLimit: 20
   };
 
-  document.addEventListener("DOMContentLoaded", init);
+  let initialized = false;
+  boot(init);
 
   async function init() {
+    if (initialized) return;
     if (!el("xhsPanel")) return;
+    initialized = true;
     bind();
     await loadSettings();
     await refresh();
@@ -111,13 +114,25 @@
 
   function runtimeSend(message) {
     return new Promise((resolve) => {
+      let done = false;
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        resolve({ ok: false, error: "插件后台 5 秒内没有响应，请在 chrome://extensions 重新加载插件。" });
+      }, 5000);
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
       try {
         chrome.runtime.sendMessage(message, (response) => {
-          if (chrome.runtime.lastError) return resolve({ ok: false, error: chrome.runtime.lastError.message });
-          resolve(response || { ok: true });
+          if (chrome.runtime.lastError) return finish({ ok: false, error: chrome.runtime.lastError.message });
+          finish(response || { ok: true });
         });
       } catch (error) {
-        resolve({ ok: false, error: String(error && error.message || error) });
+        finish({ ok: false, error: String(error && error.message || error) });
       }
     });
   }
@@ -174,5 +189,13 @@
 
   function el(id) {
     return document.getElementById(id);
+  }
+
+  function boot(fn) {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", fn, { once: true });
+    } else {
+      fn();
+    }
   }
 })();
