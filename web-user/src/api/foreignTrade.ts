@@ -45,9 +45,17 @@ export interface ForeignTradeDashboard {
 
 export type LeadChannel = 'jobs' | 'social';
 
+export interface ContactItem {
+  type: string;
+  value: string;
+  source?: string | null;
+  rule?: string | null;
+}
+
 export interface LeadItem {
   id: string;
-  kind: 'company' | 'social';
+  kind: 'company' | 'talent' | 'social';
+  kind_label?: string;
   name: string;
   subtitle?: string;
   platform?: string;
@@ -55,10 +63,49 @@ export interface LeadItem {
   status?: string | null;
   score?: number;
   contact?: string;
+  contacts?: ContactItem[];
+  contact_name?: string | null;
+  contact_title?: string | null;
+  contact_source?: string | null;
   us_market?: number;
+  location?: string | null;
+  title?: string | null;
+  summary?: string | null;
+  source_type?: string | null;
+  source_mode?: string | null;
+  source_url?: string | null;
+  resume_download_url?: string | null;
+  data_quality?: string | null;
+  next_action?: string | null;
+  cooperation_type?: string | null;
+  score_reason?: string | null;
+  score_suggestion?: string | null;
+  llm_score_status?: string | null;
+  consent_status?: string | null;
+  size_range?: string | null;
+  experience?: string | null;
+  education?: string | null;
+  major?: string | null;
+  salary_expectation?: string | null;
+  tags?: string[];
+  keywords?: string[];
+  raw_titles?: string[];
   followers?: number | null;
+  following?: number | null;
+  notes_count?: number;
+  comments_count?: number;
   has_contact?: number;
   profile_url?: string | null;
+  bio?: string | null;
+  clean_status?: string | null;
+  contact_signals?: string[];
+  platform_signals?: string[];
+  fit_score?: number | null;
+  fit_level?: string | null;
+  decision?: string | null;
+  intent_type?: string | null;
+  judgment?: string | null;
+  judged_at?: string | null;
   created_at?: string | null;
 }
 

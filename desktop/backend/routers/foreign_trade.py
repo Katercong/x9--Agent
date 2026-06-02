@@ -14,6 +14,7 @@ Endpoints (all department-scoped via the request's department_code):
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -25,8 +26,10 @@ from ..database import SessionLocal, get_db
 from ..models.company_lead import CompanyLead
 from ..models.social_lead import (
     XhsAiJudgment,
+    XhsComment,
     XhsCollectionRun,
     XhsExtractedContact,
+    XhsNote,
     XhsUser,
 )
 from ..models.talent_lead import TalentLead
@@ -159,6 +162,62 @@ def _rows(order: tuple[str, ...], labels: dict[str, str], counts: dict[str, int]
 def _platform_key(value: str) -> str:
     key = str(value or "").strip()
     return PLATFORM_ALIASES.get(key, key)
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _json_text_list(value: Any, limit: int = 6) -> list[str]:
+    text = _text(value)
+    if not text:
+        return []
+    parts: list[str] = []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            parts = [_text(item) for item in parsed]
+        elif isinstance(parsed, dict):
+            parts = [_text(v) for v in parsed.values()]
+    except (TypeError, ValueError):
+        parts = []
+    if not parts:
+        parts = [p.strip() for p in text.replace("\n", ",").replace("，", ",").split(",")]
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in parts:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _contact_items(*pairs: tuple[str, Any]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for kind, value in pairs:
+        text = _text(value)
+        if not text:
+            continue
+        key = (kind, text.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"type": kind, "value": text})
+    return out
+
+
+def _contact_display(items: list[dict[str, str]]) -> str:
+    return " / ".join(item["value"] for item in items[:3])
+
+
+def _sort_at(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    return datetime.min
 
 
 @router.get("/dashboard")
@@ -314,31 +373,123 @@ def _jobs_collection(db: Session, department_code: str | None, limit: int, offse
         "talent_total": talent_total,
         "tier_a": _count(db, CompanyLead, department_code, CompanyLead.tier == "A")
         + _count(db, TalentLead, department_code, TalentLead.tier == "A"),
-        "with_contact": _count(db, CompanyLead, department_code, CompanyLead.contact_email.isnot(None)),
+        "with_contact": _count(
+            db,
+            CompanyLead,
+            department_code,
+            CompanyLead.contact_email.isnot(None),
+        ) + _count(
+            db,
+            TalentLead,
+            department_code,
+            TalentLead.contact_email.isnot(None),
+        ),
     }
+    fetch_limit = max(limit + offset, limit)
     stmt = _scope(
         select(CompanyLead).order_by(
             func.coalesce(CompanyLead.last_seen_at, CompanyLead.first_seen_at, CompanyLead.created_at).desc()
         ),
         CompanyLead, department_code,
-    ).limit(limit).offset(offset)
-    items = [
-        {
-            "id": c.id,
-            "kind": "company",
-            "name": c.company_name,
-            "subtitle": c.industry or c.city or "",
-            "platform": c.platform,
-            "tier": c.tier,
-            "status": c.status,
-            "score": c.score,
-            "contact": c.contact_email or c.contact_phone or c.hr_wechat or "",
-            "us_market": int(c.us_market_flag or 0),
-            "created_at": _iso(c.last_seen_at or c.first_seen_at or c.created_at),
-        }
-        for c in db.scalars(stmt).all()
-    ]
-    return {"ok": True, "channel": "jobs", "stats": stats, "total": company_total, "items": items}
+    ).limit(fetch_limit)
+    talent_stmt = _scope(
+        select(TalentLead).order_by(
+            func.coalesce(TalentLead.last_seen_at, TalentLead.first_seen_at, TalentLead.created_at).desc()
+        ),
+        TalentLead, department_code,
+    ).limit(fetch_limit)
+    items = [_company_item(c) for c in db.scalars(stmt).all()]
+    items.extend(_talent_item(t) for t in db.scalars(talent_stmt).all())
+    items.sort(key=lambda item: _sort_at(item.pop("_sort_at", None)), reverse=True)
+    items = items[offset:offset + limit]
+    return {"ok": True, "channel": "jobs", "stats": stats, "total": stats["total"], "items": items}
+
+
+def _company_item(c: CompanyLead) -> dict[str, Any]:
+    collected_at = c.last_seen_at or c.first_seen_at or c.created_at
+    contacts = _contact_items(
+        ("email", c.contact_email),
+        ("phone", c.contact_phone),
+        ("wechat", c.hr_wechat),
+    )
+    return {
+        "_sort_at": collected_at,
+        "id": c.id,
+        "kind": "company",
+        "kind_label": "公司客户",
+        "name": c.company_name,
+        "subtitle": c.industry or c.city or c.company_address or "",
+        "platform": c.platform,
+        "tier": c.tier,
+        "status": c.status,
+        "score": c.score,
+        "contact": _contact_display(contacts),
+        "contacts": contacts,
+        "contact_name": c.contact_name,
+        "contact_title": c.contact_title,
+        "contact_source": c.contact_source,
+        "location": " / ".join(x for x in [c.province, c.city] if x),
+        "title": c.industry,
+        "summary": c.company_description,
+        "size_range": c.size_range,
+        "source_type": c.source_type,
+        "source_mode": c.source_mode,
+        "data_quality": c.data_quality,
+        "next_action": c.next_action,
+        "cooperation_type": c.cooperation_type,
+        "score_reason": c.score_reason or c.llm_score_reason,
+        "score_suggestion": c.llm_score_suggestion,
+        "llm_score_status": c.llm_score_status,
+        "tags": _json_text_list(c.lead_tags),
+        "keywords": _json_text_list(c.search_keywords) or _json_text_list(c.raw_jd_keywords),
+        "raw_titles": _json_text_list(c.raw_jd_titles, limit=4),
+        "us_market": int(c.us_market_flag or 0),
+        "created_at": _iso(collected_at),
+    }
+
+
+def _talent_item(t: TalentLead) -> dict[str, Any]:
+    collected_at = t.last_seen_at or t.first_seen_at or t.created_at
+    contacts = _contact_items(
+        ("email", t.contact_email),
+        ("phone", t.contact_phone),
+        ("wechat", t.wechat),
+    )
+    return {
+        "_sort_at": collected_at,
+        "id": t.id,
+        "kind": "talent",
+        "kind_label": "跨境人才",
+        "name": t.name_masked or t.desired_title or "未命名人才",
+        "subtitle": t.desired_title or t.raw_summary or t.city or "",
+        "platform": t.platform,
+        "tier": t.tier,
+        "status": t.status,
+        "score": t.score,
+        "contact": _contact_display(contacts),
+        "contacts": contacts,
+        "location": t.city,
+        "title": t.desired_title,
+        "summary": t.raw_summary,
+        "experience": t.experience,
+        "education": t.education,
+        "major": t.major,
+        "salary_expectation": t.salary_expectation,
+        "source_url": t.source_url,
+        "resume_download_url": t.resume_download_url,
+        "source_type": t.source_type,
+        "consent_status": t.consent_status,
+        "data_quality": t.data_quality,
+        "next_action": t.next_action,
+        "cooperation_type": t.cooperation_type,
+        "score_reason": t.score_reason or t.llm_score_reason,
+        "score_suggestion": t.llm_score_suggestion,
+        "llm_score_status": t.llm_score_status,
+        "tags": _json_text_list(t.lead_tags),
+        "keywords": _json_text_list(t.search_keywords),
+        "us_market": 0,
+        "created_at": _iso(collected_at),
+    }
 
 
 def _social_collection(db: Session, department_code: str | None, limit: int, offset: int) -> dict[str, Any]:
@@ -348,6 +499,11 @@ def _social_collection(db: Session, department_code: str | None, limit: int, off
         "today": _today_count(db, XhsUser, department_code),
         "runs": _count(db, XhsCollectionRun, department_code),
         "with_contact": _count(db, XhsUser, department_code, XhsUser.has_contact == 1),
+        "notes": _count(db, XhsNote, department_code),
+        "comments": _count(db, XhsComment, department_code),
+        "contacts": _count(db, XhsExtractedContact, department_code),
+        "judgments": _count(db, XhsAiJudgment, department_code),
+        "cleaned": _count(db, XhsUser, department_code, XhsUser.clean_status == "cleaned"),
         "high_intent": _count(
             db,
             XhsAiJudgment,
@@ -361,21 +517,89 @@ def _social_collection(db: Session, department_code: str | None, limit: int, off
         ),
         XhsUser, department_code,
     ).limit(limit).offset(offset)
-    items = [
-        {
+    users = list(db.scalars(stmt).all())
+    return {"ok": True, "channel": "social", "stats": stats, "total": user_total, "items": _social_items(db, users)}
+
+
+def _social_items(db: Session, users: list[XhsUser]) -> list[dict[str, Any]]:
+    if not users:
+        return []
+    user_ids = [u.id for u in users]
+    contacts_by_user: dict[str, list[XhsExtractedContact]] = {uid: [] for uid in user_ids}
+    for contact in db.scalars(
+        select(XhsExtractedContact)
+        .where(XhsExtractedContact.user_id.in_(user_ids))
+        .order_by(XhsExtractedContact.created_at.desc())
+    ).all():
+        contacts_by_user.setdefault(contact.user_id or "", []).append(contact)
+
+    note_counts = {
+        uid: int(count or 0)
+        for uid, count in db.execute(
+            select(XhsNote.author_user_id, func.count())
+            .where(XhsNote.author_user_id.in_(user_ids))
+            .group_by(XhsNote.author_user_id)
+        ).all()
+    }
+    comment_counts = {
+        uid: int(count or 0)
+        for uid, count in db.execute(
+            select(XhsComment.user_id, func.count())
+            .where(XhsComment.user_id.in_(user_ids))
+            .group_by(XhsComment.user_id)
+        ).all()
+    }
+    judgments: dict[str, XhsAiJudgment] = {}
+    for judgment in db.scalars(
+        select(XhsAiJudgment)
+        .where(XhsAiJudgment.user_id.in_(user_ids))
+        .order_by(XhsAiJudgment.user_id, XhsAiJudgment.created_at.desc())
+    ).all():
+        if judgment.user_id not in judgments:
+            judgments[judgment.user_id] = judgment
+
+    items: list[dict[str, Any]] = []
+    for u in users:
+        collected_at = u.last_seen_at or u.first_seen_at or u.created_at
+        contacts = [
+            {
+                "type": c.contact_type,
+                "value": c.value_raw,
+                "source": c.source_field,
+                "rule": c.rule_code,
+            }
+            for c in contacts_by_user.get(u.id, [])[:6]
+        ]
+        j = judgments.get(u.id)
+        items.append({
             "id": u.id,
             "kind": "social",
-            "name": u.username_clean or u.account_clean or u.xhs_user_id or "—",
-            "subtitle": u.location_text or "",
+            "kind_label": "社媒博主",
+            "name": u.username_clean or u.account_clean or u.xhs_user_id or "未命名博主",
+            "subtitle": u.location_text or u.account_clean or "",
             "platform": u.platform,
             "followers": u.follower_count,
+            "following": u.following_count,
+            "notes_count": note_counts.get(u.id, 0),
+            "comments_count": comment_counts.get(u.id, 0),
             "has_contact": int(u.has_contact or 0),
+            "contact": _contact_display([{"type": c["type"], "value": c["value"]} for c in contacts]),
+            "contacts": contacts,
             "profile_url": u.canonical_profile_url,
-            "created_at": _iso(u.last_seen_at or u.first_seen_at or u.created_at),
-        }
-        for u in db.scalars(stmt).all()
-    ]
-    return {"ok": True, "channel": "social", "stats": stats, "total": user_total, "items": items}
+            "bio": u.bio_clean,
+            "location": u.location_text,
+            "clean_status": u.clean_status,
+            "contact_signals": _json_text_list(u.contact_signals),
+            "platform_signals": _json_text_list(u.platform_signals),
+            "fit_score": j.fit_score if j else None,
+            "fit_level": j.fit_level if j else None,
+            "decision": j.decision if j else None,
+            "intent_type": j.intent_type if j else None,
+            "judgment": j.judgment if j else None,
+            "judged_at": _iso(j.created_at) if j else None,
+            "created_at": _iso(collected_at),
+        })
+    return items
 
 
 def _iso(value: Any) -> str | None:
