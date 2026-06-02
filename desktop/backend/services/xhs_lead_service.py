@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -20,7 +21,7 @@ from typing import Any
 from urllib.parse import unquote
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..models.social_lead import (
@@ -54,7 +55,7 @@ from ..utils.xhs_cleaning import (
     stable_hash,
 )
 
-PROMPT_VERSION = "xhs-b2b-us-dropship-fit-v6"
+PROMPT_VERSION = "xhs-chain-intent-v14"
 
 NEED_KEYWORDS = (
     "无货源", "没有货源", "没货源", "找货源", "求货源", "货源怎么找", "求推荐货源",
@@ -316,6 +317,10 @@ def _normalize_judge_result(parsed: dict[str, Any], rule: dict[str, Any]) -> dic
 
 def _suggestion_for_decision(decision: str) -> str:
     return {
+        "high_priority": "立即联系，确认平台、目标市场、缺货源品类和一件代发合作方式。",
+        "follow_up": "继续追问当前店铺阶段、主卖品类、是否缺货源或是否需要代发。",
+        "nurture": "先做轻触达和内容培育，等对方表达明确采购或货源需求后再推进。",
+        "ignore": "暂不跟进。",
         "target_customer": "优先私信确认正在做的平台、目标市场、缺货源品类，并介绍一件代发合作方式。",
         "experienced_seller": "询问当前店铺平台、主卖品类和供应链痛点，推荐可代发新品或补充货源。",
         "logistics_partner": "进入物流伙伴队列，确认线路、价格、时效和可服务区域。",
@@ -470,7 +475,13 @@ def _upsert_user(
         if user is not None:
             break
     if user is None and ext:
-        user = db.scalar(select(XhsUser).where(XhsUser.platform == platform, XhsUser.external_user_id == ext))
+        user = db.scalar(
+            select(XhsUser).where(
+                XhsUser.platform == platform,
+                XhsUser.department_code == dept,
+                XhsUser.external_user_id == ext,
+            )
+        )
     if user is None and xhs_user_id:
         user = db.scalar(select(XhsUser).where(XhsUser.platform == platform, XhsUser.department_code == dept, XhsUser.xhs_user_id == xhs_user_id))
     if user is None and profile_url:
@@ -1068,27 +1079,502 @@ _JUDGE_SYSTEM = (
 )
 
 
-def _judge_one(cfg: dict[str, str], user: XhsUser, texts: list[str]) -> dict[str, Any] | None:
-    rule = _rule_based_judge(user, texts)
-    evidence_texts = _compact_judge_texts(texts)
+CHAIN_INTENT_SYSTEM_PROMPT = """
+You are the GPT scoring judge for X9 foreign-trade Xiaohongshu/Douyin social
+leads. X9 sells sourcing and one-piece dropshipping support to cross-border
+ecommerce merchants. The best target customers are people who want to start or
+operate cross-border ecommerce and need products, suppliers, sourcing, product
+testing, listing support, replenishment, inventory help, or dropshipping supply.
+
+Core rule: judge only the target user. Do not infer the target user's intent
+from post keywords, the post author, the root comment author, the parent comment
+author, or the collection keyword. Those are context only.
+
+Read each evidence_chains item in this order:
+1. note/post: background only.
+2. root_comment: thread background only.
+3. parent_comment: direct reply context.
+4. current_comment or target_user_evidence.text: the target user's own evidence.
+
+Evidence ownership:
+- Target-owned evidence can prove intent: target profile/bio/account name, target
+  comments/replies, target-authored posts, target history posts.
+- Context cannot prove target intent by itself: note title/description, post
+  author wording, root/parent comments from other users, collection keywords, or
+  contact handles.
+- Contact information is a reach channel, not proof of buyer intent.
+
+If reply_chain_quality.warning is non-empty or parent/root context is missing,
+do not assign high_priority from a short reply alone. Require explicit
+target-user business evidence or downgrade and add context_missing to risks.
+
+Relationship types:
+- target_business_customer: wants to start/operate cross-border selling, lacks
+  supply, asks how to get goods, asks for supplier/catalog/pricing, seeks
+  sourcing/dropshipping, or already sells and shows product/supply/inventory
+  pressure.
+- cross_border_peer: discusses ecommerce experience or learning, but no clear
+  target-owned sourcing or supply need yet.
+- service_provider: logistics, freight forwarder, customs, overseas warehouse,
+  training, agency, SEO, ads, store setup, operation, payment, compliance, or
+  other services.
+- competitor_supplier: factory, source manufacturer, supplier, wholesaler,
+  supply-chain seller, OEM/ODM, merchant offering goods, or one-piece
+  dropshipping provider.
+- consumer_buyer: ordinary personal purchase/product interest.
+- risk_feedback: complaint, legal risk, customs risk, quality risk, returns,
+  infringement, or other risk-only feedback.
+- irrelevant: no useful business signal or insufficient evidence.
+
+Decision and score matrix:
+- target_business_customer with explicit startup/sourcing/dropship/store intent:
+  high_priority, 75-100.
+- target_business_customer with incomplete details: follow_up, 55-74.
+- cross_border_peer: nurture or ignore, 25-55.
+- service_provider or competitor_supplier: ignore or nurture, 0-45.
+- consumer_buyer: ignore, 0-35.
+- irrelevant or risk_feedback: ignore, 0-30.
+
+Hard constraints:
+- high_priority requires relationship_type=target_business_customer.
+- follow_up requires relationship_type=target_business_customer.
+- competitor_supplier, service_provider, consumer_buyer, irrelevant, and
+  risk_feedback must never be high_priority or follow_up.
+- Factories, source manufacturers, supply-chain sellers, freight/logistics
+  companies, overseas warehouses, training accounts, SEO/store-building
+  services, ad/operation agencies, and one-piece dropshipping providers are not
+  target customers.
+- Ordinary buying language is not a business lead unless target-owned evidence
+  clearly shows seller, sourcing, listing, test-product, replenishment,
+  dropshipping, or cross-border store intent.
+- A target user replying "I have supply/source/goods" after someone asks for
+  supply is usually a supplier, not a customer.
+- A target user asking how to get goods, asking for catalog/pricing, or asking
+  whether dropshipping is possible under a supplier offer can be a target
+  customer.
+
+Output one JSON object only. Required fields:
+user_key, relationship_type, business_need_type, intent_type, decision,
+fit_score, confidence, target_user_utterance, reply_context_interpretation,
+identity_reasoning, why_not_other_roles, evidence_chain_ids, evidence_quotes,
+reasons, risks, recommended_action, contact_priority.
+
+Output requirements:
+- evidence_chain_ids must contain the chain_id values you used, such as ["S1"].
+- evidence_quotes must quote exact text from the input. Do not invent quotes.
+- target_user_utterance must summarize or quote the target user's own key words,
+  not the post author or another commenter.
+- reply_context_interpretation must explain who the user replied to and what the
+  reply means in context.
+- identity_reasoning must decide customer/supplier/service/consumer/peer before
+  scoring.
+- why_not_other_roles must explain why the user is not the main competing roles.
+- All explanatory fields must be Simplified Chinese.
+"""
+
+
+AI_NON_TARGET_RELATIONSHIPS = {
+    "competitor_supplier",
+    "service_provider",
+    "consumer_buyer",
+    "irrelevant",
+    "risk_feedback",
+}
+AI_SCORE_CAPS = {
+    "competitor_supplier": 45,
+    "service_provider": 45,
+    "consumer_buyer": 35,
+    "irrelevant": 30,
+    "risk_feedback": 30,
+    "cross_border_peer": 55,
+}
+
+
+def _chain_customer_priority(decision: str, score: int) -> str:
+    if decision == "high_priority":
+        return "A"
+    if decision == "follow_up":
+        return "B"
+    if decision == "nurture":
+        return "C"
+    return "E"
+
+
+def _text_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [clean_text(item) for item in value if clean_text(item)]
+    text = clean_text(value)
+    return [text] if text else []
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _clip(value: Any, max_chars: int = 520) -> str:
+    text = clean_text(value) or ""
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1] + "..."
+
+
+def _comment_body(comment: XhsComment | None) -> str:
+    if comment is None:
+        return ""
+    return clean_text(comment.content_clean or comment.content or comment.content_raw)
+
+
+def _comment_external_keys(comment: XhsComment | None) -> set[str]:
+    if comment is None:
+        return set()
+    return {
+        key
+        for key in (
+            comment.external_comment_id,
+            comment.comment_id,
+            comment.xhs_comment_id,
+            comment.root_comment_external_id,
+            comment.parent_comment_external_id,
+        )
+        if clean_text(key)
+    }
+
+
+def _find_comment_by_external(comments: dict[str, XhsComment], key: Any) -> XhsComment | None:
+    text = clean_text(key)
+    return comments.get(text) if text else None
+
+
+def _chain_warning(requires_context: bool, root_text: str, parent_text: str) -> str:
+    if requires_context and not (root_text or parent_text):
+        return "context_missing"
+    return ""
+
+
+def _provider_ad_relationship(text: str) -> str | None:
+    compact = clean_text(text).replace(" ", "").lower()
+    if not compact:
+        return None
+    service_markers = (
+        "老板需要",
+        "需要入驻",
+        "需要各模式店铺",
+        "入驻京东",
+        "入驻各模式店铺",
+        "入驻店铺",
+        "代运营",
+        "开店服务",
+        "免费运营指导",
+        "店铺代入驻",
+        "我可以带",
+        "可以带",
+        "可带",
+        "私我教你",
+        "真心教你",
+        "带你做",
+        "教你做",
+        "交流群",
+        "搬砖交流",
+        "一起赚钱",
+        "电商玩法",
+        "真心带你",
+    )
+    supplier_markers = (
+        "我们是",
+        "源头工厂",
+        "童装源头工厂",
+        "厂家",
+        "厂家直供",
+        "批发",
+        "现货",
+        "支持一件代发",
+        "一键铺货",
+        "招商",
+        "招代理",
+        "有货源",
+        "货源差价",
+        "货源充足",
+        "差价是你的",
+        "差价归你",
+        "找货源找我",
+        "货源联系我",
+        "有服装",
+        "有童装",
+        "有女装",
+        "有男装",
+    )
+    recruiting_markers = (
+        "货源吗",
+        "有想法就来",
+        "你就吱声",
+        "群雄共分天下",
+        "强者从不独享",
+        "撑死胆大的",
+        "有货源差价是你的",
+    )
+    service_patterns = (
+        r"老板.*需要.*入驻.*店铺吗",
+        r"需要.*入驻.*店铺吗",
+        r"需要.*各模式店铺吗",
+        r"需要.*开店.*服务吗",
+        r"(pdd|tk|tiktok|电商).*(交流群|交流)",
+        r"(一起赚钱|搬砖交流|电商玩法)",
+    )
+    supplier_patterns = (
+        r"我们是.*工厂",
+        r"我有货源.*(滴我|联系我|找我|私信我|dd我)",
+        r"有货源.*(可以|可).*(滴我|联系我|找我|私信我|dd我)",
+        r"有没有兴趣做.*货源充足",
+        r"货源充足.*(都有|齐全|联系|滴我|私信)",
+        r"有货源.*差价.*你",
+        r"想做无货源.*(滴我|联系我|找我|私信我|dd我)",
+        r"货源.*有想法.*来",
+        r"货源.*你就吱声",
+    )
+    if any(re.search(pattern, compact) for pattern in service_patterns):
+        return "service_provider"
+    if any(re.search(pattern, compact) for pattern in supplier_patterns):
+        return "competitor_supplier"
+    if any(marker in compact for marker in service_markers):
+        return "service_provider"
+    if any(marker in compact for marker in recruiting_markers):
+        return "competitor_supplier"
+    if any(marker in compact for marker in supplier_markers):
+        no_source_markers = ("没有货源", "没货源", "无货源", "找货源", "求货源")
+        if not any(marker in compact for marker in no_source_markers):
+            return "competitor_supplier"
+    return None
+
+
+def _direct_customer_request(text: str) -> bool:
+    compact = clean_text(text).replace(" ", "").lower()
+    if not compact:
+        return False
+    request_patterns = (
+        r"(服装|童装|女装|男装|鞋|箱包|饰品|美妆|家居|玩具|宠物|3c|产品|货源).*(滴滴我|dd我|联系我|私信我)",
+        r"(想找|求|需要|寻找).*(服装|童装|女装|男装|产品|货源|供应商|厂家)",
+    )
+    return any(re.search(pattern, compact) for pattern in request_patterns)
+
+
+def _strong_sourcing_need(text: str) -> bool:
+    compact = clean_text(text).replace(" ", "").lower()
+    if not compact:
+        return False
+    phrases = (
+        "求货源",
+        "找货源",
+        "需要货源",
+        "没有货源",
+        "没货源",
+        "缺货源",
+        "货源怎么找",
+        "求推荐货源",
+        "怎么开店找货源",
+    )
+    patterns = (
+        r"(想|要|需要|求|寻找|找|缺).{0,6}货源",
+        r"货源.{0,4}(怎么找|哪里找|去哪找|在哪找)",
+        r"(我|自己|这边|咱这边).{0,8}(没有货源|没货源|缺货源)",
+    )
+    return any(phrase in compact for phrase in phrases) or any(re.search(pattern, compact) for pattern in patterns)
+
+
+def _short_engagement_only(text: str) -> bool:
+    compact = clean_text(text).replace(" ", "").lower()
+    compact = re.sub(r"[，。！？!?,.;:：、~～\s\\[\\]（）()【】\"'“”‘’]+", "", compact)
+    if not compact:
+        return False
+    short_markers = {
+        "已关",
+        "已关注",
+        "关注了",
+        "互关",
+        "蹲",
+        "蹲蹲",
+        "求",
+        "求资料",
+        "求带",
+        "插眼",
+        "码住",
+        "学习",
+        "想学",
+    }
+    return compact in short_markers or (len(compact) <= 4 and compact in short_markers)
+
+
+def _low_information_utterance(text: str) -> bool:
+    compact = clean_text(text).replace(" ", "").lower()
+    compact = re.sub(r"[，。！？!?,.;:：、~～\s\\[\\]（）()【】\"'“”‘’]+", "", compact)
+    if not compact:
+        return True
+    if _strong_sourcing_need(compact) or _direct_customer_request(compact):
+        return False
+    low_info_exact = {
+        "服装",
+        "童装",
+        "女装",
+        "男装",
+        "鞋子",
+        "鞋",
+        "百货",
+        "日用品",
+        "吹风机",
+        "刚开始是的",
+        "每天稳定",
+        "是的",
+        "可以",
+        "怎么说",
+        "看一下我",
+    }
+    return compact in low_info_exact or len(compact) <= 2
+
+
+def _normalize_evidence_chain_ids(value: Any, known_chain_ids: list[str]) -> list[str]:
+    ids = [item for item in _text_list(value) if item in known_chain_ids]
+    if ids:
+        return ids
+    return known_chain_ids[:3]
+
+
+def _normalize_chain_judge_result(
+    parsed: dict[str, Any],
+    user_key: str,
+    known_chain_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    out = dict(parsed or {})
+    known_chain_ids = known_chain_ids or []
+    relationship = clean_text(out.get("relationship_type")) or "irrelevant"
+    decision = clean_text(out.get("decision")) or "ignore"
+    try:
+        score = int(round(float(out.get("fit_score"))))
+    except (TypeError, ValueError):
+        score = 0
+    score = max(0, min(100, score))
+
+    target_text = " ".join(
+        _text_list(out.get("target_user_utterance"))
+        + _text_list(out.get("identity_reasoning"))
+        + _text_list(out.get("evidence_quotes"))
+    )
+    target_utterance = clean_text(out.get("target_user_utterance"))
+    provider_relationship = _provider_ad_relationship(target_text)
+    strong_sourcing_need = _strong_sourcing_need(target_utterance)
+    direct_customer_request = _direct_customer_request(target_utterance)
+    short_engagement_only = _short_engagement_only(target_utterance)
+    low_information_utterance = _low_information_utterance(target_utterance)
+    if provider_relationship:
+        relationship = provider_relationship
+        decision = "ignore"
+        score = 0
+    elif strong_sourcing_need:
+        relationship = "target_business_customer"
+        decision = "high_priority"
+        score = 100
+    elif direct_customer_request:
+        relationship = "target_business_customer"
+        decision = "high_priority"
+        score = max(score, 70)
+    elif short_engagement_only:
+        relationship = "cross_border_peer"
+        decision = "nurture"
+        score = min(max(score, 40), 45)
+    elif low_information_utterance and decision == "high_priority":
+        relationship = "cross_border_peer"
+        decision = "nurture"
+        score = min(max(score, 40), 45)
+
+    if relationship in AI_NON_TARGET_RELATIONSHIPS and decision in {"high_priority", "follow_up"}:
+        decision = "ignore"
+    if relationship == "cross_border_peer" and decision in {"high_priority", "follow_up"}:
+        decision = "nurture"
+    if relationship != "target_business_customer" and decision in {"high_priority", "follow_up"}:
+        decision = "nurture" if relationship == "cross_border_peer" else "ignore"
+    if relationship == "target_business_customer" and decision not in {"high_priority", "follow_up", "nurture", "ignore"}:
+        decision = "follow_up" if score >= 55 else "nurture"
+    if decision not in {"high_priority", "follow_up", "nurture", "ignore"}:
+        decision = "ignore"
+
+    cap = AI_SCORE_CAPS.get(relationship)
+    if cap is not None:
+        score = min(score, cap)
+    if decision == "high_priority":
+        score = max(score, 70)
+        if not (strong_sourcing_need or direct_customer_request):
+            score = min(score, 95)
+    elif decision == "follow_up":
+        score = max(score, 55)
+    elif decision == "nurture":
+        score = max(score, 40)
+    elif decision == "ignore" and relationship in AI_NON_TARGET_RELATIONSHIPS:
+        score = min(score, AI_SCORE_CAPS.get(relationship, score))
+
+    out["user_key"] = clean_text(out.get("user_key")) or user_key
+    out["relationship_type"] = relationship
+    out["decision"] = decision
+    out["fit_score"] = score
+    out["fit_level"] = _fit_level(score)
+    out["customer_priority"] = _chain_customer_priority(decision, score)
+    out["intent_type"] = (
+        provider_relationship
+        or ("sourcing_need" if strong_sourcing_need else "")
+        or ("sourcing_need" if direct_customer_request else "")
+        or clean_text(out.get("intent_type"))
+        or clean_text(out.get("business_need_type"))
+        or relationship
+    )
+    evidence_quotes = _text_list(out.get("evidence_quotes"))
+    reasons = _text_list(out.get("reasons"))
+    risks = _text_list(out.get("risks"))
+    evidence_chain_ids = _normalize_evidence_chain_ids(out.get("evidence_chain_ids"), known_chain_ids)
+    out["evidence"] = clean_text(out.get("target_user_utterance")) or "; ".join(evidence_quotes) or "; ".join(reasons)
+    out["suggestion"] = clean_text(out.get("recommended_action")) or _suggestion_for_decision(decision)
+    if provider_relationship:
+        out["identity_reasoning"] = (
+            "目标用户的表达是在招揽、供货或提供服务，不是在寻找货源；"
+            "这类账号不是一件代发商家的目标客户。"
+        )
+        out["why_not_other_roles"] = (
+            "不是 target_business_customer，因为目标用户没有表达自己缺货源或要采购，"
+            "而是在让别人联系自己或推广入驻/供货服务。"
+        )
+        out["recommended_action"] = "忽略，不进入客户优先跟进。"
+        out["suggestion"] = out["recommended_action"]
+    out["evidence_quotes"] = evidence_quotes
+    out["evidence_chain_ids"] = evidence_chain_ids
+    out["reasons"] = reasons
+    out["risks"] = risks
+    return out
+
+
+def _judge_one(cfg: dict[str, str], user: XhsUser, judge_payload: dict[str, Any]) -> dict[str, Any] | None:
+    request_payload = dict(judge_payload)
+    request_payload["evidence_texts"] = _compact_judge_texts(
+        list(request_payload.get("evidence_texts") or []),
+        limit=_env_int("X9_FT_AI_MAX_EVIDENCE_TEXTS", 12, minimum=4, maximum=30),
+        max_chars=_env_int("X9_FT_AI_EVIDENCE_TEXT_CHARS", 260, minimum=120, maximum=800),
+    )
+    known_chain_ids = [
+        clean_text(chain.get("chain_id"))
+        for chain in request_payload.get("evidence_chains") or []
+        if isinstance(chain, dict) and clean_text(chain.get("chain_id"))
+    ]
     payload = {
         "model": cfg["model"],
         "temperature": 0.1,
-        "max_tokens": _env_int("X9_FT_GPT_MAX_TOKENS", 420, minimum=160, maximum=1000),
+        "max_tokens": _env_int("X9_FT_GPT_MAX_TOKENS", 900, minimum=360, maximum=1600),
         "response_format": {"type": "json_object"},
         "messages": [
-            {"role": "system", "content": _JUDGE_SYSTEM},
-            {"role": "user", "content": json.dumps({
-                "prompt_version": PROMPT_VERSION,
-                "username": user.username_clean,
-                "account": user.account_clean or user.xhs_user_id,
-                "bio": user.bio_clean,
-                "follower_count": user.follower_count,
-                "location": user.location_text,
-                "platform": user.platform,
-                "rule_precheck": rule,
-                "evidence_texts": evidence_texts,
-            }, ensure_ascii=False)},
+            {"role": "system", "content": CHAIN_INTENT_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(request_payload, ensure_ascii=False)},
         ],
     }
     with httpx.Client(timeout=float(os.getenv("OPENAI_TIMEOUT", "30"))) as client:
@@ -1100,25 +1586,34 @@ def _judge_one(cfg: dict[str, str], user: XhsUser, texts: list[str]) -> dict[str
         resp.raise_for_status()
         content = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
     parsed = json.loads(content)
-    parsed = _normalize_judge_result(parsed, rule)
+    parsed = _normalize_chain_judge_result(parsed, user.id, known_chain_ids)
     return {"parsed": parsed, "raw": content}
 
 
 def _judge_texts_for_user(db: Session, user: XhsUser) -> list[str]:
     texts: list[str] = [
-        user.username_clean or "",
-        user.account_clean or "",
-        user.bio_clean or "",
-        user.last_keyword or "",
+        f"target_profile_username: {user.username_clean}" if user.username_clean else "",
+        f"target_account: {user.account_clean or user.xhs_user_id}" if (user.account_clean or user.xhs_user_id) else "",
+        f"target_profile_bio: {user.bio_clean}" if user.bio_clean else "",
+        f"collection_keyword: {user.last_keyword}" if user.last_keyword else "",
     ]
-    texts.extend(
-        row for row in db.scalars(
-            select(XhsComment.content_clean)
-            .where(XhsComment.user_id == user.id)
-            .order_by(XhsComment.created_at.desc())
-            .limit(20)
-        ).all() if row
-    )
+    for comment, note in db.execute(
+        select(XhsComment, XhsNote)
+        .outerjoin(XhsNote, XhsComment.note_id == XhsNote.id)
+        .where(XhsComment.user_id == user.id)
+        .order_by(XhsComment.created_at.desc())
+        .limit(20)
+    ).all():
+        comment_text = clean_text(comment.content_clean or comment.content)
+        if comment_text:
+            texts.append(f"target_comment: {comment_text}")
+        if note is not None:
+            title = clean_text(note.title_clean or note.title)
+            desc = clean_text(note.desc_clean or note.content or note.desc_raw)
+            if title:
+                texts.append(f"context_note_title: {title}")
+            if desc:
+                texts.append(f"context_note_desc: {desc}")
     for keyword, evidence in db.execute(
         select(XhsUserSource.keyword, XhsUserSource.evidence_text)
         .where(XhsUserSource.user_id == user.id)
@@ -1126,9 +1621,9 @@ def _judge_texts_for_user(db: Session, user: XhsUser) -> list[str]:
         .limit(12)
     ).all():
         if keyword:
-            texts.append(str(keyword))
+            texts.append(f"collection_keyword: {keyword}")
         if evidence:
-            texts.append(str(evidence))
+            texts.append(f"source_evidence: {evidence}")
     for title, desc in db.execute(
         select(XhsNote.title_clean, XhsNote.desc_clean)
         .where(XhsNote.author_user_id == user.id)
@@ -1136,10 +1631,195 @@ def _judge_texts_for_user(db: Session, user: XhsUser) -> list[str]:
         .limit(8)
     ).all():
         if title:
-            texts.append(str(title))
+            texts.append(f"authored_note_title: {title}")
         if desc:
-            texts.append(str(desc))
+            texts.append(f"authored_note_desc: {desc}")
     return [t for t in texts if clean_text(t)]
+
+
+def _judge_payload_for_user(db: Session, user: XhsUser) -> dict[str, Any]:
+    sources = list(
+        db.scalars(
+            select(XhsUserSource)
+            .where(XhsUserSource.user_id == user.id)
+            .order_by(XhsUserSource.created_at.desc())
+            .limit(_env_int("X9_FT_AI_MAX_EVIDENCE_CHAINS", 8, minimum=1, maximum=20))
+        ).all()
+    )
+    source_payloads = {source.id: _json_object(source.source_payload) for source in sources}
+
+    comment_ids = {source.comment_id for source in sources if clean_text(source.comment_id)}
+    comments = list(
+        db.scalars(
+            select(XhsComment)
+            .where(
+                or_(
+                    XhsComment.user_id == user.id,
+                    XhsComment.id.in_(comment_ids) if comment_ids else XhsComment.id == "__never__",
+                )
+            )
+            .order_by(XhsComment.created_at.desc())
+            .limit(40)
+        ).all()
+    )
+
+    external_ids: set[str] = set()
+    for source in sources:
+        payload = source_payloads[source.id]
+        external_ids.update(
+            clean_text(payload.get(key))
+            for key in ("comment_id", "root_comment_id", "parent_comment_id")
+            if clean_text(payload.get(key))
+        )
+    for comment in comments:
+        external_ids.update(_comment_external_keys(comment))
+
+    if external_ids:
+        comments.extend(
+            list(
+                db.scalars(
+                    select(XhsComment).where(
+                        or_(
+                            XhsComment.external_comment_id.in_(external_ids),
+                            XhsComment.comment_id.in_(external_ids),
+                            XhsComment.xhs_comment_id.in_(external_ids),
+                        )
+                    )
+                ).all()
+            )
+        )
+
+    comments_by_id = {comment.id: comment for comment in comments}
+    comments_by_external: dict[str, XhsComment] = {}
+    for comment in comments:
+        for key in _comment_external_keys(comment):
+            comments_by_external[key] = comment
+
+    note_ids = {source.note_id for source in sources if clean_text(source.note_id)}
+    note_ids.update(comment.note_id for comment in comments if clean_text(comment.note_id))
+    notes_by_id: dict[str, XhsNote] = {}
+    if note_ids:
+        notes_by_id = {note.id: note for note in db.scalars(select(XhsNote).where(XhsNote.id.in_(note_ids))).all()}
+
+    evidence_chains: list[dict[str, Any]] = []
+    for index, source in enumerate(sources, 1):
+        payload = source_payloads[source.id]
+        target_comment = comments_by_id.get(source.comment_id or "")
+        current_comment_id = (
+            payload.get("comment_id")
+            or (target_comment.external_comment_id if target_comment else "")
+            or (target_comment.comment_id if target_comment else "")
+        )
+        root_key = payload.get("root_comment_id") or (target_comment.root_comment_external_id if target_comment else "")
+        parent_key = payload.get("parent_comment_id") or (target_comment.parent_comment_external_id if target_comment else "")
+        root_comment = _find_comment_by_external(comments_by_external, root_key)
+        parent_comment = comments_by_id.get(target_comment.parent_comment_id or "") if target_comment else None
+        parent_comment = parent_comment or _find_comment_by_external(comments_by_external, parent_key)
+
+        target_text = clean_text(source.evidence_text or payload.get("content") or _comment_body(target_comment))
+        root_text = _comment_body(root_comment)
+        parent_text = _comment_body(parent_comment)
+        if clean_text(root_key) == clean_text(current_comment_id):
+            root_text = ""
+        if clean_text(parent_key) == clean_text(current_comment_id):
+            parent_text = ""
+
+        note = notes_by_id.get(source.note_id or "") or notes_by_id.get((target_comment.note_id if target_comment else "") or "")
+        note_title = payload.get("note_title") or (note.title_clean if note else "") or (note.title if note else "")
+        note_desc = (note.desc_clean if note else "") or (note.content if note else "") or (note.desc_raw if note else "")
+        note_url = payload.get("note_url") or source.evidence_url or (note.canonical_note_url if note else "") or (note.url if note else "")
+        requires_context = bool((source.comment_depth or 0) > 0 or int(payload.get("depth") or 0) > 0)
+
+        evidence_chains.append(
+            {
+                "chain_id": f"S{index}",
+                "source_type": source.source_type,
+                "keyword": source.keyword,
+                "note": {
+                    "title": _clip(note_title),
+                    "desc": _clip(note_desc),
+                    "url": note_url,
+                },
+                "reply_route": {
+                    "root_comment": _clip(root_text),
+                    "parent_comment": _clip(parent_text),
+                    "current_comment": _clip(target_text),
+                    "root_comment_id": clean_text(root_key),
+                    "parent_comment_id": clean_text(parent_key),
+                    "current_comment_id": clean_text(current_comment_id),
+                    "comment_depth": source.comment_depth if source.comment_depth is not None else payload.get("depth"),
+                },
+                "reply_chain_quality": {
+                    "warning": _chain_warning(requires_context, root_text, parent_text),
+                    "requires_reply_context": requires_context,
+                    "has_parent_or_root_context": bool(root_text or parent_text),
+                },
+                "target_user_evidence": {
+                    "text": _clip(target_text),
+                    "evidence_kind": "comment_or_reply" if "comment" in clean_text(source.source_type) else source.source_type,
+                    "owned_by_target_user": True,
+                },
+            }
+        )
+
+    authored_posts = [
+        {
+            "title": _clip(title),
+            "desc": _clip(desc),
+        }
+        for title, desc in db.execute(
+            select(XhsNote.title_clean, XhsNote.desc_clean)
+            .where(XhsNote.author_user_id == user.id)
+            .order_by(XhsNote.created_at.desc())
+            .limit(6)
+        ).all()
+        if clean_text(title) or clean_text(desc)
+    ]
+    history_posts = [
+        {
+            "title": _clip(post.title_clean or post.title_raw),
+            "url": post.canonical_note_url,
+            "published_at_text": post.published_at_text,
+        }
+        for post in db.scalars(
+            select(XhsUserHistoryPost)
+            .where(XhsUserHistoryPost.user_id == user.id)
+            .order_by(XhsUserHistoryPost.position.asc(), XhsUserHistoryPost.created_at.desc())
+            .limit(6)
+        ).all()
+    ]
+    contacts = [
+        {"type": contact.contact_type, "value": contact.value_norm or contact.value_raw}
+        for contact in db.scalars(
+            select(XhsExtractedContact)
+            .where(XhsExtractedContact.user_id == user.id)
+            .order_by(XhsExtractedContact.created_at.desc())
+            .limit(5)
+        ).all()
+    ]
+    return {
+        "prompt_version": PROMPT_VERSION,
+        "user_key": user.id,
+        "user_profile": {
+            "platform": user.platform,
+            "username": user.username_clean,
+            "account": user.account_clean or user.xhs_user_id,
+            "bio": user.bio_clean,
+            "follower_count": user.follower_count,
+            "location": user.location_text,
+            "last_keyword": user.last_keyword,
+        },
+        "evidence_policy": {
+            "judge_only_target_user": True,
+            "contact_is_reach_channel_not_intent": True,
+            "context_cannot_prove_target_intent": True,
+        },
+        "evidence_texts": _judge_texts_for_user(db, user),
+        "evidence_chains": evidence_chains,
+        "authored_posts": authored_posts,
+        "history_posts": history_posts,
+        "contacts": contacts,
+    }
 
 
 def _judge_user_view(user: XhsUser) -> SimpleNamespace:
@@ -1167,7 +1847,7 @@ def judge_users_with_gpt(db: Session, *, department_code: str | None = None, lim
         stmt = stmt.where(XhsUser.department_code == department_code)
     candidates = list(db.scalars(stmt.order_by(XhsUser.created_at.desc()).limit(limit)).all())
 
-    jobs: list[tuple[XhsUser, SimpleNamespace, list[str]]] = []
+    jobs: list[tuple[XhsUser, SimpleNamespace, dict[str, Any]]] = []
     for user in candidates:
         if len(jobs) >= limit:
             break
@@ -1175,11 +1855,18 @@ def judge_users_with_gpt(db: Session, *, department_code: str | None = None, lim
             existing = db.scalar(select(XhsAiJudgment.id).where(XhsAiJudgment.user_id == user.id, XhsAiJudgment.prompt_version == PROMPT_VERSION))
             if existing:
                 continue
-        jobs.append((user, _judge_user_view(user), _judge_texts_for_user(db, user)))
+        jobs.append((user, _judge_user_view(user), _judge_payload_for_user(db, user)))
 
     concurrency = min(_env_int("X9_FT_GPT_CONCURRENCY", 4, minimum=1, maximum=12), max(len(jobs), 1))
 
     def persist_result(user: XhsUser, result: dict[str, Any] | None, error: Exception | None = None) -> bool:
+        db.execute(
+            delete(XhsAiJudgment).where(
+                XhsAiJudgment.department_code == user.department_code,
+                XhsAiJudgment.user_id == user.id,
+                XhsAiJudgment.prompt_version == PROMPT_VERSION,
+            )
+        )
         if error is not None:
             db.add(XhsAiJudgment(
                 id=_uid(), department_code=user.department_code, platform=user.platform, user_id=user.id,
@@ -1209,9 +1896,9 @@ def judge_users_with_gpt(db: Session, *, department_code: str | None = None, lim
     judged = 0
     errors = 0
     if concurrency <= 1 or len(jobs) <= 1:
-        for user, view, texts in jobs:
+        for user, view, judge_payload in jobs:
             try:
-                result = _judge_one(cfg, view, texts)
+                result = _judge_one(cfg, view, judge_payload)
             except Exception as exc:  # noqa: BLE001
                 errors += 1
                 persist_result(user, None, exc)
@@ -1221,8 +1908,8 @@ def judge_users_with_gpt(db: Session, *, department_code: str | None = None, lim
 
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="ft-gpt-judge") as executor:
         futures = {
-            executor.submit(_judge_one, cfg, view, texts): user
-            for user, view, texts in jobs
+            executor.submit(_judge_one, cfg, view, judge_payload): user
+            for user, view, judge_payload in jobs
         }
         for future in as_completed(futures):
             user = futures[future]

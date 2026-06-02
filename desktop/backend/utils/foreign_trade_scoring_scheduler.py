@@ -94,6 +94,9 @@ def _run() -> None:
 
 
 def start_foreign_trade_auto_scoring() -> None:
+    if not _env_bool("X9_FT_AUTO_JUDGE_ENABLED", False):
+        log.info("foreign_trade_scoring_scheduler: disabled by default; set X9_FT_AUTO_JUDGE_ENABLED=1 to enable")
+        return
     if _env_bool("X9_FT_AUTO_JUDGE_DISABLED", False):
         log.info("foreign_trade_scoring_scheduler: disabled by X9_FT_AUTO_JUDGE_DISABLED")
         return
