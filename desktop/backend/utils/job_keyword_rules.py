@@ -20,12 +20,17 @@ CORE_BUSINESS = [
     "纸尿裤", "拉拉裤", "卫生巾", "成人护理", "失禁用品",
 ]
 
+PRODUCT_CATEGORY = [
+    "护理用品", "母婴", "婴童", "个护", "个人护理", "纸尿裤", "拉拉裤", "卫生巾",
+    "成人护理", "失禁用品", "日化", "化妆品", "美妆", "宠物护理", "养老护理",
+]
+
 # 渠道 / 分销 / 平台卖家等"帮我们把货卖进美国"的合作角色（已移除工厂/源头厂家等供应端词）
 # 使用基础词（分销/代理/渠道/经销）以覆盖 分销商/海外分销/代理商/渠道拓展 等变体，避免同一概念重复计分
 PARTNER_ROLE = [
     "分销", "代理", "渠道", "经销", "招商", "合作伙伴", "品牌方",
     "货代", "国际货代", "海外仓", "供应链", "跨境供应链", "贸易商", "一件代发",
-    "进口商", "批发", "零售", "卖家", "平台卖家", "独立站",
+    "进口商", "批发", "零售", "卖家", "平台卖家", "独立站", "金品商家", "国际站",
 ]
 
 # 业务拓展 / 市场动作信号（已移除招聘/急招/扩招/团队扩张等招聘语境词，避免把招聘当作合作关键词）
@@ -45,19 +50,42 @@ MARKET_SIGNAL = [
 # 工厂判定不再纳入正向加分（改由 FACTORY_SIGNAL 做条件降权）
 QUALITY_SIGNAL = [
     "品牌", "自有品牌", "团队", "公司规模", "成立",
-    "出口", "库存", "仓储", "履约", "店铺", "旗舰店",
+    "出口", "进出口", "贸易/进出口", "电子商务", "库存", "仓储", "履约",
+    "店铺", "旗舰店", "阿里巴巴国际站", "平台资源", "金品商家",
 ]
 
 # 工厂 / 生产型企业降权信号：与贵司供应端重叠、合作必要性低，默认不是优先合作商
 FACTORY_SIGNAL = [
     "工厂", "源头厂家", "生产厂家", "生产基地", "生产", "制造商", "制造",
-    "工贸一体", "代工", "oem", "odm", "加工厂",
+    "工贸一体", "代工", "oem", "odm", "加工厂", "厂",
 ]
 
 # 平台 / 渠道运营能力（用于判断工厂是否同时具备"强美区渠道"，不单独计分）
 PLATFORM_CHANNEL = [
     "amazon", "亚马逊", "tiktok shop", "tiktokshop", "tiktok", "walmart", "沃尔玛",
-    "独立站", "shopify", "ebay", "速卖通", "temu", "shein",
+    "独立站", "shopify", "ebay", "速卖通", "temu", "shein", "阿里巴巴国际站", "alibaba",
+    "国际站", "金品商家",
+]
+
+TITLE_STRONG_SIGNAL = [
+    "跨境电商运营", "外贸跨境电商运营", "亚马逊运营", "tiktok运营", "tiktok shop运营",
+    "海外跨境电商运营", "海外运营", "海外销售", "海外业务", "外贸业务", "外贸销售",
+    "国际贸易", "跨境电商销售", "跨境销售", "渠道开发", "市场开发", "平台招商",
+    "跨境电商合伙人",
+]
+
+TITLE_SUPPORT_SIGNAL = [
+    "电商运营", "电商专员", "销售运营", "运营助理", "外贸助理", "外贸跟单",
+    "海外业务支持", "英语销售", "单证员",
+]
+
+TITLE_NOISE_SIGNAL = [
+    "会计", "法务", "行政", "人事", "财务", "出纳", "qc", "质检", "测试",
+    "采购", "跟单", "单证", "订单管理员",
+]
+
+SEARCH_SUPPORT_SIGNAL = CORE_BUSINESS + PARTNER_ROLE + MARKET_SIGNAL + PLATFORM_CHANNEL + [
+    "跨境", "外贸", "电商", "电子商务", "进出口",
 ]
 
 TALENT_CORE = [
@@ -101,6 +129,28 @@ def _hits(text: str, keywords: list[str], limit: int = 6) -> list[str]:
 def _score_bucket(text: str, keywords: list[str], points: int, cap: int) -> MatchResult:
     matches = _hits(text, keywords)
     return MatchResult(min(len(matches) * points, cap), matches)
+
+
+def _unique(items: list[str], limit: int = 12) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _score_title_roles(titles: list[str] | None) -> tuple[MatchResult, list[str]]:
+    text = " ".join(titles or [])
+    strong = _hits(text, TITLE_STRONG_SIGNAL, limit=8)
+    support = [hit for hit in _hits(text, TITLE_SUPPORT_SIGNAL, limit=8) if hit not in strong]
+    noise = _hits(text, TITLE_NOISE_SIGNAL, limit=8)
+    score = min(len(strong) * 7 + len(support) * 3, 16)
+    return MatchResult(score, _unique(strong + support)), noise
 
 
 def _quality(has_name: bool, has_core_payload: bool, has_contact: bool, suspicious: bool = False) -> str:
@@ -151,53 +201,81 @@ def score_company(
     city: str = "",
     jd_titles: list[str] | None = None,
     jd_descriptions: list[str] | None = None,
+    search_keywords: str = "",
     has_contact: bool = False,
     risk: int = 0,
 ) -> dict:
-    corpus = " ".join(
-        filter(None, [company_name, industry, company_description, size_range, city] + (jd_titles or []) + (jd_descriptions or []))
-    )
-    # 命中越多正向信号分越高，拉开区分度（适度加分）
-    fit = _score_bucket(corpus, CORE_BUSINESS, 12, 34)
-    partner = _score_bucket(corpus, PARTNER_ROLE, 10, 28)
-    activity = _score_bucket(corpus, ACTIVITY_SIGNAL + (jd_titles or []), 5, 15)
-    market = _score_bucket(corpus, MARKET_SIGNAL, 8, 20)
-    quality_signal = _score_bucket(corpus, QUALITY_SIGNAL, 3, 10)
-    contact_score = 15 if has_contact else 0
+    company_corpus = " ".join(filter(None, [company_name, industry, company_description, size_range, city]))
+    job_corpus = " ".join(filter(None, (jd_titles or []) + (jd_descriptions or [])))
+    corpus = " ".join(filter(None, [company_corpus, job_corpus]))
+
+    # 公司自身信息比招聘标题更可信；JD 只作为辅助证据，避免"搜到跨境岗位"直接被高估为好客户。
+    company_fit = _score_bucket(company_corpus, CORE_BUSINESS, 12, 24)
+    job_fit = _score_bucket(job_corpus, CORE_BUSINESS, 8, 18)
+    fit = MatchResult(min(company_fit.score + job_fit.score, 34), _unique(company_fit.matches + job_fit.matches))
+
+    partner = _score_bucket(corpus, PARTNER_ROLE, 9, 24)
+    role, title_noise = _score_title_roles(jd_titles)
+    activity = _score_bucket(corpus, ACTIVITY_SIGNAL, 5, 10)
+    market = _score_bucket(corpus, MARKET_SIGNAL, 10, 20)
+    quality_signal = _score_bucket(corpus, QUALITY_SIGNAL, 3, 9)
+    search_support = _score_bucket(search_keywords, SEARCH_SUPPORT_SIGNAL, 3, 8)
+    company_or_job_evidence = bool(fit.matches or partner.matches or role.matches or activity.matches or market.matches or quality_signal.matches)
+    search_score = search_support.score if company_or_job_evidence else min(search_support.score, 4)
+    contact_score = 12 if has_contact else 0
 
     suspicious = any(token in _norm(company_name)[:12] for token in ("自我评价", "工作经历", "求职意向", "教育经历"))
     has_core_payload = bool(industry or company_description or jd_titles or jd_descriptions)
     data_quality = _quality(bool(company_name), has_core_payload, has_contact, suspicious=suspicious)
     if data_quality == "low":
         risk -= 12
+    if title_noise and not role.matches and not partner.matches and not market.matches:
+        risk -= 8
 
     # 工厂条件降权：工厂/生产型企业与贵司供应端重叠，合作必要性偏低，作为负面信号【适度降分】（不一刀切）。
     # 若同时具备美区市场信号 + 渠道/平台运营能力（强美区渠道），仅轻微降权、保留中高分；
     # 否则适度降权，但不再强制限制最高分，仍允许凭借其他正向信号拉开区分度。
     factory_hits = _hits(corpus, FACTORY_SIGNAL)
-    has_channel_capability = bool(partner.matches) or bool(_hits(corpus, PLATFORM_CHANNEL))
+    product_hits = _hits(corpus, PRODUCT_CATEGORY)
+    platform_hits = _hits(corpus, PLATFORM_CHANNEL)
+    has_channel_capability = bool(partner.matches) or bool(platform_hits)
     strong_us_channel = bool(market.matches) and has_channel_capability
     factory_note = ""
     if factory_hits:
-        if strong_us_channel:
-            risk -= 5
+        if product_hits and not strong_us_channel:
+            risk -= 22
+            factory_note = "含同品类生产/工厂属性（供应端重叠或潜在竞争，需从严确认角色）"
+        elif strong_us_channel:
+            risk -= 7
             factory_note = "含工厂/生产属性（供应端重叠，但有美区渠道信号，需复核合作角色）"
         else:
-            risk -= 12
+            risk -= 16
             factory_note = "含工厂/生产属性（供应端重叠，已适度降权）"
 
     breakdown = {
         "fit": fit.score,
         "partner": partner.score,
+        "role": role.score,
         "activity": activity.score,
+        "search": search_score,
         "contact": contact_score,
         "quality": quality_signal.score,
         "market": market.score,
         "risk": risk,
     }
-    # 工厂仅通过 risk 适度降权，不再强制限制最高分，保留与其他正向信号的区分度
     score = max(0, min(100, sum(breakdown.values())))
-    tags = fit.matches + partner.matches + activity.matches + market.matches
+
+    # 分数闸门：高分必须有公司层面的渠道/平台/美区/品类证据，不能只靠搜索词或泛跨境岗位堆出来。
+    strong_bd_package = bool(market.matches or product_hits or platform_hits)
+    if factory_hits and not strong_us_channel:
+        score = min(score, 39 if product_hits else 45)
+    if score >= 60 and not strong_bd_package:
+        score = min(score, 59)
+    if search_support.matches and not company_or_job_evidence:
+        score = min(score, 24)
+
+    search_tags = search_support.matches if company_or_job_evidence else []
+    tags = _unique(fit.matches + partner.matches + role.matches + activity.matches + market.matches + search_tags)
     cooperation_type = _company_cooperation_type(tags, corpus)
     next_action = _action(score, has_contact, data_quality, risk)
     tier = _tier(score)
@@ -280,9 +358,9 @@ def _company_cooperation_type(tags: list[str], text: str) -> str:
     if any(k in n for k in ("货代", "物流", "海外仓", "仓储", "fba", "fbt")):
         return "service_provider"
     # 先识别渠道/品牌卖家：工厂若同时具备渠道/平台信号，应归为渠道方而非纯供应端
-    if any(k in n for k in ("分销", "代理", "渠道", "招商", "经销", "进口", "批发", "零售")):
+    if any(k in n for k in ("分销", "代理", "渠道", "招商", "经销", "进口", "批发", "零售", "金品商家", "国际站")):
         return "channel_partner"
-    if any(k in n for k in ("品牌", "店铺", "卖家", "商家", "独立站", "amazon", "亚马逊", "tiktok", "walmart")):
+    if any(k in n for k in ("品牌", "店铺", "卖家", "商家", "电子商务", "电商", "独立站", "amazon", "亚马逊", "tiktok", "walmart")):
         return "brand_seller"
     # 没有任何渠道/品牌信号的工厂/生产型企业 → 供应端（降权对象）
     if any(k in n for k in ("工厂", "生产", "供应商", "源头厂家", "工贸", "制造", "代工", "oem", "odm")):

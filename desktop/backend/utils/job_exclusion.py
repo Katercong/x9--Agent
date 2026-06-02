@@ -38,6 +38,18 @@ SELF_COMPANY_KEYWORDS = [
     "福建蓝蜻蜓护理用品股份",
 ]
 
+PLATFORM_OPERATOR_KEYWORDS = {
+    "字节跳动",
+    "腾讯",
+    "阿里巴巴",
+    "京东",
+    "拼多多",
+    "美团",
+    "百度",
+    "tiktok shop",
+    "tiktokshop",
+}
+
 
 DEFAULT_PRESETS = [
     {
@@ -183,6 +195,7 @@ def check_excluded(*texts: str) -> tuple[bool, str | None]:
     返回 (是否命中, 命中的关键词)。
     texts 是公司名/简介/JD 等，任一命中即返回 True。
     """
+    company_name = (texts[0] if texts else "").lower()
     joined = " ".join(t for t in texts if t).lower()
     if not joined:
         return False, None
@@ -192,6 +205,11 @@ def check_excluded(*texts: str) -> tuple[bool, str | None]:
             return True, f"贵司自有公司({kw})"
     # 2) 再按当前启用方案的关键词排除。
     for kw in active_keywords():
-        if kw.lower() in joined:
+        low = kw.lower()
+        # 平台名是强渠道信号，不能因为简介里写"阿里巴巴国际站商家"
+        # 或 JD 写"TikTok Shop 运营"就误判为官方平台本体。
+        if low in PLATFORM_OPERATOR_KEYWORDS and low not in company_name:
+            continue
+        if low in joined:
             return True, kw
     return False, None

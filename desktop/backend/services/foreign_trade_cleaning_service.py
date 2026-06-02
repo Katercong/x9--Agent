@@ -189,6 +189,7 @@ def _clean_company_leads(db: Session, department_code: str | None) -> dict[str, 
             city=lead.city or "",
             jd_titles=jd_titles,
             jd_descriptions=[],
+            search_keywords=lead.search_keywords or "",
             has_contact=has_contact,
             risk=-35 if hit else 0,
         )

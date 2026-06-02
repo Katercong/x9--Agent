@@ -236,6 +236,7 @@ def ingest_company(db: Session, data: dict[str, Any], department_code: str | Non
         city=data.get("city", ""),
         jd_titles=jd_titles,
         jd_descriptions=jd_descriptions,
+        search_keywords=search_keywords,
         has_contact=has_contact,
         risk=-35 if hit else 0,
     )
