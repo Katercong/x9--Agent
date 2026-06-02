@@ -40,7 +40,8 @@ from qzrc_scraper import (
     enrich_qzrc_company, rnd_delay, _company_detail_cache,
 )
 
-BACKEND_BASE = os.getenv("COMPANYLEADS_BACKEND_URL", "http://127.0.0.1:8000").strip().rstrip("/")
+BACKEND_BASE = os.getenv("COMPANYLEADS_BACKEND_URL", "https://usx9.us").strip().rstrip("/")
+DEPARTMENT_CODE = os.getenv("COMPANYLEADS_DEPARTMENT", "foreign_trade").strip() or "foreign_trade"
 
 
 def api_headers() -> dict[str, str]:
@@ -74,6 +75,7 @@ async def fetch_targets(client: httpx.AsyncClient, limit: int) -> list[dict]:
 async def push_back(client: httpx.AsyncClient, lead: dict, extras: dict, dry_run: bool) -> bool:
     """ingest API 写回；后端按 (platform, platform_company_id) 去重更新现有行。"""
     payload = {
+        "department_code": DEPARTMENT_CODE,
         "platform": "qzrc",
         "platform_company_id": lead.get("platform_company_id") or None,
         "company_name": lead["company_name"],

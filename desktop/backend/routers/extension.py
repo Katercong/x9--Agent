@@ -38,6 +38,7 @@ ADMIN_ROLES = {"super_admin", "company_admin", "department_admin"}
 _EXTENSION_DIR = Path(__file__).resolve().parents[2] / "chrome-extension"
 # Merged foreign-trade extension (recruitment + Xiaohongshu/Douyin).
 _FT_EXTENSION_DIR = Path(__file__).resolve().parents[2] / "foreign-trade-extension"
+_FT_HELPER_DIR = Path(__file__).resolve().parents[2] / "foreign-trade-helper"
 
 
 def _extension_dir_for_department(department_code: str | None) -> tuple[Path, str, str]:
@@ -50,6 +51,31 @@ def _extension_dir_for_department(department_code: str | None) -> tuple[Path, st
     if normalize_department_code(department_code, default=None) == "foreign_trade" and _FT_EXTENSION_DIR.is_dir():
         return _FT_EXTENSION_DIR, "x9-foreign-trade-extension.zip", "ft_actor.js"
     return _EXTENSION_DIR, "x9-tk-creator-extension.zip", "x9_actor_config.js"
+
+
+def _foreign_trade_readme() -> str:
+    return "\n".join([
+        "X9 外贸采集插件安装说明",
+        "",
+        "1. 解压本 zip。Chrome 扩展目录是 extension，请在 chrome://extensions 里选择“加载已解压的扩展程序”。",
+        "2. 以 PowerShell 运行 helper/install_ft_helper.ps1。默认写入 https://usx9.us、foreign_trade、当前 helper 根目录。",
+        "3. 打开插件侧边栏，确认 helper、后台、department、root 状态正常后开始采集。",
+        "",
+        "本地测试可运行：",
+        'powershell -ExecutionPolicy Bypass -File ".\\helper\\install_ft_helper.ps1" -BackendUrl "http://127.0.0.1:8000"',
+        "",
+        "兼容入口：helper/install_companyleads.ps1 会转发到 install_ft_helper.ps1。",
+        "配置文件仍写入 %LOCALAPPDATA%\\CompanyLeads\\config.json，以兼容旧 native messaging host 名称。",
+    ]) + "\n"
+
+
+def _should_skip_helper_file(path: Path) -> bool:
+    parts = set(path.parts)
+    if "__pycache__" in parts or ".pytest_cache" in parts or ".venv" in parts:
+        return True
+    if "data" in parts and "runtime" in parts:
+        return True
+    return path.suffix.lower() in {".pyc", ".pyo", ".zip"}
 
 
 def _ft_actor_config_js(payload: dict) -> str:
@@ -143,19 +169,35 @@ def download_extension(request: Request) -> Response:
     actor_config = _actor_config_for_user(user, source="download_user")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(ext_dir.rglob("*")):
-            if path.is_file():
-                # chrome://extensions "Load unpacked" needs manifest.json at the
-                # root of the extracted folder, so store paths relative to ext_dir.
-                arcname = path.relative_to(ext_dir).as_posix()
-                if arcname == "x9_actor_config.js":
-                    # TikTok extension: bundled X9 actor config (legacy shape).
-                    zf.writestr(arcname, _actor_config_js(actor_config))
-                elif arcname == actor_file:
-                    # Foreign-trade extension: ft_actor.js with department + actor.
-                    zf.writestr(arcname, _ft_actor_config_js(actor_config))
-                else:
-                    zf.write(path, arcname)
+        if zip_name == "x9-foreign-trade-extension.zip":
+            if not _FT_HELPER_DIR.is_dir():
+                raise HTTPException(status_code=500, detail=f"foreign trade helper dir missing: {_FT_HELPER_DIR}")
+            for path in sorted(ext_dir.rglob("*")):
+                if path.is_file():
+                    rel = path.relative_to(ext_dir).as_posix()
+                    arcname = f"extension/{rel}"
+                    if rel == actor_file:
+                        # Foreign-trade extension: ft_actor.js with department + actor.
+                        zf.writestr(arcname, _ft_actor_config_js(actor_config))
+                    else:
+                        zf.write(path, arcname)
+            for path in sorted(_FT_HELPER_DIR.rglob("*")):
+                if path.is_file() and not _should_skip_helper_file(path.relative_to(_FT_HELPER_DIR)):
+                    zf.write(path, f"helper/{path.relative_to(_FT_HELPER_DIR).as_posix()}")
+            zf.writestr("README_安装说明.txt", _foreign_trade_readme())
+        else:
+            for path in sorted(ext_dir.rglob("*")):
+                if path.is_file():
+                    # chrome://extensions "Load unpacked" needs manifest.json at the
+                    # root of the extracted folder, so store paths relative to ext_dir.
+                    arcname = path.relative_to(ext_dir).as_posix()
+                    if arcname == "x9_actor_config.js":
+                        # TikTok extension: bundled X9 actor config (legacy shape).
+                        zf.writestr(arcname, _actor_config_js(actor_config))
+                    elif arcname == actor_file:
+                        zf.writestr(arcname, _ft_actor_config_js(actor_config))
+                    else:
+                        zf.write(path, arcname)
 
     buf.seek(0)
     return Response(

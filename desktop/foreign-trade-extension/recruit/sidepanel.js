@@ -61,7 +61,7 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"]/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
-const EXPECTED_ROOT_SUFFIX = '\\CompanyLeads_local';
+const EXPECTED_ROOT_SUFFIX = '\\foreign-trade-helper';
 
 function parseProgressFromLogs(lines = []) {
   for (let i = lines.length - 1; i >= 0; i -= 1) {
@@ -218,9 +218,11 @@ function renderNativeStatus(status) {
   const cdp = status.cdpReady ? `CDP: ${status.cdpUrl || 'ready'}` : 'CDP: 未就绪';
   const profile = status.runtime?.userDataDir ? `profile: ${status.runtime.userDataDir}` : 'profile: 受控独立窗口';
   const mode = status.mode ? `mode: ${status.mode}` : '';
+  const department = status.department ? `department: ${status.department}` : '';
+  const root = status.root ? `root: ${status.root}` : '';
   const auth = status.apiTokenConfigured ? 'token: configured' : 'token: none';
   const llm = status.systemStatus?.llm_configured ? `LLM: ${status.systemStatus.llm_model || 'ready'}` : 'LLM: not configured/unknown';
-  setRuntimeStatus([helper, backend, cdp, profile, mode, auth, llm].filter(Boolean).join(' · '));
+  setRuntimeStatus([helper, backend, cdp, profile, mode, department, root, auth, llm].filter(Boolean).join(' · '));
 }
 
 async function ensureLocalStack() {
@@ -281,7 +283,15 @@ async function checkHealth() {
     const d = await helperFetch('/health');
     setHealth(`helper: 已连接，历史任务 ${d.tasks}，运行中 ${d.running_tasks || 0}`);
     if (d.root && !isExpectedHelperRoot(d.root)) {
-      setRuntimeStatus(`helper root 指向 ${d.root}，建议在 CompanyLeads_local 运行 install_companyleads.ps1 -SkipPythonInstall 后重启 helper`);
+      setRuntimeStatus(`检测到旧 helper root: ${d.root}，正在切换到外贸 helper...`);
+      try {
+        const status = await ensureLocalStack();
+        renderNativeStatus(status);
+        const refreshed = await helperFetch('/health');
+        setHealth(`helper: 已连接，历史任务 ${refreshed.tasks}，运行中 ${refreshed.running_tasks || 0}`);
+      } catch (switchErr) {
+        setRuntimeStatus(`切换外贸 helper 失败：${switchErr.message || switchErr}`);
+      }
       return;
     }
     if (d.runtime) {
@@ -302,7 +312,7 @@ async function checkHealth() {
       }
     } catch (nativeErr) {
       // 逐页采集不经过 helper；连不上只代表「批量采集」不可用，不是错误。
-      setHealth('ℹ️ 逐页采集可直接使用（打开招聘页即自动采集）。批量采集需安装本机 helper（见 docs 批量采集安装说明），当前未安装。');
+      setHealth('逐页采集可直接使用（打开招聘页即自动采集）。批量采集需先运行 helper/install_ft_helper.ps1，当前未安装。');
       setRuntimeStatus('');
     }
   }

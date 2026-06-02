@@ -7,11 +7,16 @@ from typing import Any, Iterable, TypedDict
 import httpx
 
 
-DEFAULT_BACKEND_BASE = "http://127.0.0.1:8000"
+DEFAULT_BACKEND_BASE = "https://usx9.us"
+DEFAULT_DEPARTMENT_CODE = "foreign_trade"
 
 
 def backend_base() -> str:
     return os.getenv("COMPANYLEADS_BACKEND_URL", DEFAULT_BACKEND_BASE).strip().rstrip("/")
+
+
+def department_code() -> str:
+    return os.getenv("COMPANYLEADS_DEPARTMENT", DEFAULT_DEPARTMENT_CODE).strip() or DEFAULT_DEPARTMENT_CODE
 
 
 def api_headers() -> dict[str, str]:
@@ -19,12 +24,21 @@ def api_headers() -> dict[str, str]:
     return {"X-CompanyLeads-Token": token} if token else {}
 
 
+def _ingest_url(backend_url: str | None, path: str) -> str:
+    raw = (backend_url or "").strip().rstrip("/")
+    if not raw:
+        raw = backend_base()
+    if "/api/" in raw:
+        raw = raw.split("/api/", 1)[0].rstrip("/")
+    return f"{raw}{path}"
+
+
 def company_ingest_url() -> str:
-    return f"{backend_base()}/api/companies/ingest"
+    return _ingest_url(None, "/api/companies/ingest")
 
 
 def talent_ingest_url() -> str:
-    return f"{backend_base()}/api/talents/ingest"
+    return _ingest_url(None, "/api/talents/ingest")
 
 
 BACKEND_BASE = DEFAULT_BACKEND_BASE
@@ -53,6 +67,7 @@ def _to_talent_payload(entry: dict[str, Any]) -> dict[str, Any]:
     if not name and entry.get("company_name", "").startswith("[求职者:"):
         name = entry["company_name"][len("[求职者:"):-1]
     return {
+        "department_code": entry.get("department_code") or department_code(),
         "platform": entry.get("platform", "qzrc"),
         "platform_resume_id": entry.get("platform_resume_id") or entry.get("platform_company_id"),
         "name_masked": name or None,
@@ -73,6 +88,7 @@ TALENT_BACKEND_URL = f"{DEFAULT_BACKEND_BASE}/api/talents/ingest"
 
 
 class CompanyLeadEntry(TypedDict, total=False):
+    department_code: str
     platform: str
     platform_company_id: str
     company_name: str
@@ -94,6 +110,7 @@ class CompanyLeadEntry(TypedDict, total=False):
 
 
 class TalentLeadEntry(TypedDict, total=False):
+    department_code: str
     platform: str
     platform_resume_id: str
     name_masked: str
@@ -125,6 +142,7 @@ def identity_key(entry: dict[str, Any]) -> str:
 
 
 COMPANY_CONTRACT_FIELDS = [
+    "department_code",
     "platform",
     "platform_company_id",
     "company_name",
@@ -155,6 +173,7 @@ def normalize_company_entry(entry: dict[str, Any]) -> dict[str, Any]:
     contract stable without forcing every platform to fill every field.
     """
     normalized: dict[str, Any] = {field: entry.get(field, "") for field in COMPANY_CONTRACT_FIELDS}
+    normalized["department_code"] = normalized.get("department_code") or department_code()
     normalized["platform"] = normalized.get("platform") or "51job"
     normalized["source_mode"] = normalized.get("source_mode") or "job_seeker"
     raw_data = normalized.get("raw_data")
@@ -206,8 +225,8 @@ def push_all(entries: list[dict[str, Any]], *, dry_run: bool, backend_url: str |
     ok = fail = 0
     ok_talent = 0
     llm_scored = llm_failed = 0
-    company_url = backend_url or company_ingest_url()
-    talent_url = talent_ingest_url()
+    company_url = _ingest_url(backend_url, "/api/companies/ingest")
+    talent_url = _ingest_url(backend_url, "/api/talents/ingest")
     headers = api_headers()
     with httpx.Client(timeout=10) as client:
         for entry in deduped:
@@ -246,7 +265,7 @@ def push_one(entry: dict[str, Any], *, dry_run: bool, backend_url: str | None = 
 
     normalized = normalize_company_entry(entry)
     is_talent = _is_talent_entry(normalized)
-    url = talent_ingest_url() if is_talent else (backend_url or company_ingest_url())
+    url = _ingest_url(backend_url, "/api/talents/ingest" if is_talent else "/api/companies/ingest")
     payload = _to_talent_payload(normalized) if is_talent else normalized
     try:
         with httpx.Client(timeout=10) as client:
@@ -328,12 +347,13 @@ def push_talents(entries: list[dict[str, Any]], *, dry_run: bool, backend_url: s
 
     ok = fail = 0
     llm_scored = llm_failed = 0
-    url = backend_url or talent_ingest_url()
+    url = _ingest_url(backend_url, "/api/talents/ingest")
     headers = api_headers()
     with httpx.Client(timeout=10) as client:
         for entry in deduped:
             try:
-                r = client.post(url, json=entry, headers=headers)
+                payload = {**entry, "department_code": entry.get("department_code") or department_code()}
+                r = client.post(url, json=payload, headers=headers)
                 if r.status_code == 200:
                     ok += 1
                     try:

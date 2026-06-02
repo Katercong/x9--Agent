@@ -7,6 +7,7 @@ if (Test-Path -LiteralPath $configPath) {
     $cfg = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
     if (-not $env:COMPANYLEADS_MODE -and $cfg.mode) { $env:COMPANYLEADS_MODE = [string]$cfg.mode }
     if (-not $env:COMPANYLEADS_BACKEND_URL -and $cfg.backendUrl) { $env:COMPANYLEADS_BACKEND_URL = [string]$cfg.backendUrl }
+    if (-not $env:COMPANYLEADS_DEPARTMENT -and $cfg.department) { $env:COMPANYLEADS_DEPARTMENT = [string]$cfg.department }
     if (-not $env:COMPANYLEADS_BACKEND_HOST -and $cfg.backendHost) { $env:COMPANYLEADS_BACKEND_HOST = [string]$cfg.backendHost }
     if (-not $env:COMPANYLEADS_BACKEND_PORT -and $cfg.backendPort) { $env:COMPANYLEADS_BACKEND_PORT = [string]$cfg.backendPort }
     if (-not $env:COMPANYLEADS_API_TOKEN -and $cfg.apiToken) { $env:COMPANYLEADS_API_TOKEN = [string]$cfg.apiToken }
@@ -14,8 +15,8 @@ if (Test-Path -LiteralPath $configPath) {
     Write-Host "Could not read CompanyLeads config; using defaults"
   }
 }
-$mode = if ($env:COMPANYLEADS_MODE) { $env:COMPANYLEADS_MODE } else { "server" }
-$backendUrl = if ($env:COMPANYLEADS_BACKEND_URL) { $env:COMPANYLEADS_BACKEND_URL.TrimEnd("/") } else { "http://127.0.0.1:8000" }
+$mode = if ($env:COMPANYLEADS_MODE) { $env:COMPANYLEADS_MODE } else { "client" }
+$backendUrl = if ($env:COMPANYLEADS_BACKEND_URL) { $env:COMPANYLEADS_BACKEND_URL.TrimEnd("/") } else { "https://usx9.us" }
 $backendPort = if ($env:COMPANYLEADS_BACKEND_PORT) { [int]$env:COMPANYLEADS_BACKEND_PORT } else { 8000 }
 $localPython = Join-Path $env:LOCALAPPDATA "CompanyLeads\.venv\Scripts\python.exe"
 $python = if ($env:COMPANYLEADS_PYTHON) {

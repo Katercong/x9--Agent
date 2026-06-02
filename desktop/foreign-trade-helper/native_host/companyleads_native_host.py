@@ -17,7 +17,7 @@ from typing import Any
 
 HOST_NAME = "com.companyleads.helper"
 REQUIRED_HELPER_VERSION = "1.1.1"
-DEFAULT_BACKEND_URL = "http://127.0.0.1:8000"
+DEFAULT_BACKEND_URL = "https://usx9.us"
 DEFAULT_DASHBOARD_URL = "https://usx9.us/workspace/foreign-trade/"
 APP_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "CompanyLeads"
 CONFIG_PATH = APP_DIR / "config.json"
@@ -51,8 +51,10 @@ def load_config() -> dict[str, Any]:
     root = Path(__file__).resolve().parents[1]
     return {
         "root": str(root),
+        "mode": "client",
         "backendUrl": DEFAULT_BACKEND_URL,
         "dashboardUrl": DEFAULT_DASHBOARD_URL,
+        "department": "foreign_trade",
         "helperUrl": "http://127.0.0.1:8765",
     }
 
@@ -141,6 +143,7 @@ def process_env(config: dict[str, Any]) -> dict[str, str]:
         env["COMPANYLEADS_MODE"] = str(config.get("mode"))
     if config.get("backendUrl"):
         env["COMPANYLEADS_BACKEND_URL"] = str(config.get("backendUrl")).rstrip("/")
+    env["COMPANYLEADS_DEPARTMENT"] = str(config.get("department") or "foreign_trade").strip() or "foreign_trade"
     if config.get("backendHost"):
         env["COMPANYLEADS_BACKEND_HOST"] = str(config.get("backendHost"))
     if config.get("backendPort"):
@@ -213,11 +216,27 @@ def stop_helper_port() -> None:
     )
 
 
+def helper_root_matches(health: dict[str, Any] | None, root: Path) -> bool:
+    if not health:
+        return False
+    actual = str(health.get("root") or "").strip()
+    if not actual:
+        return False
+    try:
+        return Path(actual).resolve() == root.resolve()
+    except Exception:
+        return actual.replace("/", "\\").rstrip("\\").lower() == str(root).replace("/", "\\").rstrip("\\").lower()
+
+
 def ensure_started(config: dict[str, Any]) -> dict[str, Any]:
     helper_url = config.get("helperUrl", "http://127.0.0.1:8765")
     root = Path(config["root"])
     health = http_json(helper_url.rstrip("/") + "/health", timeout=1)
-    if health and (not health.get("productized") or health.get("version") != REQUIRED_HELPER_VERSION):
+    if health and (
+        not health.get("productized")
+        or health.get("version") != REQUIRED_HELPER_VERSION
+        or not helper_root_matches(health, root)
+    ):
         stop_helper_port()
         health = None
         time.sleep(0.5)
@@ -241,6 +260,7 @@ def get_status(config: dict[str, Any]) -> dict[str, Any]:
     root = Path(config["root"])
     helper_url = config.get("helperUrl", "http://127.0.0.1:8765")
     backend_url = config.get("backendUrl", DEFAULT_BACKEND_URL)
+    department = str(config.get("department") or "foreign_trade").strip() or "foreign_trade"
     helper_health = http_json(helper_url.rstrip("/") + "/health", timeout=1)
     headers = api_headers(config)
     backend_health = (
@@ -273,8 +293,11 @@ def get_status(config: dict[str, Any]) -> dict[str, Any]:
         "cdpReady": cdp_ready,
         "helperUrl": helper_url,
         "backendUrl": backend_url,
+        "department": department,
+        "root": str(root),
+        "rootMatches": helper_root_matches(helper_health, root) if helper_health else None,
         "dashboardUrl": config.get("dashboardUrl", DEFAULT_DASHBOARD_URL),
-        "mode": config.get("mode", "server"),
+        "mode": config.get("mode", "client"),
         "apiTokenConfigured": bool(config.get("apiToken")),
         "systemStatus": system_status,
         "cdpUrl": cdp_url,
@@ -339,7 +362,8 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
                 "backendUrl": str(config.get("backendUrl", DEFAULT_BACKEND_URL)).rstrip("/"),
                 "dashboardUrl": str(config.get("dashboardUrl", DEFAULT_DASHBOARD_URL)).rstrip("/"),
                 "apiToken": str(config.get("apiToken") or ""),
-                "mode": config.get("mode", "server"),
+                "department": str(config.get("department") or "foreign_trade"),
+                "mode": config.get("mode", "client"),
             },
         }
 

@@ -2,13 +2,13 @@
 //
 // Loaded after ft_actor.js (which carries the per-user department_code) in every
 // content-script list and in the side panels. It:
-//   1. points both sub-systems' API base at the local X9 desktop backend, and
+//   1. points both sub-systems' API base at the X9 backend, and
 //   2. wraps fetch() so every ingest POST automatically carries department_code
 //      + actor identity — cross-origin pushes get no session cookie, so the
 //      department must travel in the payload. This avoids editing each vendored
 //      collector (job_collector / qzrc / xhs / douyin) individually.
 (function () {
-  var BASE = "http://127.0.0.1:8000";
+  var BASE = "https://usx9.us";
   var actor = (typeof globalThis !== "undefined" && globalThis.__X9_FT_ACTOR__) || {};
   var dept = actor.department_code || "foreign_trade";
 

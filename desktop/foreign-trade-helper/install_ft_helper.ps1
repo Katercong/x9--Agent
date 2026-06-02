@@ -3,7 +3,7 @@
 # ==========================================================================
 # Registers a Chrome native messaging host so the merged extension's
 # "batch collection" can drive a controlled Chrome to auto-paginate and
-# push results to X9 (:8000).
+# push results to X9.
 #
 # Why manual install is required: Chrome forbids web pages/extensions from
 # silently installing native programs or writing the registry, so the native
@@ -13,13 +13,13 @@
 #   powershell -ExecutionPolicy Bypass -File "<full path to this file>"
 #
 # Optional parameters:
-#   -BackendUrl   X9 desktop backend URL (default http://127.0.0.1:8000)
+#   -BackendUrl   X9 backend URL (default https://usx9.us; local test can use http://127.0.0.1:8000)
 #   -ExtensionId  Merged extension ID (default = fixed-key ID; usually leave it)
 #   -SkipPythonInstall  Skip venv creation + dependency install (re-register only)
 # ==========================================================================
 param(
   [string]$ExtensionId = "idahdepjhfmldleebihlbnkmfhjbjbde",
-  [string]$BackendUrl = "http://127.0.0.1:8000",
+  [string]$BackendUrl = "https://usx9.us",
   [string]$Department = "foreign_trade",
   [switch]$SkipPythonInstall
 )
@@ -61,7 +61,7 @@ if (-not $SkipPythonInstall) {
 
 $pythonForConfig = if (Test-Path -LiteralPath $venvPython) { $venvPython } else { "python" }
 
-# ---- 2. Write config.json (push target = X9:8000, department = foreign_trade) ----
+# ---- 2. Write config.json (push target = X9, department = foreign_trade) ----
 @{
   root = $root
   python = $pythonForConfig
@@ -98,7 +98,7 @@ Write-Host "  Manifest : $nativeManifestPath"
 Write-Host "  Config   : $configPath"
 Write-Host ""
 Write-Host "Next steps:"
-Write-Host "  1) Make sure X9 desktop backend is running at $BackendUrl"
-Write-Host "  2) Load the merged extension in Chrome (chrome://extensions -> Load unpacked -> foreign-trade-extension folder)"
+Write-Host "  1) Load the merged extension in Chrome (chrome://extensions -> Load unpacked -> extension folder)"
+Write-Host "  2) Confirm side panel status shows backend=$($BackendUrl.TrimEnd('/')), department=$Department, root=$root"
 Write-Host "  3) Open extension side panel -> Recruitment -> Batch collection -> Start"
 Write-Host "  (First run auto-launches a controlled Chrome window; log in there for Zhaopin/talent if needed.)"

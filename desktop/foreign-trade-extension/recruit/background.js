@@ -47,11 +47,11 @@ async function backendConfig() {
   try {
     const res = await nativeMessage('helper.getClientConfig');
     backendConfigCache = {
-      backendUrl: (res.config?.backendUrl || 'http://127.0.0.1:8000').replace(/\/$/, ''),
+      backendUrl: (res.config?.backendUrl || 'https://usx9.us').replace(/\/$/, ''),
       apiToken: res.config?.apiToken || '',
     };
   } catch {
-    backendConfigCache = { backendUrl: 'http://127.0.0.1:8000', apiToken: '' };
+    backendConfigCache = { backendUrl: 'https://usx9.us', apiToken: '' };
   }
   return backendConfigCache;
 }

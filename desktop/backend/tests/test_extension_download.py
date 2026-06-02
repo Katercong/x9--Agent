@@ -21,8 +21,8 @@ def _actor_config_from_zip(content: bytes) -> dict:
 
 def _ft_actor_config_from_zip(content: bytes) -> dict:
     with zipfile.ZipFile(io.BytesIO(content)) as zf:
-        text = zf.read("ft_actor.js").decode("utf-8")
-        social_config = zf.read("social/x9_actor_config.js").decode("utf-8")
+        text = zf.read("extension/ft_actor.js").decode("utf-8")
+        social_config = zf.read("extension/social/x9_actor_config.js").decode("utf-8")
     prefix = "globalThis.__X9_FT_ACTOR__ = "
     assert text.startswith(prefix)
     payload_text = text[len(prefix):].split(";\n", 1)[0]
@@ -42,6 +42,8 @@ def test_extension_download_is_public_zip():
         names = set(zf.namelist())
     assert "manifest.json" in names
     assert "x9_relay.js" in names
+    assert "helper/install_ft_helper.ps1" not in names
+    assert "README_安装说明.txt" not in names
     config = _actor_config_from_zip(response.content)
     assert config["ok"] is False
     assert config["detail"] == "login_required"
@@ -105,16 +107,25 @@ def test_foreign_trade_extension_download_embeds_ft_actor_config():
     assert "x9-foreign-trade-extension.zip" in response.headers["content-disposition"]
     with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
         names = set(zf.namelist())
-        douyin_runner = zf.read("social/douyin_runner.js").decode("utf-8")
-        douyin_content = zf.read("social/douyin_content.js").decode("utf-8")
-        douyin_panel = zf.read("social/douyin_panel.js").decode("utf-8")
-        xhs_runner = zf.read("social/xhs_runner.js").decode("utf-8")
-        xhs_panel = zf.read("social/xhs_panel.js").decode("utf-8")
-        social_sidepanel = zf.read("social/sidepanel.html").decode("utf-8")
-    assert "ft_actor.js" in names
-    assert "social/sidepanel.html" in names
-    assert "social/douyin_content.js" in names
-    assert "social/xhs_content.js" in names
+        douyin_runner = zf.read("extension/social/douyin_runner.js").decode("utf-8")
+        douyin_content = zf.read("extension/social/douyin_content.js").decode("utf-8")
+        douyin_panel = zf.read("extension/social/douyin_panel.js").decode("utf-8")
+        xhs_runner = zf.read("extension/social/xhs_runner.js").decode("utf-8")
+        xhs_panel = zf.read("extension/social/xhs_panel.js").decode("utf-8")
+        social_sidepanel = zf.read("extension/social/sidepanel.html").decode("utf-8")
+        recruit_sidepanel = zf.read("extension/recruit/sidepanel.js").decode("utf-8")
+        install_script = zf.read("helper/install_ft_helper.ps1").decode("utf-8-sig")
+        compat_script = zf.read("helper/install_companyleads.ps1").decode("utf-8-sig")
+        readme = zf.read("README_安装说明.txt").decode("utf-8")
+    assert "extension/manifest.json" in names
+    assert "extension/ft_actor.js" in names
+    assert "extension/social/sidepanel.html" in names
+    assert "extension/social/douyin_content.js" in names
+    assert "extension/social/xhs_content.js" in names
+    assert "helper/native_host/companyleads_native_host.py" in names
+    assert "helper/scraper/platform_contract.py" in names
+    assert "helper/requirements.txt" in names
+    assert "README_安装说明.txt" in names
     assert 'files: ["social/douyin_content.js"]' in douyin_runner
     assert 'files: ["social/xhs_content.js"]' in xhs_runner
     assert "collectProfileSearchResults" in douyin_content
@@ -129,6 +140,11 @@ def test_foreign_trade_extension_download_embeds_ft_actor_config():
     assert 'id="restEveryInput"' in social_sidepanel
     assert 'files: ["douyin_content.js"]' not in douyin_runner
     assert 'files: ["xhs_content.js"]' not in xhs_runner
+    assert "CompanyLeads_local" not in recruit_sidepanel
+    assert "foreign-trade-helper" in recruit_sidepanel
+    assert "https://usx9.us" in install_script
+    assert "install_ft_helper.ps1" in compat_script
+    assert "helper/install_ft_helper.ps1" in readme
     config = _ft_actor_config_from_zip(response.content)
     assert config["department_code"] == "foreign_trade"
     assert config["actor_user_id"] == user_id

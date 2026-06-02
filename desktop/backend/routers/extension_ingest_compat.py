@@ -48,12 +48,20 @@ def _dept(request: Request, payload: dict[str, Any]) -> str:
 
 @router.post("/companies/ingest")
 def companies_ingest(request: Request, payload: dict[str, Any] = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
+    department_code = _dept(request, payload)
     try:
-        lead = ingest_company(db, payload, department_code=_dept(request, payload))
+        lead = ingest_company(db, payload, department_code=department_code)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return attach_queue_cleanup(
-        {"ok": True, "id": lead.id, "tier": lead.tier, "score": lead.score, "llm_score_status": lead.llm_score_status},
+        {
+            "ok": True,
+            "id": lead.id,
+            "department_code": lead.department_code or department_code,
+            "tier": lead.tier,
+            "score": lead.score,
+            "llm_score_status": lead.llm_score_status,
+        },
         payload,
         entity="company_lead",
         lead_id=lead.id,
@@ -62,12 +70,20 @@ def companies_ingest(request: Request, payload: dict[str, Any] = Body(...), db: 
 
 @router.post("/talents/ingest")
 def talents_ingest(request: Request, payload: dict[str, Any] = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
+    department_code = _dept(request, payload)
     try:
-        lead = ingest_talent(db, payload, department_code=_dept(request, payload))
+        lead = ingest_talent(db, payload, department_code=department_code)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return attach_queue_cleanup(
-        {"ok": True, "id": lead.id, "tier": lead.tier, "score": lead.score, "llm_score_status": lead.llm_score_status},
+        {
+            "ok": True,
+            "id": lead.id,
+            "department_code": lead.department_code or department_code,
+            "tier": lead.tier,
+            "score": lead.score,
+            "llm_score_status": lead.llm_score_status,
+        },
         payload,
         entity="talent_lead",
         lead_id=lead.id,
