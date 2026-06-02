@@ -47,6 +47,7 @@ export type LeadChannel = 'jobs' | 'social';
 
 export interface ContactItem {
   type: string;
+  label?: string | null;
   value: string;
   source?: string | null;
   rule?: string | null;

@@ -37,6 +37,8 @@ const CONTACT_LABELS: Record<string, string> = {
   phone: '手机',
   wechat: '微信',
   url: '链接',
+  xhs_handle: '小红书号',
+  douyin_handle: '抖音号',
   platform_handle: '平台账号',
 };
 const SOURCE_LABELS: Record<string, string> = {
@@ -142,7 +144,7 @@ function ContactList({ contacts, fallback }: { contacts?: ContactItem[]; fallbac
       {values.slice(0, 8).map((item, index) => (
         <div key={`${item.type}-${item.value}-${index}`} className="flex max-w-[360px] items-start gap-1.5 text-xs">
           <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">
-            {CONTACT_LABELS[item.type] || item.type}
+            {clean(item.label) || CONTACT_LABELS[item.type] || item.type}
           </span>
           <span className="break-all text-text">{item.value}</span>
         </div>

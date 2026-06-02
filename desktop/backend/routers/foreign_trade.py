@@ -215,7 +215,31 @@ def _contact_items(*pairs: tuple[str, Any]) -> list[dict[str, str]]:
 
 
 def _contact_display(items: list[dict[str, str]]) -> str:
-    return " / ".join(item["value"] for item in items[:3])
+    labels = {"xhs_handle": "小红书号", "douyin_handle": "抖音号"}
+    parts: list[str] = []
+    for item in items[:3]:
+        value = item.get("value")
+        if not value:
+            continue
+        label = labels.get(item.get("type") or "")
+        parts.append(f"{label}: {value}" if label else value)
+    return " / ".join(parts)
+
+
+def _social_contact_type(contact: XhsExtractedContact) -> str:
+    contact_type = contact.contact_type or ""
+    if contact_type in {"xhs_handle", "douyin_handle"}:
+        return contact_type
+    if contact_type == "platform_handle":
+        rule = (contact.rule_code or "").lower()
+        if rule.startswith("douyin"):
+            return "douyin_handle"
+        return "xhs_handle"
+    return contact_type
+
+
+def _social_contact_label(contact_type: str) -> str | None:
+    return {"xhs_handle": "小红书号", "douyin_handle": "抖音号"}.get(contact_type)
 
 
 def _sort_at(value: Any) -> datetime:
@@ -576,15 +600,16 @@ def _social_items(db: Session, users: list[XhsUser]) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for u in users:
         collected_at = u.last_seen_at or u.first_seen_at or u.created_at
-        contacts = [
-            {
-                "type": c.contact_type,
+        contacts = []
+        for c in contacts_by_user.get(u.id, [])[:6]:
+            contact_type = _social_contact_type(c)
+            contacts.append({
+                "type": contact_type,
+                "label": _social_contact_label(contact_type),
                 "value": c.value_raw,
                 "source": c.source_field,
                 "rule": c.rule_code,
-            }
-            for c in contacts_by_user.get(u.id, [])[:6]
-        ]
+            })
         j = judgments.get(u.id)
         items.append({
             "id": u.id,
@@ -707,8 +732,10 @@ def _contacts_by_user(db: Session, user_ids: list[str]) -> dict[str, list[dict[s
         .order_by(XhsExtractedContact.created_at.desc())
     ).all()
     for c in rows:
+        contact_type = _social_contact_type(c)
         out.setdefault(c.user_id or "", []).append({
-            "type": c.contact_type,
+            "type": contact_type,
+            "label": _social_contact_label(contact_type),
             "value": c.value_raw,
             "source": c.source_field,
             "rule": c.rule_code,

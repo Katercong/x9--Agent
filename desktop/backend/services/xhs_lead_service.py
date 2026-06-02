@@ -181,6 +181,10 @@ def _first_user_by_identity(
     return None
 
 
+def _platform_handle_type(platform: str | None) -> str:
+    return "douyin_handle" if (platform or "").lower() == "douyin" else "xhs_handle"
+
+
 def _source_hash(payload: dict[str, Any]) -> str:
     return stable_hash(payload)
 
@@ -339,15 +343,18 @@ def _add_platform_contact(db: Session, *, dept: str, user: XhsUser) -> int:
     norm = clean_text(user.account_clean or user.xhs_user_id or user.external_user_id)
     if not raw or not norm:
         return 0
+    contact_type = _platform_handle_type(user.platform)
     exists = db.scalar(
-        select(XhsExtractedContact.id).where(
+        select(XhsExtractedContact).where(
             XhsExtractedContact.owner_type == "user",
             XhsExtractedContact.owner_id == user.id,
-            XhsExtractedContact.contact_type == "platform_handle",
+            XhsExtractedContact.contact_type.in_((contact_type, "platform_handle")),
             XhsExtractedContact.value_norm == norm.lower(),
         )
     )
     if exists:
+        exists.contact_type = contact_type
+        exists.rule_code = f"{user.platform or 'xhs'}_account"
         user.has_contact = 1
         return 0
     db.add(
@@ -357,7 +364,7 @@ def _add_platform_contact(db: Session, *, dept: str, user: XhsUser) -> int:
             owner_type="user",
             owner_id=user.id,
             user_id=user.id,
-            contact_type="platform_handle",
+            contact_type=contact_type,
             value_raw=raw,
             value_norm=norm.lower(),
             source_field="account_clean" if user.account_clean else "xhs_user_id",
