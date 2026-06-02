@@ -80,6 +80,7 @@ logs/
 # Runtime/local data and post-cleanup local scratch space.
 /x9_creator_desktop_system/data/
 /local/
+/tmp/
 /archive/**/data/
 /archive/**/logs/
 
