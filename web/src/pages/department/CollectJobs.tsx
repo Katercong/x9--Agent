@@ -7,6 +7,7 @@ import { PaginationControls } from '@/components/PaginationControls';
 import { AsyncState } from '@/components/states/States';
 import { useForeignTradeCollection, type LeadItem } from '@/api/foreignTrade';
 import { ACCENTS, CollectHeader, Reveal, num } from './collectShared';
+import LeadDetailDrawer, { type LeadKind } from './LeadDetailDrawer';
 
 const PAGE_SIZE = 10;
 
@@ -38,13 +39,24 @@ function shortTime(value: string | null | undefined): string {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+const KIND_LABELS: Record<string, string> = { company: '公司客户', talent: '跨境人才' };
+
 export default function CollectJobs() {
   const A = ACCENTS.jobs;
   const [page, setPage] = useState(0);
+  const [detail, setDetail] = useState<{ id: string; kind: LeadKind } | null>(null);
   const feed = useForeignTradeCollection({ channel: 'jobs', limit: PAGE_SIZE, offset: page * PAGE_SIZE });
   const stats = feed.data?.stats ?? {};
   const items = feed.data?.items ?? [];
   const total = feed.data?.total ?? 0;
+
+  // jobs channel rows are either company leads or talent leads; route each to
+  // the matching detail endpoint (/company-leads/{id} or /talents/{id}).
+  const openDetail = (row: LeadItem) => {
+    if (row.kind === 'company' || row.kind === 'talent') {
+      setDetail({ id: row.id, kind: row.kind });
+    }
+  };
 
   const columns: Column<LeadItem>[] = [
     {
@@ -57,6 +69,11 @@ export default function CollectJobs() {
           <div className="truncate text-xxs text-muted">{row.subtitle || '—'}</div>
         </div>
       ),
+    },
+    {
+      key: 'kind',
+      header: '类型',
+      cell: (row) => <span className="text-xs text-gray-700">{KIND_LABELS[row.kind] || row.kind_label || '—'}</span>,
     },
     {
       key: 'platform',
@@ -108,7 +125,7 @@ export default function CollectJobs() {
                 <Mail size={16} style={{ color: A.key }} />
                 <h3 className="text-sm font-semibold text-gray-900">最近采集的招聘线索</h3>
               </div>
-              <span className="text-xxs text-muted">{num(total)} 条公司客户线索</span>
+              <span className="text-xxs text-muted">{num(total)} 条招聘线索 · 点击查看详情与原页链接</span>
             </div>
             <div className="p-2">
               <AsyncState
@@ -118,7 +135,7 @@ export default function CollectJobs() {
                 emptyMessage="还没有招聘网站采集数据"
                 height={240}
               >
-                <DataTable columns={columns} data={items} rowKey={(row) => row.id} emptyText="还没有采集记录" />
+                <DataTable columns={columns} data={items} rowKey={(row) => row.id} emptyText="还没有采集记录" onRowClick={openDetail} />
                 <PaginationControls
                   page={page}
                   pageSize={PAGE_SIZE}
@@ -132,6 +149,8 @@ export default function CollectJobs() {
           </section>
         </Reveal>
       </AsyncState>
+
+      <LeadDetailDrawer kind={detail?.kind ?? 'company'} id={detail?.id ?? null} onClose={() => setDetail(null)} />
     </div>
   );
 }

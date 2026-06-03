@@ -48,7 +48,9 @@ export type LeadChannel = 'jobs' | 'social';
 
 export interface LeadItem {
   id: string;
-  kind: 'company' | 'social';
+  // jobs channel returns 'company' | 'talent'; social channel returns 'social'
+  kind: 'company' | 'talent' | 'social';
+  kind_label?: string;
   name: string;
   subtitle?: string;
   platform?: string;

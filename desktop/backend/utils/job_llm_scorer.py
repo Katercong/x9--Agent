@@ -39,18 +39,27 @@ class LLMScoreError(RuntimeError):
 
 
 def load_config() -> LLMConfig:
-    base_url = os.getenv("LLM_BASE_URL", "").strip()
-    api_key = os.getenv("LLM_API_KEY", "").strip()
-    model = os.getenv("LLM_MODEL", "").strip()
-    timeout_raw = os.getenv("LLM_TIMEOUT_SECONDS", "30").strip()
+    # The recruitment scorer historically read LLM_* vars, but real deployments
+    # only configure the OPENAI_* vars that the social pipeline already uses
+    # (see services/xhs_lead_service.py + config.Settings). Fall back to OPENAI_*
+    # so company / talent leads score with the same working credentials instead
+    # of silently degrading to keyword-only scoring.
+    base_url = os.getenv("LLM_BASE_URL", "").strip() or os.getenv("OPENAI_BASE_URL", "").strip()
+    api_key = os.getenv("LLM_API_KEY", "").strip() or os.getenv("OPENAI_API_KEY", "").strip()
+    model = os.getenv("LLM_MODEL", "").strip() or os.getenv("OPENAI_MODEL", "").strip()
+    timeout_raw = (
+        os.getenv("LLM_TIMEOUT_SECONDS", "").strip()
+        or os.getenv("OPENAI_TIMEOUT", "").strip()
+        or "30"
+    )
     retries_raw = os.getenv("LLM_MAX_RETRIES", "2").strip()
 
-    if not base_url:
-        raise LLMScoreError("LLM_BASE_URL is not configured")
     if not api_key:
-        raise LLMScoreError("LLM_API_KEY is not configured")
+        raise LLMScoreError("LLM_API_KEY / OPENAI_API_KEY is not configured")
+    if not base_url:
+        base_url = "https://api.openai.com/v1"
     if not model:
-        raise LLMScoreError("LLM_MODEL is not configured")
+        model = "gpt-4o-mini"
 
     try:
         timeout_seconds = max(1.0, float(timeout_raw))
