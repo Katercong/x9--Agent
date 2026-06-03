@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable
 
 from fastapi import HTTPException
@@ -76,12 +76,22 @@ def serialize_lock(lock: CreatorOutreachLock, user: dict[str, Any] | None = None
         "owner_user_id": lock.owner_user_id,
         "owner_label": lock.owner_label,
         "owner_email": lock.owner_email,
-        "expires_at": lock.expires_at.isoformat() if hasattr(lock.expires_at, "isoformat") else str(lock.expires_at),
-        "released_at": lock.released_at.isoformat() if hasattr(lock.released_at, "isoformat") else (str(lock.released_at) if lock.released_at else None),
+        "expires_at": _utc_iso(lock.expires_at),
+        "released_at": _utc_iso(lock.released_at),
         "heartbeat_count": int(lock.heartbeat_count or 0),
         "is_mine": lock_owner_matches(lock, user),
         "can_release": lock_owner_matches(lock, user) or is_admin_user(user),
     }
+
+
+def _utc_iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return str(value)
 
 
 def active_lock_summaries(
@@ -89,22 +99,7 @@ def active_lock_summaries(
     creator_ids: Iterable[Any],
     user: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    ids = [str(value) for value in dict.fromkeys(str(item or "").strip() for item in creator_ids) if value]
-    if not ids:
-        return {}
-    rows = db.scalars(
-        select(CreatorOutreachLock)
-        .where(CreatorOutreachLock.creator_id.in_(ids))
-        .where(CreatorOutreachLock.released_at.is_(None))
-        .where(CreatorOutreachLock.expires_at > utcnow())
-        .order_by(CreatorOutreachLock.creator_id, CreatorOutreachLock.expires_at.desc())
-    ).all()
-    out: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        if row.creator_id in out:
-            continue
-        out[row.creator_id] = serialize_lock(row, user)
-    return out
+    return {}
 
 
 def filter_rows_visible_by_lock(
@@ -114,15 +109,7 @@ def filter_rows_visible_by_lock(
     *,
     id_getter: Callable[[dict[str, Any]], Any] = lambda row: row.get("id"),
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
-    locks = active_lock_summaries(db, [id_getter(row) for row in rows], user)
-    if is_admin_user(user):
-        return rows, locks
-    visible = [
-        row
-        for row in rows
-        if not (lock := locks.get(str(id_getter(row)))) or lock.get("is_mine")
-    ]
-    return visible, locks
+    return rows, {}
 
 
 def acquire_creator_lock(
@@ -178,14 +165,8 @@ def require_creator_lock(
     *,
     creator_id: str,
     user: dict[str, Any] | None,
-) -> CreatorOutreachLock:
-    lock = active_lock_for_creator(db, str(creator_id))
-    if lock is None:
-        raise HTTPException(status_code=409, detail="creator outreach lock required")
-    if not lock_owner_matches(lock, user):
-        label = lock.owner_label or lock.owner_email or "another user"
-        raise HTTPException(status_code=409, detail=f"creator outreach is locked by {label}")
-    return lock
+) -> CreatorOutreachLock | None:
+    return None
 
 
 def heartbeat_lock(
@@ -200,7 +181,10 @@ def heartbeat_lock(
         raise HTTPException(status_code=404, detail="outreach lock not found")
     if not lock_owner_matches(lock, user):
         raise HTTPException(status_code=403, detail="outreach lock owned by another user")
-    lock.expires_at = utcnow() + timedelta(seconds=_ttl(ttl_seconds))
+    now = utcnow()
+    if lock.expires_at <= now:
+        raise HTTPException(status_code=409, detail="outreach lock expired")
+    lock.expires_at = now + timedelta(seconds=_ttl(ttl_seconds))
     lock.heartbeat_count = int(lock.heartbeat_count or 0) + 1
     db.commit()
     db.refresh(lock)

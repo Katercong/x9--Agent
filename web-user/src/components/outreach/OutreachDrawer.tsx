@@ -38,7 +38,7 @@ import {
   useSendDraft,
 } from '@/hooks/useApi';
 import { shortRelative } from '@/lib/format';
-import type { Language } from '@/lib/i18n';
+import { formatRelativeTime, type Language } from '@/lib/i18n';
 import type { Creator, CreatorOutreachLock, OutreachHistoryItem, ProductAsset, TkStrategy } from '@/api/types';
 import { useUiStore } from '@/stores/uiStore';
 
@@ -93,12 +93,9 @@ const copy = {
     sending: '发送中...',
     send: '发送',
     saveAndSend: '保存并发送',
-    lockBusy: '达人邮件建联占用中，请稍后再试',
     connectGmailFirst: '请先连接 Gmail 账户',
     fillRecipient: '请填写收件邮箱',
     fillContent: '请先生成或填写邮件内容',
-    lockOk: '已占用建联窗口，到期时间',
-    locking: '正在占用达人邮件建联窗口...',
     noGmail: '还没绑定 Gmail 账户',
     connectGmail: '连接 Gmail',
     gmailHelp: '授权后系统会把该 Gmail 绑定到当前登录账号，仅在你确认发送时调用 Gmail API。',
@@ -154,8 +151,6 @@ const copy = {
     imageTooLarge: '图片不能超过 8MB',
     imageReadFailed: '图片读取失败，请重试',
     skuNameRequired: '请填写 SKU 名称',
-    lockBeforeGenerate: '请先占用该达人后再生成邮件',
-    lockBeforeSave: '请先占用该达人后再保存邮件',
     missingCreator: '缺少达人信息',
     recipientRequired: '收件邮箱必填',
     confirmSend: '确认发送此邮件?',
@@ -182,12 +177,9 @@ const copy = {
     sending: 'Sending...',
     send: 'Send',
     saveAndSend: 'Save and Send',
-    lockBusy: 'Creator outreach window is locked. Try again shortly.',
     connectGmailFirst: 'Connect a Gmail account first',
     fillRecipient: 'Enter recipient email',
     fillContent: 'Generate or write the email first',
-    lockOk: 'Outreach window locked, expires',
-    locking: 'Locking creator outreach window...',
     noGmail: 'No Gmail account connected',
     connectGmail: 'Connect Gmail',
     gmailHelp: 'After authorization, this Gmail is linked to the current account and only used when you confirm sending.',
@@ -243,8 +235,6 @@ const copy = {
     imageTooLarge: 'Image cannot exceed 8MB',
     imageReadFailed: 'Failed to read image. Try again.',
     skuNameRequired: 'Enter SKU name',
-    lockBeforeGenerate: 'Lock this creator before generating an email',
-    lockBeforeSave: 'Lock this creator before saving email',
     missingCreator: 'Creator info is missing',
     recipientRequired: 'Recipient email is required',
     confirmSend: 'Send this email?',
@@ -364,13 +354,30 @@ function relativeByLanguage(value: string | null | undefined, language: Language
   if (!value) return '—';
   const dt = new Date(value);
   if (Number.isNaN(dt.getTime())) return value || '—';
-  const diff = Date.now() - dt.getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins} min ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours} h ago`;
-  return `${Math.floor(hours / 24)} d ago`;
+  return formatRelativeTime(value, language);
+}
+
+function lockExpiresMs(lock: CreatorOutreachLock | null | undefined): number {
+  if (!lock?.expires_at) return 0;
+  const ts = parseLockTimestamp(lock.expires_at);
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function isLockFresh(lock: CreatorOutreachLock | null | undefined): lock is CreatorOutreachLock {
+  return Boolean(lock?.id && lockExpiresMs(lock) > Date.now());
+}
+
+function parseLockTimestamp(value: string | null | undefined): number {
+  const text = String(value || '').trim();
+  if (!text) return Number.NaN;
+  const hasZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(text);
+  return new Date(hasZone ? text : `${text.replace(' ', 'T')}Z`).getTime();
+}
+
+function lockExpiryText(lock: CreatorOutreachLock | null | undefined, language: Language): string {
+  const ts = lockExpiresMs(lock);
+  if (!Number.isFinite(ts)) return '—';
+  return formatRelativeTime(new Date(ts).toISOString(), language);
 }
 
 function htmlToPlainText(value: string) {
@@ -462,16 +469,14 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
   const blockingGmailDiagnostic = gmailDiagnostics.find((item) => item.level === 'error') || gmailDiagnostics.find((item) => item.level === 'warn');
   const isPersistingDraft = createDraft.isPending || patchDraft.isPending;
   const isSending = isPersistingDraft || sendDraft.isPending;
-  const isLocking = acquireLock.isPending;
-  const hasOutreachLock = Boolean(activeLock?.id && !lockError);
+  const isLocking = false;
+  const hasOutreachLock = true;
   const hasGmailAccount = accounts.length > 0;
   const canSaveDraft = Boolean(toEmail.trim() && subject.trim() && body.trim());
-  const canSendDraft = Boolean(hasOutreachLock && hasGmailAccount && toEmail.trim() && subject.trim() && body.trim() && !isSending);
+  const canSendDraft = Boolean(hasGmailAccount && toEmail.trim() && subject.trim() && body.trim() && !isSending);
   const gmailReturnTo = typeof window !== 'undefined' ? `${window.location.pathname}${window.location.search}` : '/';
   const gmailConnectHref = `/api/local/outreach/gmail/connect?return_to=${encodeURIComponent(gmailReturnTo)}`;
-  const sendDisabledReason = !hasOutreachLock
-    ? t.lockBusy
-    : !hasGmailAccount
+  const sendDisabledReason = !hasGmailAccount
     ? t.connectGmailFirst
     : !toEmail.trim()
       ? t.fillRecipient
@@ -499,38 +504,23 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
     setLockError('');
     setReviewEmail(null);
     setHistoryPage(0);
-    setActiveLock(initialLock || null);
-    lockRequestKeyRef.current = initialLock ? `${creator.id}:${initialLock.id}` : '';
+    setActiveLock(null);
+    lockRequestKeyRef.current = '';
     setGenerationMeta(null);
     setAssetFormOpen(false);
     resetAssetForm();
   }, [open, creator?.id, initialLock?.id]);
 
   useEffect(() => {
-    if (!open || !creator || activeLock || initialLock) return;
-    const requestKey = String(creator.id);
-    if (lockRequestKeyRef.current === requestKey) return;
-    lockRequestKeyRef.current = requestKey;
+    if (!open || !creator) return;
     setLockError('');
-    acquireLock.mutate(
-      { creator_id: creator.id },
-      {
-        onSuccess: (result) => setActiveLock(result.lock),
-        onError: (error) => setLockError(formatError(error, language)),
-      },
-    );
-  }, [acquireLock, activeLock, creator, initialLock, open]);
+    setActiveLock(null);
+    lockRequestKeyRef.current = '';
+  }, [creator, open]);
 
   useEffect(() => {
-    if (!open || !activeLock) return;
-    const timer = window.setInterval(() => {
-      heartbeatLock.mutate(
-        { lock_id: activeLock.id },
-        { onSuccess: (result) => setActiveLock(result.lock) },
-      );
-    }, 60_000);
-    return () => window.clearInterval(timer);
-  }, [activeLock?.id, heartbeatLock, open]);
+    return undefined;
+  }, [open]);
 
   useEffect(() => {
     if (!open || selectedAssetId || !matchedAsset?.id) return;
@@ -621,10 +611,6 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
 
   const onGenerate = () => {
     if (!creator) return;
-    if (!activeLock?.id) {
-      setLockError(t.lockBeforeGenerate);
-      return;
-    }
     setSendError('');
     generateTk.mutate(
       {
@@ -651,7 +637,6 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
   };
 
   const persistDraft = async () => {
-    if (!activeLock?.id) throw new Error(t.lockBeforeSave);
     if (!creator) throw new Error(t.missingCreator);
     if (!toEmail.trim()) throw new Error(t.recipientRequired);
     if (!subject.trim() || !body.trim()) throw new Error(t.fillContent);
@@ -734,13 +719,8 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
   };
 
   const handleClose = () => {
-    const lockId = activeLock?.id;
     setActiveLock(null);
     lockRequestKeyRef.current = '';
-    if (lockId) {
-      releaseLock.mutate({ lock_id: lockId, body: { reason: 'drawer_closed' } }, { onSettled: onClose });
-      return;
-    }
     onClose();
   };
 
@@ -784,14 +764,14 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
             <>
               <button onClick={handleClose} className="btn">{t.cancel}</button>
               {step === 'template' && (
-                <button onClick={onGenerate} disabled={generationBusy || isLocking || !hasOutreachLock} className="btn btn-primary">
+                <button onClick={onGenerate} disabled={generationBusy || isLocking} className="btn btn-primary">
                   {generationBusy ? <RefreshCw size={12} className="animate-spin" /> : <Wand2 size={12} />}
                   {generationBusy ? t.generating : t.generatePreview} <ArrowRight size={12} />
                 </button>
               )}
               {(step === 'preview' || step === 'edit') && (
                 <>
-                  <button onClick={onSaveDraft} disabled={!hasOutreachLock || !canSaveDraft || isSending} className="btn">
+                  <button onClick={onSaveDraft} disabled={!canSaveDraft || isSending} className="btn">
                     <Save size={12} />{isPersistingDraft ? t.saving : t.saveDraft}
                   </button>
                   <button onClick={onSend} disabled={!canSendDraft} className="btn btn-primary">
@@ -804,20 +784,6 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
         </>
       }
     >
-      <div className={`mb-3 rounded-md border px-3 py-2 text-xs ${
-        lockError
-          ? 'border-bad/40 bg-bad/10 text-bad'
-          : hasOutreachLock
-            ? 'border-good/30 bg-good/10 text-good'
-            : 'border-warn/30 bg-warn/10 text-warn'
-      }`}>
-        {lockError
-          ? lockError
-          : hasOutreachLock
-            ? `${t.lockOk} ${relativeByLanguage(activeLock?.expires_at, language)}`
-            : t.locking}
-      </div>
-
       {accounts.length === 0 ? (
         <div className="card card-body mb-3" style={{ background: 'rgb(var(--warn) / 0.12)' }}>
           <div className="flex items-start gap-2 text-xs text-warn">

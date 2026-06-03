@@ -196,10 +196,20 @@ class GmailReplySyncIn(BaseModel):
     limit_per_account: int = Field(default=2500, ge=1, le=10000)
 
 
+class EmailReplyAttachmentIn(BaseModel):
+    id: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.-]+$")
+    name: str = Field(default="image", max_length=255)
+    mime_type: str = Field(max_length=120)
+    size: int = Field(ge=1)
+    content_base64: str = Field(min_length=1)
+    disposition: str = Field(default="inline", pattern="^(inline|attachment)$")
+
+
 class EmailReplyIn(BaseModel):
     subject: str | None = Field(default=None, max_length=500)
     body: str = Field(min_length=1, max_length=20000)
     body_format: str = Field(default="plain", pattern="^(plain|html)$")
+    attachments: list[EmailReplyAttachmentIn] = Field(default_factory=list)
 
 
 class LockAcquireIn(BaseModel):
@@ -1632,6 +1642,14 @@ def reply_outreach_archive_email(
         raise HTTPException(status_code=400, detail="reply recipient is missing")
     if not from_account_id and not from_email:
         raise HTTPException(status_code=400, detail="reply mailbox is missing")
+    reply_attachments = [
+        item.model_dump() if hasattr(item, "model_dump") else item.dict()
+        for item in (body.attachments or [])
+    ]
+    try:
+        gmail_service.prepare_email_attachments(reply_attachments)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     reply_row = OutreachEmail(
         id=new_id("oem"),
@@ -1665,6 +1683,7 @@ def reply_outreach_archive_email(
             in_reply_to=source_metadata.get("rfc_message_id"),
             references=source_metadata.get("references") or source_metadata.get("rfc_message_id"),
             department_code=reply_row.department_code,
+            attachments=reply_attachments,
         )
     except gmail_service.GmailNotConfiguredError as exc:
         reply_row.status = "failed"

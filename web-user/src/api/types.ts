@@ -440,6 +440,15 @@ export interface OutreachArchiveDetail extends OutreachArchiveItem {
   updated_at?: string | null;
 }
 
+export interface EmailReplyAttachment {
+  id: string;
+  name: string;
+  mime_type: string;
+  size: number;
+  content_base64: string;
+  disposition: 'inline' | 'attachment';
+}
+
 export interface OutreachTrackingItem {
   creator_id: string;
   creator_handle?: string | null;

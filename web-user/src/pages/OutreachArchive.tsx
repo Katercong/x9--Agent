@@ -1,19 +1,27 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   AtSign,
+  Bold,
   CalendarDays,
   CheckCircle2,
   Copy,
+  Eye,
   ExternalLink,
   History,
+  ImagePlus,
   Inbox,
+  Link as LinkIcon,
+  List,
   MailCheck,
   MessageSquareText,
+  Paperclip,
   RefreshCw,
+  Save,
   Search,
   Send,
+  Trash2,
   User,
   X,
 } from 'lucide-react';
@@ -30,6 +38,7 @@ import {
 } from '@/hooks/useApi';
 import {
   pickItems,
+  type EmailReplyAttachment,
   type GmailReplySyncAccount,
   type OutreachArchiveItem,
   type OutreachTrackingItem,
@@ -208,6 +217,21 @@ const actionFlow: Partial<Record<Exclude<TrackingStatus, 'all'>, { next: Exclude
 
 function safeEmailHtml(value?: string | null) {
   return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>body{margin:0;padding:20px;background:#fff;color:#111827;font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}img{max-width:100%;height:auto}a{color:#0ea5e9}</style></head><body>${value || ''}</body></html>`;
+}
+
+function htmlToPlainText(value?: string | null) {
+  const raw = String(value || '');
+  if (!raw) return '';
+  if (typeof window !== 'undefined' && 'DOMParser' in window) {
+    const doc = new DOMParser().parseFromString(raw, 'text/html');
+    return (doc.body.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  return raw
+    .replace(/<(br|\/p|\/div|\/li)\b[^>]*>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function normalizeStatus(value?: string | null): Exclude<TrackingStatus, 'all'> {
@@ -890,6 +914,38 @@ function CreatorMailThread({
   );
 }
 
+const REPLY_MAX_IMAGES = 8;
+const REPLY_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+type ReplyAttachment = EmailReplyAttachment & {
+  preview_url: string;
+  created_at: number;
+};
+
+type ReplyDraft = {
+  subject: string;
+  body_html: string;
+  attachments: EmailReplyAttachment[];
+  saved_at: number;
+};
+
+const REPLY_TEMPLATES = {
+  zh: [
+    '感谢你的回复，我们可以继续沟通合作细节。',
+    '我们可以根据你的内容风格调整寄样和拍摄要求。',
+    '如果方便的话，请发一下你的报价和可合作档期。',
+    '这边可以先确认产品信息，再安排下一步。',
+    '期待你的反馈，谢谢！',
+  ],
+  en: [
+    'Thanks for getting back to us. We can keep discussing the collaboration details.',
+    'We can adjust the sample and content requirements to fit your style.',
+    'When convenient, could you share your rate and available timeline?',
+    'We can confirm the product details first and then move to the next step.',
+    'Looking forward to your thoughts. Thank you!',
+  ],
+};
+
 function ReplyComposer({
   detail,
   selected,
@@ -902,84 +958,618 @@ function ReplyComposer({
   onSent: () => Promise<void> | void;
 }) {
   const reply = useReplyOutreachArchive();
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const autoSaveTimerRef = useRef<number | null>(null);
   const [subject, setSubject] = useState('');
-  const [body, setBody] = useState('');
+  const [bodyHtml, setBodyHtml] = useState('');
+  const [bodyText, setBodyText] = useState('');
+  const [attachments, setAttachments] = useState<ReplyAttachment[]>([]);
   const [notice, setNotice] = useState('');
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
+  const [quoteOpen, setQuoteOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const draftKey = detail ? replyDraftKey(detail.id) : '';
 
   useEffect(() => {
-    setSubject(replySubject(detail?.subject || selected?.last_subject || ''));
-    setBody('');
+    if (!detail) return;
+    const defaultSubject = replySubject(detail.subject || selected?.last_subject || '');
+    const draft = loadReplyDraft(detail.id);
+    const nextSubject = draft?.subject || defaultSubject;
+    const nextHtml = draft?.body_html || '';
+    const nextAttachments = (draft?.attachments || []).map(restoreReplyAttachment);
+    setSubject(nextSubject);
+    setBodyHtml(nextHtml);
+    setBodyText(htmlToPlainText(nextHtml));
+    setAttachments(nextAttachments);
     setNotice('');
+    setDraftSavedAt(draft?.saved_at || null);
+    setQuoteOpen(false);
+    setPreviewOpen(false);
+    setTemplatesOpen(false);
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => {
+        if (editorRef.current) editorRef.current.innerHTML = nextHtml;
+      });
+    }
   }, [detail?.id, detail?.subject, selected?.last_subject]);
+
+  useEffect(() => () => {
+    if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!detail || !draftKey || String(detail.direction || detail.status || '').toLowerCase() === 'bounce') return;
+    if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      if (!hasDraftContent(subject, bodyHtml, attachments)) return;
+      const savedAt = Date.now();
+      if (saveReplyDraft(draftKey, {
+        subject,
+        body_html: bodyHtml,
+        attachments: attachments.map(toEmailReplyAttachment),
+        saved_at: savedAt,
+      })) {
+        setDraftSavedAt(savedAt);
+      }
+    }, 1100);
+  }, [attachments, bodyHtml, detail, draftKey, subject]);
 
   if (!detail) return null;
 
   const direction = String(detail.direction || detail.status || '').toLowerCase();
   const isBounce = direction === 'bounce';
-  const lockedFrom = direction === 'inbound'
+  const fromEmail = direction === 'inbound'
     ? detail.to_email
     : detail.from_email || selected?.from_email || '';
   const replyTo = direction === 'inbound'
     ? detail.from_email
     : detail.to_email || selected?.to_email || selected?.creator_email || '';
-  const disabled = isBounce || reply.isPending || !body.trim() || !replyTo || !lockedFrom;
+  const defaultSubject = replySubject(detail.subject || selected?.last_subject || '');
+  const currentEditorHtml = editorRef.current?.innerHTML || bodyHtml;
+  const finalHtml = buildReplyHtml(currentEditorHtml, attachments);
+  const previewHtml = buildReplyPreviewHtml(currentEditorHtml, attachments);
+  const canSend = Boolean(!isBounce && !reply.isPending && replyTo && fromEmail && (bodyText.trim() || attachments.length));
+  const draftStatus = draftSavedAt
+    ? `${language === 'zh' ? '草稿已保存' : 'Draft saved'} · ${new Date(draftSavedAt).toLocaleTimeString()}`
+    : (language === 'zh' ? '尚未保存草稿' : 'Draft not saved');
+
+  const syncEditor = () => {
+    const html = editorRef.current?.innerHTML || '';
+    setBodyHtml(html);
+    setBodyText(htmlToPlainText(html));
+  };
+
+  const runCommand = (command: string, value?: string) => {
+    if (isBounce) return;
+    editorRef.current?.focus();
+    document.execCommand(command, false, value);
+    syncEditor();
+  };
+
+  const insertHtml = (html: string) => {
+    if (isBounce) return;
+    editorRef.current?.focus();
+    document.execCommand('insertHTML', false, html);
+    syncEditor();
+  };
+
+  const insertLink = () => {
+    const url = window.prompt(language === 'zh' ? '输入链接地址' : 'Enter link URL');
+    if (!url) return;
+    runCommand('createLink', url);
+  };
+
+  const insertTemplate = (text: string) => {
+    setTemplatesOpen(false);
+    insertHtml(`<p>${escapeHtml(text)}</p>`);
+  };
+
+  const insertAttachmentNode = (item: ReplyAttachment) => {
+    if (editorRef.current?.querySelector(`[data-x9-attachment-id="${cssEscape(item.id)}"]`)) return;
+    const nodeHtml = [
+      `<figure data-x9-attachment-card="${escapeAttr(item.id)}" contenteditable="false" style="margin:12px 0;padding:10px;border:1px solid #d9e2ec;border-radius:8px;background:#f8fafc;max-width:360px;">`,
+      `<img data-x9-attachment-id="${escapeAttr(item.id)}" src="${escapeAttr(item.preview_url)}" alt="${escapeAttr(item.name)}" style="display:block;max-width:100%;max-height:220px;border-radius:6px;object-fit:contain;background:#fff;" />`,
+      `<figcaption style="margin-top:6px;font-size:12px;color:#64748b;">${escapeHtml(item.name)} · ${formatBytes(item.size)}</figcaption>`,
+      '</figure><p><br></p>',
+    ].join('');
+    insertHtml(nodeHtml);
+  };
+
+  const removeAttachmentNode = (id: string) => {
+    const root = editorRef.current;
+    root?.querySelectorAll(`[data-x9-attachment-card="${cssEscape(id)}"], img[data-x9-attachment-id="${cssEscape(id)}"]`).forEach((node) => {
+      const figure = node instanceof HTMLElement ? node.closest('[data-x9-attachment-card]') : null;
+      (figure || node).remove();
+    });
+    syncEditor();
+  };
+
+  const addFiles = async (files: File[]) => {
+    const imageFiles = files.filter((file) => file.type.startsWith('image/'));
+    if (!imageFiles.length) return;
+    const slots = REPLY_MAX_IMAGES - attachments.length;
+    if (slots <= 0) {
+      setNotice(language === 'zh' ? `最多只能添加 ${REPLY_MAX_IMAGES} 张图片` : `You can add up to ${REPLY_MAX_IMAGES} images.`);
+      return;
+    }
+    const accepted = imageFiles.slice(0, slots);
+    const tooLarge = accepted.find((file) => file.size > REPLY_MAX_IMAGE_BYTES);
+    if (tooLarge) {
+      setNotice(language === 'zh' ? '单张图片不能超过 5MB' : 'Each image must be 5MB or smaller.');
+      return;
+    }
+    const nextItems = await Promise.all(accepted.map(fileToReplyAttachment));
+    setAttachments((prev) => [...prev, ...nextItems]);
+    nextItems.filter((item) => item.disposition === 'inline').forEach(insertAttachmentNode);
+    setNotice(language === 'zh' ? `已添加 ${nextItems.length} 张图片` : `${nextItems.length} image(s) added.`);
+  };
+
+  const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file && file.type.startsWith('image/')));
+    if (!files.length) return;
+    event.preventDefault();
+    void addFiles(files);
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+    void addFiles(Array.from(event.dataTransfer.files));
+  };
+
+  const toggleDisposition = (id: string, disposition: 'inline' | 'attachment') => {
+    const item = attachments.find((entry) => entry.id === id);
+    setAttachments((prev) => prev.map((entry) => entry.id === id ? { ...entry, disposition } : entry));
+    if (disposition === 'inline' && item) {
+      insertAttachmentNode({ ...item, disposition });
+    } else {
+      removeAttachmentNode(id);
+    }
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((item) => item.id !== id));
+    removeAttachmentNode(id);
+  };
+
+  const saveDraftNow = () => {
+    if (!draftKey) return;
+    const savedAt = Date.now();
+    const saved = saveReplyDraft(draftKey, {
+      subject,
+      body_html: editorRef.current?.innerHTML || bodyHtml,
+      attachments: attachments.map(toEmailReplyAttachment),
+      saved_at: savedAt,
+    });
+    if (saved) {
+      setDraftSavedAt(savedAt);
+      setNotice(language === 'zh' ? '草稿已保存到本地' : 'Draft saved locally.');
+    } else {
+      setNotice(language === 'zh' ? '草稿保存失败，图片可能过大' : 'Draft save failed. Images may be too large.');
+    }
+  };
 
   const sendReply = async () => {
-    if (disabled) return;
+    if (!canSend) return;
     setNotice('');
     await reply.mutateAsync({
       id: detail.id,
       body: {
-        subject: subject.trim() || replySubject(detail.subject),
-        body: body.trim(),
-        body_format: 'plain',
+        subject: subject.trim() || defaultSubject,
+        body: finalHtml,
+        body_format: 'html',
+        attachments: attachments.map(toEmailReplyAttachment),
       },
     });
-    setBody('');
+    clearReplyDraft(draftKey);
+    setBodyHtml('');
+    setBodyText('');
+    setAttachments([]);
+    setDraftSavedAt(null);
+    setPreviewOpen(false);
+    if (editorRef.current) editorRef.current.innerHTML = '';
     setNotice(language === 'zh' ? '已发送回复，并进入沟通中' : 'Reply sent. Status moved to communicating.');
     await onSent();
   };
 
   return (
     <div className="border-t border-border bg-elev1/70 p-4">
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-xs font-semibold text-text">{language === 'zh' ? '邮件回复' : 'Reply'}</div>
-          <div className="mt-1 truncate text-xxs text-muted">
-            {language === 'zh' ? '发件邮箱已锁定' : 'Locked sender'}: {lockedFrom || '-'} · To: {replyTo || '-'}
+      <div className="overflow-hidden rounded-md border border-border bg-elev1 shadow-card">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="text-sm font-semibold text-text">{language === 'zh' ? '邮件回复' : 'Reply'}</div>
+              <span className={`rounded px-2 py-1 text-xxs font-semibold ${isBounce ? 'bg-warn/10 text-warn' : 'bg-good/10 text-good'}`}>
+                {isBounce ? (language === 'zh' ? '退信不可回复' : 'Bounce') : (language === 'zh' ? '同线程回复' : 'Thread reply')}
+              </span>
+            </div>
+            <div className="mt-2 flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-xxs text-muted">
+              <span className="truncate">{language === 'zh' ? '发件邮箱' : 'From'}: <b className="text-text">{fromEmail || '-'}</b></span>
+              <span className="truncate">To: <b className="text-text">{replyTo || '-'}</b></span>
+            </div>
+          </div>
+          <button type="button" onClick={() => setQuoteOpen((value) => !value)} className="btn btn-ghost h-8" title={language === 'zh' ? '显示原邮件引用' : 'Show original quote'}>
+            <MessageSquareText size={14} />
+            {quoteOpen ? (language === 'zh' ? '收起引用' : 'Hide quote') : (language === 'zh' ? '原邮件' : 'Quote')}
+          </button>
+        </div>
+
+        {quoteOpen ? (
+          <div className="max-h-32 overflow-auto border-b border-border bg-elev2/50 px-4 py-3 text-xs leading-relaxed text-muted">
+            <div className="mb-1 font-semibold text-text">{detail.subject || defaultSubject}</div>
+            <div className="whitespace-pre-wrap">{htmlToPlainText(detail.body || detail.body_preview || '') || (language === 'zh' ? '暂无原邮件内容' : 'No original body.')}</div>
+          </div>
+        ) : null}
+
+        <div className="space-y-3 p-4">
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+            <input
+              value={subject}
+              onChange={(event) => setSubject(event.target.value)}
+              disabled={isBounce}
+              className="input-bare h-10 w-full rounded-md border border-border bg-elev2 px-3 text-sm transition-colors focus:border-accent"
+              placeholder={language === 'zh' ? '回复主题' : 'Reply subject'}
+            />
+            <button type="button" onClick={() => setSubject(defaultSubject)} disabled={isBounce} className="btn h-10 justify-center">
+              {language === 'zh' ? '恢复主题' : 'Restore'}
+            </button>
+          </div>
+
+          <div className="overflow-hidden rounded-md border border-border bg-white text-slate-900 shadow-sm focus-within:border-accent">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-2 py-1.5">
+              <div className="flex flex-wrap items-center gap-1">
+                <ToolbarButton title={language === 'zh' ? '加粗' : 'Bold'} onClick={() => runCommand('bold')} disabled={isBounce}><Bold size={14} /></ToolbarButton>
+                <ToolbarButton title={language === 'zh' ? '列表' : 'List'} onClick={() => runCommand('insertUnorderedList')} disabled={isBounce}><List size={14} /></ToolbarButton>
+                <ToolbarButton title={language === 'zh' ? '链接' : 'Link'} onClick={insertLink} disabled={isBounce}><LinkIcon size={14} /></ToolbarButton>
+                <ToolbarButton title={language === 'zh' ? '插入图片' : 'Insert image'} onClick={() => fileInputRef.current?.click()} disabled={isBounce || attachments.length >= REPLY_MAX_IMAGES}><ImagePlus size={14} /></ToolbarButton>
+                <div className="relative">
+                  <ToolbarButton title={language === 'zh' ? '常用话术' : 'Templates'} onClick={() => setTemplatesOpen((value) => !value)} disabled={isBounce}><MessageSquareText size={14} /></ToolbarButton>
+                  {templatesOpen ? (
+                    <div className="absolute left-0 top-8 z-20 w-72 rounded-md border border-slate-200 bg-white p-1 shadow-lg">
+                      {REPLY_TEMPLATES[language].map((text) => (
+                        <button key={text} type="button" onClick={() => insertTemplate(text)} className="block w-full rounded px-2 py-2 text-left text-xs leading-relaxed text-slate-700 hover:bg-slate-100">
+                          {text}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+              <div className="flex items-center gap-1 text-[11px] text-slate-500">
+                <Paperclip size={13} />
+                {attachments.length}/{REPLY_MAX_IMAGES}
+              </div>
+            </div>
+            <div
+              className={`relative ${isDragging ? 'bg-cyan-50' : 'bg-white'}`}
+              onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+            >
+              {!bodyText.trim() && !bodyHtml.includes('data-x9-attachment-id') ? (
+                <div className="pointer-events-none absolute left-4 top-4 text-sm text-slate-400">
+                  {isBounce ? (language === 'zh' ? '这是一封退信通知，不能直接回复。' : 'This is a bounce notification and cannot be replied to.') : (language === 'zh' ? '输入要发送给达人的回复内容，可粘贴或拖拽图片' : 'Write the reply. Paste or drag images here.')}
+                </div>
+              ) : null}
+              <div
+                ref={editorRef}
+                contentEditable={!isBounce}
+                suppressContentEditableWarning
+                onInput={(event: FormEvent<HTMLDivElement>) => {
+                  setBodyHtml(event.currentTarget.innerHTML);
+                  setBodyText(htmlToPlainText(event.currentTarget.innerHTML));
+                }}
+                onPaste={handlePaste}
+                className="min-h-[176px] max-h-[280px] overflow-auto px-4 py-4 text-sm leading-6 outline-none"
+              />
+            </div>
+          </div>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(event) => {
+              void addFiles(Array.from(event.target.files || []));
+              event.target.value = '';
+            }}
+          />
+
+          {attachments.length ? (
+            <div className="grid gap-2 md:grid-cols-2">
+              {attachments.map((item) => (
+                <div key={item.id} className="flex min-w-0 items-center gap-3 rounded-md border border-border bg-elev2/60 p-2">
+                  <img src={item.preview_url} alt={item.name} className="h-12 w-12 shrink-0 rounded object-cover" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-xs font-semibold text-text">{item.name}</div>
+                    <div className="mt-0.5 text-xxs text-muted">{formatBytes(item.size)}</div>
+                    <div className="mt-1 flex gap-1">
+                      <button type="button" onClick={() => toggleDisposition(item.id, 'inline')} className={`rounded px-2 py-0.5 text-[11px] ${item.disposition === 'inline' ? 'bg-accent text-[#001218]' : 'bg-elev1 text-muted'}`}>{language === 'zh' ? '正文内' : 'Inline'}</button>
+                      <button type="button" onClick={() => toggleDisposition(item.id, 'attachment')} className={`rounded px-2 py-0.5 text-[11px] ${item.disposition === 'attachment' ? 'bg-accent text-[#001218]' : 'bg-elev1 text-muted'}`}>{language === 'zh' ? '附件' : 'Attach'}</button>
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => removeAttachment(item.id)} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded text-muted hover:bg-bad/10 hover:text-bad" title={language === 'zh' ? '删除图片' : 'Remove image'}>
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0 text-xxs text-muted">
+              <span>{bodyText.trim().length} {language === 'zh' ? '字' : 'chars'}</span>
+              <span className="mx-2">·</span>
+              <span>{attachments.length} {language === 'zh' ? '张图片' : 'images'}</span>
+              <span className="mx-2">·</span>
+              <span>{draftStatus}</span>
+              {notice ? <span className="ml-2 text-accent">{notice}</span> : null}
+              {reply.error ? <span className="ml-2 text-warn">{String((reply.error as Error).message || reply.error)}</span> : null}
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setPreviewOpen(true)} disabled={!bodyText.trim() && !attachments.length} className="btn">
+                <Eye size={13} />
+                {language === 'zh' ? '预览' : 'Preview'}
+              </button>
+              <button type="button" onClick={saveDraftNow} disabled={isBounce} className="btn">
+                <Save size={13} />
+                {language === 'zh' ? '保存草稿' : 'Save draft'}
+              </button>
+              <button type="button" onClick={sendReply} disabled={!canSend} className="btn btn-primary">
+                <Send size={13} className={reply.isPending ? 'animate-pulse' : ''} />
+                {reply.isPending ? (language === 'zh' ? '发送中' : 'Sending') : (language === 'zh' ? '发送回复' : 'Send reply')}
+              </button>
+            </div>
           </div>
         </div>
-        <span className={`rounded px-2 py-1 text-xxs font-semibold ${isBounce ? 'bg-warn/10 text-warn' : 'bg-good/10 text-good'}`}>
-          {isBounce ? (language === 'zh' ? '退信不可回复' : 'Bounce') : (language === 'zh' ? '同线程回复' : 'Thread reply')}
-        </span>
       </div>
-      <input
-        value={subject}
-        onChange={(event) => setSubject(event.target.value)}
-        disabled={isBounce}
-        className="input-bare mb-2 h-9 w-full rounded-md border border-border bg-elev2 px-3 text-xs"
-        placeholder={language === 'zh' ? '回复主题' : 'Reply subject'}
-      />
-      <textarea
-        value={body}
-        onChange={(event) => setBody(event.target.value)}
-        disabled={isBounce}
-        rows={5}
-        className="input-bare min-h-[118px] w-full resize-y rounded-md border border-border bg-elev2 p-3 text-sm leading-relaxed"
-        placeholder={isBounce ? (language === 'zh' ? '这是一封退信通知，不能直接回复。' : 'This is a bounce notification and cannot be replied to.') : (language === 'zh' ? '输入要发送给达人的回复内容' : 'Write the reply to the creator')}
-      />
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xxs text-muted">
-          {notice || (language === 'zh' ? '发送后会自动写入沟通记录，并把流程推进到沟通中。' : 'After sending, the reply is added to the timeline and the flow moves to communicating.')}
-          {reply.error ? <span className="ml-2 text-warn">{String((reply.error as Error).message || reply.error)}</span> : null}
+
+      {previewOpen ? (
+        <ReplyPreviewModal
+          language={language}
+          subject={subject.trim() || defaultSubject}
+          from={fromEmail || '-'}
+          to={replyTo || '-'}
+          html={previewHtml}
+          attachments={attachments}
+          onClose={() => setPreviewOpen(false)}
+          onSend={sendReply}
+          sendDisabled={!canSend}
+          sending={reply.isPending}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ToolbarButton({ title, disabled, onClick, children }: { title: string; disabled?: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      className="inline-flex h-7 w-7 items-center justify-center rounded text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      {children}
+    </button>
+  );
+}
+
+function ReplyPreviewModal({
+  language,
+  subject,
+  from,
+  to,
+  html,
+  attachments,
+  onClose,
+  onSend,
+  sendDisabled,
+  sending,
+}: {
+  language: Language;
+  subject: string;
+  from: string;
+  to: string;
+  html: string;
+  attachments: ReplyAttachment[];
+  onClose: () => void;
+  onSend: () => void;
+  sendDisabled: boolean;
+  sending: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+      <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-md border border-border bg-elev1 shadow-soft">
+        <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-text">{language === 'zh' ? '发送前预览' : 'Preview before send'}</div>
+            <div className="mt-1 truncate text-xxs text-muted">From: {from} · To: {to}</div>
+          </div>
+          <button type="button" onClick={onClose} className="inline-flex h-8 w-8 items-center justify-center rounded text-muted hover:bg-elev2 hover:text-text">
+            <X size={15} />
+          </button>
+        </header>
+        <div className="overflow-auto p-4">
+          <div className="mb-3 rounded-md border border-border bg-elev2 px-3 py-2 text-xs">
+            <span className="text-muted">Subject: </span>
+            <span className="font-semibold text-text">{subject || '(no subject)'}</span>
+          </div>
+          <iframe title="reply-preview" sandbox="" srcDoc={safeEmailHtml(html)} className="h-[360px] w-full rounded-md border border-border bg-white" />
+          {attachments.length ? (
+            <div className="mt-3 rounded-md border border-border bg-elev2 p-3">
+              <div className="mb-2 text-xs font-semibold text-text">{language === 'zh' ? '图片' : 'Images'} · {attachments.length}</div>
+              <div className="flex flex-wrap gap-2">
+                {attachments.map((item) => (
+                  <span key={item.id} className="rounded bg-elev1 px-2 py-1 text-xxs text-muted">
+                    {item.name} · {item.disposition} · {formatBytes(item.size)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
-        <button type="button" onClick={sendReply} disabled={disabled} className="btn">
-          <Send size={13} className={reply.isPending ? 'animate-pulse' : ''} />
-          {reply.isPending ? (language === 'zh' ? '发送中' : 'Sending') : (language === 'zh' ? '发送回复' : 'Send reply')}
-        </button>
+        <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+          <button type="button" onClick={onClose} className="btn">{language === 'zh' ? '返回编辑' : 'Back'}</button>
+          <button type="button" onClick={onSend} disabled={sendDisabled} className="btn btn-primary">
+            <Send size={13} className={sending ? 'animate-pulse' : ''} />
+            {sending ? (language === 'zh' ? '发送中' : 'Sending') : (language === 'zh' ? '发送回复' : 'Send reply')}
+          </button>
+        </footer>
       </div>
     </div>
   );
+}
+
+function replyDraftKey(emailId: string) {
+  return `reply-draft:${emailId}`;
+}
+
+function loadReplyDraft(emailId: string): ReplyDraft | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(replyDraftKey(emailId));
+    return raw ? JSON.parse(raw) as ReplyDraft : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveReplyDraft(key: string, draft: ReplyDraft): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(draft));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearReplyDraft(key: string) {
+  if (typeof window === 'undefined' || !key) return;
+  window.localStorage.removeItem(key);
+}
+
+function hasDraftContent(subject: string, bodyHtml: string, attachments: ReplyAttachment[]) {
+  return Boolean(subject.trim() || htmlToPlainText(bodyHtml).trim() || attachments.length);
+}
+
+function restoreReplyAttachment(item: EmailReplyAttachment): ReplyAttachment {
+  return {
+    ...item,
+    preview_url: `data:${item.mime_type};base64,${item.content_base64}`,
+    created_at: Date.now(),
+  };
+}
+
+function toEmailReplyAttachment(item: ReplyAttachment): EmailReplyAttachment {
+  return {
+    id: item.id,
+    name: item.name,
+    mime_type: item.mime_type,
+    size: item.size,
+    content_base64: item.content_base64,
+    disposition: item.disposition,
+  };
+}
+
+async function fileToReplyAttachment(file: File): Promise<ReplyAttachment> {
+  const previewUrl = await readFileAsDataUrl(file);
+  const contentBase64 = previewUrl.split(',', 2)[1] || '';
+  return {
+    id: makeReplyAttachmentId(),
+    name: file.name || 'image',
+    mime_type: file.type || 'image/png',
+    size: file.size,
+    content_base64: contentBase64,
+    disposition: 'inline',
+    preview_url: previewUrl,
+    created_at: Date.now(),
+  };
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('file read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function makeReplyAttachmentId() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+  return `reply_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+function buildReplyHtml(editorHtml: string, attachments: ReplyAttachment[]) {
+  return normalizeReplyHtml(editorHtml, attachments, false);
+}
+
+function buildReplyPreviewHtml(editorHtml: string, attachments: ReplyAttachment[]) {
+  return normalizeReplyHtml(editorHtml, attachments, true);
+}
+
+function normalizeReplyHtml(editorHtml: string, attachments: ReplyAttachment[], keepPreviewUrls: boolean) {
+  const html = editorHtml || '';
+  if (typeof window === 'undefined' || !('DOMParser' in window)) {
+    return html.trim() || '<p></p>';
+  }
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
+  doc.querySelectorAll('script,style,meta,link').forEach((node) => node.remove());
+  doc.body.querySelectorAll('*').forEach((node) => {
+    [...node.attributes].forEach((attr) => {
+      if (/^on/i.test(attr.name) || attr.name === 'contenteditable') node.removeAttribute(attr.name);
+    });
+  });
+  const byId = new Map(attachments.map((item) => [item.id, item]));
+  doc.querySelectorAll('img[data-x9-attachment-id]').forEach((node) => {
+    const img = node as HTMLImageElement;
+    const id = img.getAttribute('data-x9-attachment-id') || '';
+    const item = byId.get(id);
+    if (!item) {
+      img.remove();
+      return;
+    }
+    img.setAttribute('src', keepPreviewUrls ? item.preview_url : `x9-attachment:${id}`);
+    img.setAttribute('alt', item.name);
+    img.setAttribute('style', 'display:block;max-width:100%;max-height:360px;border-radius:6px;object-fit:contain;background:#fff;');
+  });
+  return doc.body.firstElementChild?.innerHTML.trim() || '<p></p>';
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeAttr(value: string) {
+  return escapeHtml(value).replace(/`/g, '&#96;');
+}
+
+function cssEscape(value: string) {
+  if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(value);
+  return value.replace(/["\\]/g, '\\$&');
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function EmailHistoryRow({

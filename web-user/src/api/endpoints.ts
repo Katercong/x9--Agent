@@ -6,7 +6,7 @@ import type {
   ExtensionCommand, ExtensionSession, CollectorObservation,
   OutreachTemplate, PreviewResult, OutreachDraft, GmailAccount, GmailStatus, GmailReplySyncStatus, OutreachHistoryItem,
   CreatorOutreachLock, OutreachArchiveItem, OutreachArchiveDetail, OutreachTrackingItem,
-  ReviewTaskUpdate, TkPrompt, TkScriptResult, ProductAsset,
+  ReviewTaskUpdate, TkPrompt, TkScriptResult, ProductAsset, EmailReplyAttachment,
 } from './types';
 
 export const endpoints = {
@@ -104,7 +104,7 @@ export const endpoints = {
     api.get<ListResp<OutreachArchiveItem>>('/outreach/archive', params),
   outreachArchiveDetail: (id: string) =>
     api.get<{ ok: boolean; item: OutreachArchiveDetail }>(`/outreach/archive/${encodeURIComponent(id)}`),
-  replyOutreachArchive: (id: string, body: { subject?: string; body: string; body_format?: 'plain' | 'html' | string }) =>
+  replyOutreachArchive: (id: string, body: { subject?: string; body: string; body_format?: 'plain' | 'html' | string; attachments?: EmailReplyAttachment[] }) =>
     api.post<{ ok: boolean; item: OutreachArchiveDetail }>(`/outreach/archive/${encodeURIComponent(id)}/reply`, body),
   outreachTracking: (params?: Record<string, unknown>) =>
     api.get<ListResp<OutreachTrackingItem>>('/outreach/tracking', params),

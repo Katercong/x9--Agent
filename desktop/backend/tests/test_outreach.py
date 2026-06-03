@@ -246,6 +246,70 @@ def test_html_gmail_message_inlines_product_asset_image(tmp_path):
     assert image_parts[0]["Content-ID"] == "<x9-product-sku_inline_test@x9.local>"
 
 
+def test_html_gmail_message_inlines_reply_attachment_image():
+    payload = b"x9-reply-inline-image"
+    attachment = {
+        "id": "reply_inline_1",
+        "name": "reply-inline.png",
+        "mime_type": "image/png",
+        "size": len(payload),
+        "content_base64": base64.b64encode(payload).decode("ascii"),
+        "disposition": "inline",
+    }
+    html = (
+        "<p>Hello creator</p>"
+        '<img data-x9-attachment-id="reply_inline_1" src="x9-attachment:reply_inline_1" alt="Inline">'
+    )
+
+    raw = desktop_gmail_service._build_mime_message(
+        to_email="creator@example.com",
+        subject="Inline reply image",
+        body=html,
+        body_format="html",
+        from_email="bd@example.com",
+        attachments=[attachment],
+    )
+
+    message = BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(raw.encode("utf-8")))
+    assert message.get_content_type() == "multipart/related"
+    html_parts = [part for part in message.walk() if part.get_content_type() == "text/html"]
+    assert html_parts
+    assert 'src="cid:x9-reply-reply_inline_1@x9.local"' in html_parts[0].get_content()
+    image_parts = [part for part in message.walk() if part.get_content_type() == "image/png"]
+    assert image_parts
+    assert image_parts[0]["Content-ID"] == "<x9-reply-reply_inline_1@x9.local>"
+    assert image_parts[0].get_payload(decode=True) == payload
+
+
+def test_html_gmail_message_attaches_reply_attachment_image():
+    payload = b"x9-reply-attachment-image"
+    attachment = {
+        "id": "reply_attachment_1",
+        "name": "rate-card.png",
+        "mime_type": "image/png",
+        "size": len(payload),
+        "content_base64": base64.b64encode(payload).decode("ascii"),
+        "disposition": "attachment",
+    }
+
+    raw = desktop_gmail_service._build_mime_message(
+        to_email="creator@example.com",
+        subject="Attachment image",
+        body="<p>Hello creator</p>",
+        body_format="html",
+        from_email="bd@example.com",
+        attachments=[attachment],
+    )
+
+    message = BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(raw.encode("utf-8")))
+    assert message.get_content_type() == "multipart/mixed"
+    image_parts = [part for part in message.walk() if part.get_content_type() == "image/png"]
+    assert image_parts
+    assert image_parts[0].get_filename() == "rate-card.png"
+    assert image_parts[0].get_content_disposition() == "attachment"
+    assert image_parts[0].get_payload(decode=True) == payload
+
+
 def test_ai_context_prioritizes_recommendation_table_fields(sample_creator):
     with SessionLocal() as session:
         creator = session.get(Creator, sample_creator)
@@ -528,6 +592,146 @@ def test_outreach_archive_is_sent_only_and_department_scoped():
                 row = session.get(Creator, cid)
                 if row is not None:
                     session.delete(row)
+            session.commit()
+
+
+def test_archive_reply_plain_text_remains_compatible(sample_creator):
+    source_id = "reply_plain_source"
+    client = _user_client("reply_plain_user")
+    with SessionLocal() as session:
+        session.query(OutreachEmail).filter(OutreachEmail.parent_email_id == source_id).delete()
+        session.query(OutreachEmail).filter_by(id=source_id).delete()
+        session.add(
+            OutreachEmail(
+                id=source_id,
+                department_code="cross_border",
+                creator_id=sample_creator,
+                to_email="creator@example.com",
+                from_email="bd@example.com",
+                subject="Original subject",
+                body="Original body",
+                body_format="plain",
+                status="sent",
+                gmail_thread_id="thread_reply_plain",
+                sent_at=datetime(2026, 5, 20, 10, 0, 0),
+            )
+        )
+        session.commit()
+
+    fake_send = {"message_id": "reply_plain_msg", "thread_id": "thread_reply_plain", "from_email": "bd@example.com"}
+    try:
+        with patch.object(gmail_service, "send_thread_reply", return_value=fake_send) as mock_send:
+            response = client.post(
+                f"/api/local/outreach/archive/{source_id}/reply",
+                json={"subject": "Re: Original subject", "body": "Thanks for the update.", "body_format": "plain"},
+            )
+        assert response.status_code == 200, response.text
+        payload = response.json()["item"]
+        assert payload["status"] == "sent"
+        assert payload["body"] == "Thanks for the update."
+        assert payload["body_format"] == "plain"
+        mock_send.assert_called_once()
+        assert mock_send.call_args.kwargs["attachments"] == []
+    finally:
+        with SessionLocal() as session:
+            session.query(OutreachEmail).filter(OutreachEmail.parent_email_id == source_id).delete()
+            session.query(OutreachEmail).filter_by(id=source_id).delete()
+            session.commit()
+
+
+@pytest.mark.parametrize(
+    ("attachments", "expected_detail"),
+    [
+        (
+            [{
+                "id": "bad_mime",
+                "name": "bad.txt",
+                "mime_type": "text/plain",
+                "size": 4,
+                "content_base64": base64.b64encode(b"nope").decode("ascii"),
+                "disposition": "attachment",
+            }],
+            "only image attachments are supported",
+        ),
+        (
+            [
+                {
+                    "id": f"too_many_{i}",
+                    "name": f"image-{i}.png",
+                    "mime_type": "image/png",
+                    "size": 4,
+                    "content_base64": base64.b64encode(b"data").decode("ascii"),
+                    "disposition": "inline",
+                }
+                for i in range(gmail_service.MAX_EMAIL_ATTACHMENTS + 1)
+            ],
+            "too many attachments",
+        ),
+        (
+            [{
+                "id": "too_large",
+                "name": "large.png",
+                "mime_type": "image/png",
+                "size": gmail_service.MAX_EMAIL_ATTACHMENT_BYTES + 1,
+                "content_base64": base64.b64encode(b"data").decode("ascii"),
+                "disposition": "attachment",
+            }],
+            "attachment size is invalid",
+        ),
+        (
+            [{
+                "id": "bad_base64",
+                "name": "bad.png",
+                "mime_type": "image/png",
+                "size": 4,
+                "content_base64": "not-valid-base64",
+                "disposition": "inline",
+            }],
+            "attachment content must be valid base64",
+        ),
+    ],
+)
+def test_archive_reply_rejects_invalid_image_attachments(sample_creator, attachments, expected_detail):
+    source_id = f"reply_invalid_source_{attachments[0]['id']}"
+    client = _user_client(f"reply_invalid_user_{attachments[0]['id']}")
+    with SessionLocal() as session:
+        session.query(OutreachEmail).filter(OutreachEmail.parent_email_id == source_id).delete()
+        session.query(OutreachEmail).filter_by(id=source_id).delete()
+        session.add(
+            OutreachEmail(
+                id=source_id,
+                department_code="cross_border",
+                creator_id=sample_creator,
+                to_email="creator@example.com",
+                from_email="bd@example.com",
+                subject="Original subject",
+                body="Original body",
+                body_format="plain",
+                status="sent",
+                gmail_thread_id="thread_reply_invalid",
+                sent_at=datetime(2026, 5, 20, 10, 0, 0),
+            )
+        )
+        session.commit()
+
+    try:
+        with patch.object(gmail_service, "send_thread_reply") as mock_send:
+            response = client.post(
+                f"/api/local/outreach/archive/{source_id}/reply",
+                json={
+                    "subject": "Re: Original subject",
+                    "body": "<p>Reply</p>",
+                    "body_format": "html",
+                    "attachments": attachments,
+                },
+            )
+        assert response.status_code == 400, response.text
+        assert expected_detail in response.json()["detail"]
+        mock_send.assert_not_called()
+    finally:
+        with SessionLocal() as session:
+            session.query(OutreachEmail).filter(OutreachEmail.parent_email_id == source_id).delete()
+            session.query(OutreachEmail).filter_by(id=source_id).delete()
             session.commit()
 
 

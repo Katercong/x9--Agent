@@ -56,6 +56,10 @@ SCOPES = [
     "openid",
 ]
 
+MAX_EMAIL_ATTACHMENTS = 8
+MAX_EMAIL_ATTACHMENT_BYTES = 5 * 1024 * 1024
+MAX_EMAIL_ATTACHMENT_B64_CHARS = 7 * 1024 * 1024
+
 TOKEN_JSON_ENCRYPTED_PREFIX = "enc:v1:"
 _TOKEN_CRYPTO_WARNING_EMITTED = False
 
@@ -557,6 +561,7 @@ def send_email(
     department_code: str | None = None,
     include_shared: bool = True,
     reply_to: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Send a single email via Gmail API.
 
@@ -604,6 +609,7 @@ def send_email(
             from_email=sender,
             reply_to=reply_to,
             department_code=department_code,
+            attachments=attachments,
         )
 
         service = build("gmail", "v1", credentials=creds, cache_discovery=False)
@@ -635,6 +641,7 @@ def send_thread_reply(
     in_reply_to: str | None = None,
     references: str | None = None,
     department_code: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Send a reply inside an existing Gmail thread.
 
@@ -683,6 +690,7 @@ def send_thread_reply(
             in_reply_to=in_reply_to,
             references=references,
             department_code=department_code,
+            attachments=attachments,
         )
         request_body: dict[str, Any] = {"raw": raw}
         if gmail_thread_id:
@@ -987,28 +995,56 @@ def _build_mime_message(
     in_reply_to: str | None = None,
     references: str | None = None,
     department_code: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> str:
+    prepared_attachments = prepare_email_attachments(attachments)
     if body_format == "html":
         html_body, inline_images = _inline_product_asset_images(body or "", department_code)
+        html_body, reply_inline_images = _inline_reply_attachment_images(html_body, prepared_attachments)
         plain_body = _html_to_plain_text(html_body)
         alternative = MIMEMultipart("alternative")
         alternative.attach(MIMEText(plain_body, "plain", "utf-8"))
         alternative.attach(MIMEText(html_body, "html", "utf-8"))
-        if inline_images:
+        if inline_images or reply_inline_images:
             message = MIMEMultipart("related")
             message.attach(alternative)
             for cid, image_path, mime_type in inline_images:
-                main_type, sub_type = mime_type.split("/", 1)
-                part = MIMEBase(main_type, sub_type)
-                part.set_payload(image_path.read_bytes())
-                encoders.encode_base64(part)
-                part.add_header("Content-ID", f"<{cid}>")
-                part.add_header("Content-Disposition", "inline", filename=image_path.name)
-                message.attach(part)
+                _attach_binary_part(
+                    message,
+                    payload=image_path.read_bytes(),
+                    mime_type=mime_type,
+                    filename=image_path.name,
+                    disposition="inline",
+                    cid=cid,
+                )
+            for image in reply_inline_images:
+                _attach_binary_part(
+                    message,
+                    payload=image["payload"],
+                    mime_type=image["mime_type"],
+                    filename=image["name"],
+                    disposition="inline",
+                    cid=image["cid"],
+                )
         else:
             message = alternative
     else:
         message = MIMEText(body or "", "plain", "utf-8")
+
+    attachment_images = [item for item in prepared_attachments if item["disposition"] == "attachment"]
+    if attachment_images:
+        mixed = MIMEMultipart("mixed")
+        mixed.attach(message)
+        for image in attachment_images:
+            _attach_binary_part(
+                mixed,
+                payload=image["payload"],
+                mime_type=image["mime_type"],
+                filename=image["name"],
+                disposition="attachment",
+            )
+        message = mixed
+
     message["To"] = to_email
     message["From"] = from_email
     message["Subject"] = subject or "(no subject)"
@@ -1019,6 +1055,122 @@ def _build_mime_message(
     if references:
         message["References"] = references
     return base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+
+
+def prepare_email_attachments(attachments: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    if not attachments:
+        return []
+    if len(attachments) > MAX_EMAIL_ATTACHMENTS:
+        raise ValueError(f"too many attachments; max is {MAX_EMAIL_ATTACHMENTS}")
+
+    prepared: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in attachments:
+        attachment_id = str(item.get("id") or "").strip()
+        if not attachment_id:
+            raise ValueError("attachment id is required")
+        if attachment_id in seen:
+            raise ValueError(f"duplicate attachment id: {attachment_id}")
+        seen.add(attachment_id)
+
+        mime_type = str(item.get("mime_type") or "").strip().lower()
+        if not mime_type.startswith("image/") or "/" not in mime_type:
+            raise ValueError("only image attachments are supported")
+
+        content_base64 = str(item.get("content_base64") or "").strip()
+        if "," in content_base64 and content_base64.lower().startswith("data:"):
+            content_base64 = content_base64.split(",", 1)[1]
+        if not content_base64:
+            raise ValueError("attachment content is required")
+        if len(content_base64) > MAX_EMAIL_ATTACHMENT_B64_CHARS:
+            raise ValueError("attachment is too large")
+        try:
+            payload = base64.b64decode(content_base64, validate=True)
+        except Exception as exc:
+            raise ValueError("attachment content must be valid base64") from exc
+        if not payload:
+            raise ValueError("attachment content is empty")
+        if len(payload) > MAX_EMAIL_ATTACHMENT_BYTES:
+            raise ValueError("attachment is too large")
+
+        declared_size = int(item.get("size") or len(payload))
+        if declared_size <= 0 or declared_size > MAX_EMAIL_ATTACHMENT_BYTES:
+            raise ValueError("attachment size is invalid")
+
+        disposition = str(item.get("disposition") or "inline").strip().lower()
+        if disposition not in {"inline", "attachment"}:
+            raise ValueError("attachment disposition must be inline or attachment")
+
+        prepared.append({
+            "id": attachment_id,
+            "name": _safe_attachment_filename(item.get("name"), mime_type),
+            "mime_type": mime_type,
+            "payload": payload,
+            "size": len(payload),
+            "disposition": disposition,
+            "cid": f"x9-reply-{_safe_cid_token(attachment_id)}@x9.local",
+        })
+    return prepared
+
+
+def _inline_reply_attachment_images(
+    body: str,
+    attachments: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    images_by_id = {item["id"]: item for item in attachments if item["disposition"] == "inline"}
+    if not images_by_id:
+        return body, []
+
+    used: dict[str, dict[str, Any]] = {}
+
+    def replace_tag(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        id_match = re.search(r"\bdata-x9-attachment-id=[\"']([^\"']+)[\"']", tag, re.I)
+        if not id_match:
+            return tag
+        image = images_by_id.get(html_lib.unescape(id_match.group(1)))
+        if not image:
+            return tag
+        used[image["id"]] = image
+        cid_src = f"cid:{image['cid']}"
+        if re.search(r"\bsrc=[\"'][^\"']*[\"']", tag, re.I):
+            return re.sub(r"\bsrc=[\"'][^\"']*[\"']", f'src="{cid_src}"', tag, count=1, flags=re.I)
+        return re.sub(r"\s*/?>$", f' src="{cid_src}">', tag, count=1)
+
+    return re.sub(r"<img\b[^>]*>", replace_tag, body or "", flags=re.I), list(used.values())
+
+
+def _attach_binary_part(
+    container: MIMEMultipart,
+    *,
+    payload: bytes,
+    mime_type: str,
+    filename: str,
+    disposition: str,
+    cid: str | None = None,
+) -> None:
+    main_type, sub_type = mime_type.split("/", 1)
+    part = MIMEBase(main_type, sub_type)
+    part.set_payload(payload)
+    encoders.encode_base64(part)
+    if cid:
+        part.add_header("Content-ID", f"<{cid}>")
+    part.add_header("Content-Disposition", disposition, filename=filename)
+    container.attach(part)
+
+
+def _safe_attachment_filename(value: Any, mime_type: str) -> str:
+    raw = str(value or "").strip() or "image"
+    name = re.sub(r"[\\/\r\n\t]+", "_", raw)[:180].strip(" .") or "image"
+    if "." not in Path(name).name:
+        subtype = mime_type.split("/", 1)[1].split(";", 1)[0].lower()
+        ext = "jpg" if subtype == "jpeg" else re.sub(r"[^a-z0-9]+", "", subtype) or "png"
+        name = f"{name}.{ext}"
+    return name
+
+
+def _safe_cid_token(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_.-]+", "-", value).strip("-") or "image"
 
 
 _HTML_IMAGE_SRC_RE = re.compile(r"(<img\b[^>]*?\bsrc=[\"'])([^\"']+)([\"'][^>]*>)", re.I)
