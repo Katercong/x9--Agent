@@ -141,7 +141,7 @@ def ingest_observation(
             "observation_id": observation_id,
         }
 
-    if not payload_has_contact and not existing_has_contact:
+    if not payload_has_contact and (platform == "tiktok" or not existing_has_contact):
         # Server-side gate: the extension only transports raw capture. After
         # enrichment, no-contact leads are removed from creators/pipeline here.
         return {
@@ -402,7 +402,9 @@ def _is_source_video_seed_only(payload: dict[str, Any]) -> bool:
 
 
 def _drops_no_contact_raw(platform: str) -> bool:
-    return platform == "tiktok"
+    # Keep no-contact TikTok profiles as raw audit observations so operators can
+    # tell the extension did upload them. They still stop before Creator upsert.
+    return False
 
 
 def _normalize_handle_lookup(value: str | None) -> str:
