@@ -3,6 +3,7 @@ import Dashboard from './Dashboard';
 import Creators from './Creators';
 import Leads from './Leads';
 import Emails from './Emails';
+import EmailAutoConsole from './EmailAutoConsole';
 import Samples from './Samples';
 import Videos from './Videos';
 import Products from './Products';
@@ -51,6 +52,7 @@ export const departmentRoutes = (
     <Route path="/d/social-leads" element={<SocialLeads />} />
     {/* 共用 */}
     <Route path="/d/emails" element={<Emails />} />
+    <Route path="/d/email-auto" element={<EmailAutoConsole />} />
     <Route path="/d/settings" element={<Settings />} />
   </Route>
 );

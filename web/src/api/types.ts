@@ -110,6 +110,21 @@ export interface Product {
   short_url: string | null;
 }
 
+export interface ProductAsset {
+  id: string;
+  department_code?: string | null;
+  name: string;
+  sku_code?: string | null;
+  product_key: string;
+  product_label?: string;
+  selling_points?: string[];
+  target_creator_types?: string[];
+  image_url?: string | null;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface Outreach {
   id: number;
   department_id?: number | null;

@@ -21,6 +21,7 @@ import type {
   OutreachArchiveDetail,
   OutreachArchiveItem,
   OutreachTrackingResponse,
+  ProductAsset,
   SystemMetrics,
 } from './types';
 
@@ -95,6 +96,11 @@ export const endpoints = {
     api.post<{ ok: boolean; item: OutreachArchiveDetail }>(
       `${LOCAL}/outreach/archive/${encodeURIComponent(id)}/reply`,
       body,
+    ),
+  listProductAssets: (creator_id?: string | number) =>
+    api.get<{ ok: boolean; items: ProductAsset[]; total: number; matched?: ProductAsset | null }>(
+      `${LOCAL}/outreach/product-assets`,
+      creator_id !== undefined && creator_id !== null ? { creator_id } : undefined,
     ),
   gmailReplySyncStatus: () =>
     api.get<GmailReplySyncStatus>(`${LOCAL}/outreach/gmail/sync-status`),

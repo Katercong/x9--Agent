@@ -109,6 +109,13 @@ export function useReplyOutreachArchive() {
   });
 }
 
+export function useProductAssets(creator_id?: string | number) {
+  return useQuery({
+    queryKey: ['outreach', 'product-assets', creator_id ?? 'all'],
+    queryFn: () => endpoints.listProductAssets(creator_id),
+  });
+}
+
 export function useGmailReplySyncStatus() {
   return useQuery({
     queryKey: ['gmail', 'reply-sync-status'],

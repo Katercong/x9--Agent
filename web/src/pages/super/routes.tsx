@@ -10,6 +10,7 @@ import Queries from './Queries';
 import ApiStats from './ApiStats';
 import CompanyOverview from '../company/Overview';
 import Emails from '../department/Emails';
+import EmailAutoConsole from '../department/EmailAutoConsole';
 import CollectShop from '../department/CollectShop';
 import CollectLeads from '../department/CollectLeads';
 import CollectImport from '../department/CollectImport';
@@ -27,6 +28,7 @@ export const superRoutes = (
     <Route path="/a/collect-leads" element={<CollectLeads />} />
     <Route path="/a/collect-import" element={<CollectImport />} />
     <Route path="/a/emails" element={<Emails />} />
+    <Route path="/a/email-auto" element={<EmailAutoConsole />} />
     <Route path="/a/users" element={<Users />} />
     <Route path="/a/users/:id" element={<UserDetail />} />
     <Route path="/a/llm" element={<Llm />} />
