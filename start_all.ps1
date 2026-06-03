@@ -5,14 +5,18 @@
 #   2. Desktop FastAPI UI    (127.0.0.1:8000, reached publicly through cloudflared/usx9.us)
 #   3. Open the current workspace dashboard
 #
+# Core (:18765, /api/v1) is OPTIONAL and OFF by default. The public usx9.us face is the
+# Desktop app on :8000, so a missing/broken Core must never block the one-click launch.
+# Add -StartCore to also launch it.
+#
 # Optional:
 #   .\start_all.ps1 -NoBrowser
-#   .\start_all.ps1 -SkipCore    # only for local desktop UI work without /api/v1
+#   .\start_all.ps1 -StartCore   # also start Core (:18765, /api/v1)
 
 param(
     [switch]$NoBrowser,
-    [switch]$StartCore,
-    [switch]$SkipCore
+    [switch]$StartCore,   # also start Core (:18765, /api/v1); off by default
+    [switch]$SkipCore     # back-compat: force-skip Core even if -StartCore is given
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,16 +43,35 @@ function Wait-Port([int]$port, [int]$timeoutSeconds = 60) {
     return $false
 }
 
+# Confirm an interpreter actually runs (a stub python.exe missing its stdlib must
+# never be picked just because it exists on PATH).
+function Test-PythonWorks([string]$file, [string[]]$pre) {
+    try {
+        $callArgs = @($pre) + @("-c", "import sys")
+        & $file @callArgs 2>$null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
 function Resolve-PythonCommand {
-    $py = Get-Command py -ErrorAction SilentlyContinue
-    if ($py) {
-        return @{ File = "py"; Args = @("-3.11") }
+    # The stack targets Python 3.11. Prefer the launcher's explicit 3.11, but VALIDATE
+    # it runs so a broken default (e.g. py -> 3.12 with a missing stdlib) can't slip in.
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        if (Test-PythonWorks "py" @("-3.11")) { return @{ File = "py"; Args = @("-3.11") } }
+    }
+    $candidates = @(
+        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+        "C:\Python311\python.exe",
+        "C:\Program Files\Python311\python.exe"
+    )
+    foreach ($c in $candidates) {
+        if ((Test-Path $c) -and (Test-PythonWorks $c @())) { return @{ File = $c; Args = @() } }
     }
     $python = Get-Command python -ErrorAction SilentlyContinue
-    if ($python) {
-        return @{ File = "python"; Args = @() }
-    }
-    throw "Python 3.11 launcher not found. Install Python or add python.exe to PATH."
+    if ($python -and (Test-PythonWorks $python.Source @())) { return @{ File = $python.Source; Args = @() } }
+    throw "No working Python 3.11 found (tried 'py -3.11', %LOCALAPPDATA%\Programs\Python\Python311, PATH python). Install Python 3.11 or fix the py launcher."
 }
 
 function Test-DockerUsable {
@@ -90,38 +113,44 @@ function Wait-Docker([int]$timeoutSeconds = 120) {
 # ----- 1. PostgreSQL -----
 $docker = Get-Command docker -ErrorAction SilentlyContinue
 $dockerUsable = $false
-if ($docker) {
-    $dockerUsable = Test-DockerUsable
-}
 if (Test-PortListening 15432) {
     Write-Host "[start_all] postgres is already listening on :15432"
-} elseif ($dockerUsable) {
-    $pgRunning = docker ps --filter "name=x9-postgres" --filter "status=running" --format "{{.Names}}" 2>$null
-    if (-not $pgRunning) {
-        Write-Host "[start_all] postgres is not running, starting..."
+} else {
+    if ($docker) {
+        $dockerUsable = Test-DockerUsable
+    }
+    if ($dockerUsable) {
+        $pgRunning = docker ps --filter "name=x9-postgres" --filter "status=running" --format "{{.Names}}" 2>$null
+        if (-not $pgRunning) {
+            Write-Host "[start_all] postgres is not running, starting..."
+            & "$root\infra\scripts\db_init.ps1"
+            if ($LASTEXITCODE -ne 0) { throw "db_init failed" }
+        } else {
+            Write-Host "[start_all] postgres container is running; waiting for :15432"
+        }
+    } elseif ($docker) {
+        if (-not (Start-DockerDesktop)) {
+            throw "postgres port 15432 is not listening and Docker Desktop was not found. Start Docker Desktop, then run start_all.bat again."
+        }
+        if (-not (Wait-Docker 120)) {
+            throw "Docker Desktop did not become ready within 120s. Wait until Docker Desktop says it is running, then run start_all.bat again."
+        }
+        Write-Host "[start_all] Docker is ready; starting postgres..."
         & "$root\infra\scripts\db_init.ps1"
         if ($LASTEXITCODE -ne 0) { throw "db_init failed" }
     } else {
-        Write-Host "[start_all] postgres container is running; waiting for :15432"
+        throw "postgres port 15432 is not listening and docker.exe was not found. Install/start Docker Desktop, then run start_all.bat again."
     }
-} elseif ($docker) {
-    if (-not (Start-DockerDesktop)) {
-        throw "postgres port 15432 is not listening and Docker Desktop was not found. Start Docker Desktop, then run start_all.bat again."
-    }
-    if (-not (Wait-Docker 120)) {
-        throw "Docker Desktop did not become ready within 120s. Wait until Docker Desktop says it is running, then run start_all.bat again."
-    }
-    Write-Host "[start_all] Docker is ready; starting postgres..."
-    & "$root\infra\scripts\db_init.ps1"
-    if ($LASTEXITCODE -ne 0) { throw "db_init failed" }
-} else {
-    throw "postgres port 15432 is not listening and docker.exe was not found. Install/start Docker Desktop, then run start_all.bat again."
+    if (-not (Wait-Port 15432 30)) { throw "postgres port 15432 not listening" }
 }
-if (-not (Wait-Port 15432 30)) { throw "postgres port 15432 not listening" }
 
-# ----- 2. Core backend (:18765), required by /api/v1 through usx9.us -----
-if ($SkipCore) {
-    Write-Host "[start_all] skipping core (:18765)"
+# ----- 2. Core backend (:18765) — OPTIONAL (/api/v1). Off by default. -----
+# Core depends on core/.venv and is not required for the Desktop UI (the public
+# usx9.us face is the Desktop app on :8000). Pass -StartCore to launch it; its
+# readiness is best-effort and never fails the launch.
+$wantCore = $StartCore -and (-not $SkipCore)
+if (-not $wantCore) {
+    Write-Host "[start_all] core (:$corePort) not started (pass -StartCore to enable /api/v1)"
 } elseif (Test-PortListening $corePort) {
     Write-Host "[start_all] core is already running on :$corePort"
 } else {
@@ -130,33 +159,39 @@ if ($SkipCore) {
     Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $coreCmd -WindowStyle Minimized
 }
 
-# ----- 3. Desktop backend (:8000) -----
-$dtRunning = Test-PortListening $desktopPort
-if ($dtRunning) {
+# ----- 3. Desktop backend (:8000) — the required service -----
+if (Test-PortListening $desktopPort) {
     Write-Host "[start_all] desktop is already running on :$desktopPort"
 } else {
     Write-Host "[start_all] starting desktop UI (:$desktopPort)..."
     # Bind to loopback only. Public traffic enters through Cloudflare Tunnel/usx9.us.
     $python = Resolve-PythonCommand
-    $args = @($python.Args) + @("-m", "uvicorn", "desktop.backend.main:app", "--host", "127.0.0.1", "--port", "$desktopPort")
-    Start-Process -FilePath $python.File -ArgumentList $args -WorkingDirectory $root -WindowStyle Minimized
+    Write-Host "[start_all] using python: $($python.File) $($python.Args -join ' ')"
+    $uvicornArgs = @($python.Args) + @("-m", "uvicorn", "desktop.backend.main:app", "--host", "127.0.0.1", "--port", "$desktopPort")
+    Start-Process -FilePath $python.File -ArgumentList $uvicornArgs -WorkingDirectory $root -WindowStyle Minimized
 }
 
-# Wait until both ports are ready
-Write-Host "[start_all] waiting for ports to be ready..."
+# ----- Readiness: Desktop is required; Core is best-effort and never blocks the launch -----
+Write-Host "[start_all] waiting for desktop (:$desktopPort) to be ready..."
 $desktopReady = Wait-Port $desktopPort 60
-$coreReady = $SkipCore -or (Wait-Port $corePort 60)
 
-if ($desktopReady -and $coreReady) {
+$coreReady = $false
+if ($wantCore) {
+    $coreReady = Wait-Port $corePort 60
+    if (-not $coreReady) {
+        Write-Warning "core (:$corePort) did not become ready; /api/v1 features unavailable. Check core/logs (core/.venv may need rebuilding)."
+    }
+}
+
+if ($desktopReady) {
     Write-Host ""
-    if (-not $SkipCore) { Write-Host "OK Core API : $coreUrl" }
-    Write-Host "OK Desktop : $workspaceUrl"
+    if ($wantCore -and $coreReady) { Write-Host "OK Core API : $coreUrl" }
+    Write-Host "OK Desktop  : $workspaceUrl"
     Write-Host ""
     if (-not $NoBrowser) {
         Start-Process $workspaceUrl
     }
 } else {
-    Write-Warning "ports did not become ready within 60s; check core/logs or desktop/logs"
-    Write-Warning "Core ready=$coreReady Desktop ready=$desktopReady"
+    Write-Warning "desktop (:$desktopPort) did not become ready within 60s; check desktop/logs"
     exit 1
 }
