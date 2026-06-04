@@ -4,7 +4,6 @@ import html
 import json
 import random
 import time
-from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -13,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import String, and_, case, cast, func, or_, select
 from sqlalchemy.orm import Session
 
-from ..database import SessionLocal, get_db
+from ..database import get_db
 from ..models.creator import Creator
 from ..models.creator_email_message import CreatorEmailMessage
 from ..models.email_auto import EmailAutoCampaign, EmailAutoJob, GmailAccountQuota
@@ -174,10 +173,6 @@ def _quota_window_start_text() -> str:
     return _quota_window_start().strftime("%Y-%m-%d %H:%M:%S.%f")
 
 
-def _quota_window_key() -> str:
-    return "rolling_24h"
-
-
 def _visible_gmail_accounts(db: Session, request: Request) -> list[GmailAccount]:
     user = current_user(request)
     department_code = current_department_code(request)
@@ -187,58 +182,11 @@ def _visible_gmail_accounts(db: Session, request: Request) -> list[GmailAccount]
     return list(db.scalars(q.order_by(GmailAccount.is_default.desc(), GmailAccount.created_at.asc())).all())
 
 
-def _gmail_sent_count_24h(db: Session, account: GmailAccount) -> int | None:
-    if not gmail_service.account_has_readonly_scope(account):
-        return None
-    service = gmail_service.build_gmail_service_for_account(db, account)
-    query = "newer_than:1d"
-    response = service.users().messages().list(
-        userId="me",
-        labelIds=["SENT"],
-        q=query,
-        maxResults=1,
-    ).execute()
-    return max(int(response.get("resultSizeEstimate") or 0), len(response.get("messages") or []))
-
-
-def _gmail_sent_count_24h_for_account(account_id: str) -> tuple[str, int | None]:
-    db = SessionLocal()
-    try:
-        account = db.get(GmailAccount, account_id)
-        if account is None or int(account.is_active or 0) != 1:
-            return account_id, None
-        count = _gmail_sent_count_24h(db, account)
-        db.commit()
-        return account_id, count
-    except Exception:
-        db.rollback()
-        return account_id, None
-    finally:
-        db.close()
-
-
-def _gmail_sent_counts_24h(account_ids: list[str], *, timeout_seconds: int = 20) -> dict[str, int]:
-    ids = [account_id for account_id in account_ids if account_id]
-    if not ids:
-        return {}
-    results: dict[str, int] = {}
-    executor = ThreadPoolExecutor(max_workers=min(8, len(ids)))
-    futures = [executor.submit(_gmail_sent_count_24h_for_account, account_id) for account_id in ids]
-    done, _pending = wait(futures, timeout=timeout_seconds)
-    for future in done:
-        account_id, count = future.result()
-        if count is not None:
-            results[account_id] = int(count)
-    executor.shutdown(wait=False, cancel_futures=True)
-    return results
-
-
-def _sync_mailboxes(db: Session, request: Request, *, refresh_usage: bool = False) -> list[GmailAccountQuota]:
+def _sync_mailboxes(db: Session, request: Request) -> list[GmailAccountQuota]:
     now = _now()
     department_code = _dept_for_write(request)
     rows: list[GmailAccountQuota] = []
     accounts = _visible_gmail_accounts(db, request)
-    sent_counts = _gmail_sent_counts_24h([account.id for account in accounts]) if refresh_usage else {}
     for account in accounts:
         quota_id = f"gmq_{account.id}"
         row = db.get(GmailAccountQuota, quota_id)
@@ -258,10 +206,8 @@ def _sync_mailboxes(db: Session, request: Request, *, refresh_usage: bool = Fals
             row.email = account.email
             row.department_code = account.department_code or row.department_code or department_code
             row.last_synced_at = now
-        if refresh_usage and account.id in sent_counts:
-            row.synced_sent_today = int(sent_counts[account.id])
-            row.synced_sent_date = _quota_window_key()
-            row.last_synced_at = now
+        row.synced_sent_today = 0
+        row.synced_sent_date = None
         rows.append(row)
     db.commit()
     return rows
@@ -269,7 +215,7 @@ def _sync_mailboxes(db: Session, request: Request, *, refresh_usage: bool = Fals
 
 def _daily_auto_sent(db: Session, email: str, quota_row: GmailAccountQuota | None = None) -> int:
     window_start = _quota_window_start_text()
-    system_sent = int(db.scalar(
+    return int(db.scalar(
         select(func.count())
         .select_from(OutreachEmail)
         .where(
@@ -279,17 +225,6 @@ def _daily_auto_sent(db: Session, email: str, quota_row: GmailAccountQuota | Non
             cast(OutreachEmail.sent_at, String) >= window_start,
         )
     ) or 0)
-    row = quota_row
-    if row is None:
-        row = db.scalar(
-            select(GmailAccountQuota)
-            .where(func.lower(GmailAccountQuota.email) == email.lower())
-            .limit(1)
-        )
-    synced_sent = 0
-    if row is not None and row.synced_sent_date == _quota_window_key():
-        synced_sent = int(row.synced_sent_today or 0)
-    return max(system_sent, synced_sent)
 
 
 def _daily_direction_count(db: Session, email: str, direction: str) -> int:
@@ -533,7 +468,7 @@ def dashboard(
 @router.post("/mailboxes/sync")
 def sync_mailboxes(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     current_user(request)
-    rows = _sync_mailboxes(db, request, refresh_usage=True)
+    rows = _sync_mailboxes(db, request)
     return {"ok": True, "items": [_serialize_mailbox(db, row) for row in rows], "total": len(rows)}
 
 

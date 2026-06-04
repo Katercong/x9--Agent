@@ -69,14 +69,9 @@ def test_mailbox_quota_usage_uses_rolling_24_hour_window(monkeypatch):
             department_code="cross_border",
             daily_quota=150,
             synced_sent_today=7,
-            synced_sent_date=now.date().isoformat(),
+            synced_sent_date="rolling_24h",
         )
         db.add(quota)
         db.commit()
 
         assert email_auto._daily_auto_sent(db, email, quota) == 1
-
-        quota.synced_sent_date = email_auto._quota_window_key()
-        db.commit()
-
-        assert email_auto._daily_auto_sent(db, email, quota) == 7
