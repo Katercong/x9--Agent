@@ -728,7 +728,7 @@ function PlanModal({
   const [hourlyLimit, setHourlyLimit] = useState(40);
   const [intervalMin, setIntervalMin] = useState(90);
   const [intervalMax, setIntervalMax] = useState(240);
-  const [sendMode, setSendMode] = useState<'draft' | 'send'>('draft');
+  const [sendMode, setSendMode] = useState<'draft' | 'send'>('send');
   const [candidateLimit, setCandidateLimit] = useState(200);
   const usTimeReference = buildUsTimeReference(startTime, endTime);
 
@@ -742,7 +742,7 @@ function PlanModal({
 
   const createPayload = (): EmailAutoCampaignCreate => ({
     name: planName,
-    status: sendMode === 'send' ? 'paused' : 'running',
+    status: 'running',
     schedule_type: scheduleType,
     weekdays: selectedWeekdays,
     month_days: [1],

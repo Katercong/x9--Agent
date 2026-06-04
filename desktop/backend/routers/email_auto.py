@@ -697,17 +697,28 @@ def process_jobs(body: ProcessJobsIn, request: Request, db: Session = Depends(ge
     user = current_user(request)
     if not body.confirm_send:
         raise HTTPException(status_code=400, detail="confirm_send must be true")
-    department_code = current_department_code(request)
+    results = process_due_email_auto_jobs(db, limit=body.limit, department_code=current_department_code(request), user=user)
+    return {"ok": True, "processed": len(results), "results": results}
+
+
+def process_due_email_auto_jobs(
+    db: Session,
+    *,
+    limit: int = 5,
+    department_code: str | None = None,
+    user: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     now = _now()
     filters = [EmailAutoJob.status == "pending", or_(EmailAutoJob.scheduled_at.is_(None), EmailAutoJob.scheduled_at <= now)]
     where = department_where(EmailAutoJob, department_code)
     if where is not None:
         filters.append(where)
-    rows = list(db.scalars(select(EmailAutoJob).where(*filters).order_by(EmailAutoJob.scheduled_at.asc(), EmailAutoJob.created_at.asc()).limit(body.limit)).all())
+    rows = list(db.scalars(select(EmailAutoJob).where(*filters).order_by(EmailAutoJob.scheduled_at.asc(), EmailAutoJob.created_at.asc()).limit(limit)).all())
+    actor = user or {"id": "email_auto_scheduler", "identity": "email_auto_scheduler"}
     results: list[dict[str, Any]] = []
     for job in rows:
-        results.append(_process_one_job(db, job, user))
-    return {"ok": True, "processed": len(results), "results": results}
+        results.append(_process_one_job(db, job, actor))
+    return results
 
 
 def _process_one_job(db: Session, job: EmailAutoJob, user: dict[str, Any]) -> dict[str, Any]:

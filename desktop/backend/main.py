@@ -19,6 +19,7 @@ from .database import SessionLocal, init_db
 from .models.request_log import RequestLog
 from .utils import (
     collector_queue_scheduler,
+    email_auto_scheduler,
     foreign_trade_scoring_scheduler,
     gmail_sync_scheduler,
     log_scheduler,
@@ -120,6 +121,9 @@ def startup() -> None:
     # Gmail replies are checked from the already-sent creator outreach threads
     # every 10 minutes so the email tracking page reflects real inbound mail.
     gmail_sync_scheduler.start_gmail_reply_sync()
+    # Auto email campaigns process due queue jobs in the background using the
+    # same Gmail send path as the manual "process jobs" action.
+    email_auto_scheduler.start_email_auto_processor()
 
 
 PUBLIC_API_PATHS = {
