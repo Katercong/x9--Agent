@@ -467,6 +467,10 @@ def _sync_campaign_queue_to_limit(
 def _maintain_campaign_queue(db: Session, campaign: EmailAutoCampaign, *, now: datetime) -> dict[str, int]:
     summary = {"created": 0, "trimmed": 0, "cleared": 0}
     if campaign.status != "running":
+        summary["cleared"] += _clear_pending_jobs_for_campaign(db, campaign)
+        if campaign.queue_window_key and campaign.queue_cleared_window_key != campaign.queue_window_key:
+            campaign.queue_cleared_window_key = campaign.queue_window_key
+            db.commit()
         return summary
     if _campaign_is_due(campaign, now):
         window_start, _window_end = _campaign_window_bounds(campaign, now)
@@ -499,7 +503,7 @@ def maintain_email_auto_campaign_queues(
     now: datetime | None = None,
 ) -> dict[str, int]:
     current = now or _now()
-    filters = [EmailAutoCampaign.status == "running"]
+    filters = []
     where = department_where(EmailAutoCampaign, department_code)
     if where is not None:
         filters.append(where)
