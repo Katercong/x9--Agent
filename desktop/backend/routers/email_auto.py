@@ -55,7 +55,7 @@ class CampaignIn(BaseModel):
     month_days: list[int] = Field(default_factory=list)
     start_time: str = "09:30"
     end_time: str = "18:00"
-    daily_limit: int = Field(default=100, ge=1, le=2000)
+    daily_limit: int = Field(default=100, ge=1, le=100000)
     hourly_limit: int = Field(default=20, ge=1, le=500)
     interval_min_seconds: int = Field(default=90, ge=30, le=3600)
     interval_max_seconds: int = Field(default=240, ge=30, le=7200)
@@ -270,6 +270,29 @@ def _serialize_mailbox(db: Session, row: GmailAccountQuota) -> dict[str, Any]:
         "last_sync_at": _iso(row.last_synced_at),
         "last_sent_at": _iso(row.last_sent_at),
     }
+
+
+def _mailbox_send_capacity(db: Session, department_code: str | None) -> dict[str, int]:
+    filters = [GmailAccountQuota.enabled == 1, GmailAccountQuota.status == "normal"]
+    where = department_where(GmailAccountQuota, department_code)
+    if where is not None:
+        filters.append(where)
+    rows = list(db.scalars(select(GmailAccountQuota).where(*filters)).all())
+    total_quota = 0
+    remaining_today = 0
+    usable_count = 0
+    now = _now()
+    for row in rows:
+        if row.cooldown_until and row.cooldown_until > now:
+            continue
+        quota = max(0, int(row.daily_quota or 0))
+        sent = _daily_auto_sent(db, row.email)
+        remaining = max(0, quota - sent)
+        total_quota += quota
+        remaining_today += remaining
+        if remaining > 0:
+            usable_count += 1
+    return {"mailboxes": usable_count, "daily_capacity": total_quota, "remaining_today": remaining_today}
 
 
 def _next_send_label(row: GmailAccountQuota, auto_sent: int) -> str:
@@ -624,6 +647,13 @@ def remove_mailbox(quota_id: str, request: Request, db: Session = Depends(get_db
 def create_campaign(body: CampaignIn, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     user = current_user(request)
     department_code = _dept_for_write(request)
+    _sync_mailboxes(db, request)
+    capacity = _mailbox_send_capacity(db, department_code)
+    daily_limit = int(body.daily_limit)
+    if capacity["daily_capacity"] > 0:
+        daily_limit = min(daily_limit, capacity["daily_capacity"])
+    hourly_limit = min(int(body.hourly_limit), daily_limit)
+    candidate_limit = min(int(body.candidate_limit), daily_limit)
     filters = {**DEFAULT_FILTERS, **(body.filters or {})}
     interval_max = max(body.interval_min_seconds, body.interval_max_seconds)
     row = EmailAutoCampaign(
@@ -636,8 +666,8 @@ def create_campaign(body: CampaignIn, request: Request, db: Session = Depends(ge
         month_days_json=_json_dumps(body.month_days),
         start_time=body.start_time,
         end_time=body.end_time,
-        daily_limit=body.daily_limit,
-        hourly_limit=body.hourly_limit,
+        daily_limit=daily_limit,
+        hourly_limit=hourly_limit,
         interval_min_seconds=body.interval_min_seconds,
         interval_max_seconds=interval_max,
         mailbox_pool=body.mailbox_pool,
@@ -648,7 +678,7 @@ def create_campaign(body: CampaignIn, request: Request, db: Session = Depends(ge
     db.add(row)
     db.commit()
     db.refresh(row)
-    created_jobs = _generate_jobs_for_campaign(db, row, candidate_limit=body.candidate_limit) if body.generate_jobs else 0
+    created_jobs = _generate_jobs_for_campaign(db, row, candidate_limit=candidate_limit) if body.generate_jobs else 0
     return {"ok": True, "item": _serialize_campaign(db, row), "created_jobs": created_jobs}
 
 

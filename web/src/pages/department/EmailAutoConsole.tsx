@@ -57,6 +57,7 @@ interface MailboxQuota {
   enabled: boolean;
   autoSent: number;
   quota: number;
+  remaining: number;
   replies: number;
   bounces: number;
   failures: number;
@@ -192,6 +193,7 @@ export default function EmailAutoConsole() {
     enabled: item.enabled,
     autoSent: item.auto_sent,
     quota: item.quota,
+    remaining: item.remaining,
     replies: item.replies,
     bounces: item.bounces,
     failures: item.failures,
@@ -528,6 +530,7 @@ export default function EmailAutoConsole() {
         <PlanModal
           scheduleType={scheduleType}
           selectedWeekdays={selectedWeekdays}
+          mailboxes={mailboxes}
           onScheduleTypeChange={setScheduleType}
           onWeekdaysChange={setSelectedWeekdays}
           onClose={() => setShowPlanModal(false)}
@@ -720,6 +723,7 @@ function shiftChinaTime(value: string, offsetHours: number) {
 function PlanModal({
   scheduleType,
   selectedWeekdays,
+  mailboxes,
   onScheduleTypeChange,
   onWeekdaysChange,
   onClose,
@@ -730,6 +734,7 @@ function PlanModal({
 }: {
   scheduleType: ScheduleType;
   selectedWeekdays: string[];
+  mailboxes: MailboxQuota[];
   onScheduleTypeChange: (value: ScheduleType) => void;
   onWeekdaysChange: (value: string[]) => void;
   onClose: () => void;
@@ -748,6 +753,26 @@ function PlanModal({
   const [sendMode, setSendMode] = useState<'draft' | 'send'>('send');
   const [candidateLimit, setCandidateLimit] = useState(200);
   const usTimeReference = buildUsTimeReference(startTime, endTime);
+  const capacityMailboxes = useMemo(
+    () => mailboxes.filter((item) => item.enabled && item.quota > 0 && !['auth_expired', 'bounce_risk', 'cooldown'].includes(item.status)),
+    [mailboxes],
+  );
+  const usableMailboxes = useMemo(
+    () => capacityMailboxes.filter((item) => item.status === 'normal'),
+    [capacityMailboxes],
+  );
+  const mailboxDailyCapacity = capacityMailboxes.reduce((sum, item) => sum + Math.max(0, item.quota || 0), 0);
+  const mailboxRemainingToday = capacityMailboxes.reduce((sum, item) => sum + Math.max(0, item.remaining || 0), 0);
+  const minMailboxQuota = capacityMailboxes.length ? Math.min(...capacityMailboxes.map((item) => Math.max(0, item.quota || 0))) : 0;
+  const maxMailboxQuota = capacityMailboxes.length ? Math.max(...capacityMailboxes.map((item) => Math.max(0, item.quota || 0))) : 0;
+  const protectedDailyLimit = mailboxDailyCapacity > 0
+    ? Math.max(1, Math.min(dailyLimit, mailboxDailyCapacity))
+    : Math.max(1, dailyLimit);
+  const protectedHourlyLimit = Math.max(1, Math.min(hourlyLimit, protectedDailyLimit));
+  const protectedCandidateLimit = Math.max(1, Math.min(candidateLimit, protectedDailyLimit, 1000));
+  const todayExecutableLimit = Math.min(protectedDailyLimit, mailboxRemainingToday);
+  const dailyLimitAdjusted = mailboxDailyCapacity > 0 && dailyLimit > mailboxDailyCapacity;
+  const candidateLimitAdjusted = candidateLimit > protectedCandidateLimit;
 
   const toggleWeekday = (day: string) => {
     if (selectedWeekdays.includes(day)) {
@@ -765,8 +790,8 @@ function PlanModal({
     month_days: [1],
     start_time: startTime,
     end_time: endTime,
-    daily_limit: dailyLimit,
-    hourly_limit: hourlyLimit,
+    daily_limit: protectedDailyLimit,
+    hourly_limit: protectedHourlyLimit,
     interval_min_seconds: Math.min(intervalMin, intervalMax),
     interval_max_seconds: Math.max(intervalMin, intervalMax),
     mailbox_pool: 'all',
@@ -781,7 +806,7 @@ function PlanModal({
       sort: 'recommended',
     },
     generate_jobs: true,
-    candidate_limit: candidateLimit,
+    candidate_limit: protectedCandidateLimit,
   });
 
   return (
@@ -873,13 +898,13 @@ function PlanModal({
           </div>
 
           <div className="mt-4 grid gap-4 lg:grid-cols-4">
-            <FormField label="每日总量">
+            <FormField label="期望每日总量（全计划）">
               <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={dailyLimit} onChange={(event) => setDailyLimit(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
             </FormField>
-            <FormField label="每小时上限">
+            <FormField label="计划每小时上限">
               <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={hourlyLimit} onChange={(event) => setHourlyLimit(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
             </FormField>
-            <FormField label="随机间隔">
+            <FormField label="单邮箱发送间隔（秒）">
               <div className="grid grid-cols-2 gap-2">
                 <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={intervalMin} onChange={(event) => setIntervalMin(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
                 <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={intervalMax} onChange={(event) => setIntervalMax(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
@@ -894,9 +919,27 @@ function PlanModal({
           </div>
 
           <div className="mt-4 grid gap-4 lg:grid-cols-4">
-            <FormField label="候选上限">
+            <FormField label="本次生成队列数">
               <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={candidateLimit} onChange={(event) => setCandidateLimit(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
             </FormField>
+          </div>
+
+          <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+            <div className="font-semibold text-amber-900">额度保护规则：实际发送量 = min(期望每日总量、邮箱池日额度、本次队列数)</div>
+            <div className="mt-2 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+              <QuotaStat label="可用/计入额度邮箱" value={`${usableMailboxes.length}/${capacityMailboxes.length} 个`} />
+              <QuotaStat label="单邮箱日额度" value={capacityMailboxes.length ? `${minMailboxQuota}-${maxMailboxQuota} 封` : '无'} />
+              <QuotaStat label="邮箱池日额度" value={`${mailboxDailyCapacity} 封`} />
+              <QuotaStat label="今日剩余额度" value={`${mailboxRemainingToday} 封`} />
+              <QuotaStat label="保存后的日上限" value={`${protectedDailyLimit} 封`} />
+              <QuotaStat label="本次生成队列" value={`${protectedCandidateLimit} 条`} />
+            </div>
+            <div className="mt-2 text-xxs text-amber-700">
+              每封真实发送前都会重新检查发件邮箱今日已发量；单个邮箱达到额度后会自动换邮箱，没有可用额度时任务停在队列中。
+              {dailyLimitAdjusted ? ` 当前每日总量已从 ${dailyLimit} 自动按邮箱池日额度收紧到 ${protectedDailyLimit}。` : ''}
+              {candidateLimitAdjusted ? ` 当前队列数已从 ${candidateLimit} 自动按计划日上限和单次生成上限收紧到 ${protectedCandidateLimit}。` : ''}
+              {todayExecutableLimit < protectedDailyLimit ? ` 按今日剩余额度，本日最多还能实际发送 ${todayExecutableLimit} 封。` : ''}
+            </div>
           </div>
 
           <div className="mt-4 rounded-md border border-line p-4">
@@ -1103,6 +1146,15 @@ function CheckLine({ children }: { children: React.ReactNode }) {
     <div className="flex items-start gap-2">
       <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
       <span>{children}</span>
+    </div>
+  );
+}
+
+function QuotaStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded border border-amber-200 bg-white px-3 py-2">
+      <div className="text-xxs text-amber-700">{label}</div>
+      <div className="num mt-1 font-bold text-amber-900">{value}</div>
     </div>
   );
 }
