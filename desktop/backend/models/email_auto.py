@@ -39,6 +39,8 @@ class GmailAccountQuota(Base):
     email: Mapped[str] = mapped_column(String(320), index=True)
     enabled: Mapped[int] = mapped_column(Integer, default=1, index=True)
     daily_quota: Mapped[int] = mapped_column(Integer, default=40)
+    synced_sent_today: Mapped[int] = mapped_column(Integer, default=0)
+    synced_sent_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status: Mapped[str] = mapped_column(String(40), default="normal", index=True)
     cooldown_until: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
     last_sent_at: Mapped[object | None] = mapped_column(DateTime, nullable=True)

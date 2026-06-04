@@ -477,7 +477,7 @@ export default function EmailAutoConsole() {
         <div className="min-w-[130px]">
           <div className="num font-semibold text-gray-900">{row.autoSent}/{row.quota}</div>
           <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-gray-100">
-            <div className={cn('h-full rounded-full', row.status === 'cooldown' ? 'bg-amber-500' : 'bg-green-500')} style={{ width: `${row.quota > 0 ? Math.min(100, (row.autoSent / row.quota) * 100) : 0}%` }} />
+            <div className={cn('h-full rounded-full', row.status === 'cooldown' ? 'bg-amber-500' : 'bg-green-500')} style={{ width: `${Math.min(100, (row.autoSent / row.quota) * 100)}%` }} />
           </div>
           <div className="mt-1 text-xxs text-muted">剩余 {Math.max(0, row.quota - row.autoSent)} 封</div>
         </div>
@@ -491,10 +491,7 @@ export default function EmailAutoConsole() {
       header: '授权 / 额度',
       align: 'right',
       cell: (row) => (
-        <div className="flex min-w-[130px] flex-col items-end gap-1">
-          <div className="num text-xs font-semibold text-gray-900">每日额度 {row.quota} 封</div>
-          <button className="btn btn-ghost" onClick={() => setEditingMailbox(row)}><Settings2 size={13} />编辑授权 / 额度</button>
-        </div>
+        <button className="btn btn-ghost" onClick={() => setEditingMailbox(row)}><Settings2 size={13} />编辑授权</button>
       ),
     },
   ];
