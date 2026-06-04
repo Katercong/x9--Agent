@@ -155,6 +155,8 @@ def _is_public_api_path(path: str) -> bool:
 def _admin_spa_role(path: str) -> str | None:
     if path == "/":
         return "root"
+    if path.startswith("/d/email-auto"):
+        return "super_admin"
     if path.startswith("/a/"):
         return "super_admin"
     if path.startswith("/c/"):

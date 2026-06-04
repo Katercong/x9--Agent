@@ -66,6 +66,13 @@ def require_admin(request: Request) -> dict[str, Any]:
     return user
 
 
+def require_super_admin(request: Request) -> dict[str, Any]:
+    user = current_user(request)
+    if user.get("role") != "super_admin" or user.get("entry_scope") != "admin":
+        raise HTTPException(status_code=403, detail="super admin only")
+    return user
+
+
 def effective_row_department(row: dict[str, Any] | Any) -> str:
     if isinstance(row, dict):
         value = row.get("department_code")

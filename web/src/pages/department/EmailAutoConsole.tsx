@@ -1559,7 +1559,7 @@ function MailboxModal({
         <div className="flex justify-end gap-2 border-t border-line p-4">
           <button className="btn text-red-600 hover:border-red-200 hover:bg-red-50" disabled={removing || saving} onClick={onRemove}><Trash2 size={13} />取消授权</button>
           <button className="btn" onClick={onClose}>取消</button>
-          <a className="btn" href={`/api/local/outreach/gmail/connect?label=${encodeURIComponent(mailbox.email)}&return_to=${encodeURIComponent('/d/email-auto')}`}><RefreshCw size={13} />重新授权</a>
+          <a className="btn" href={`/api/local/outreach/gmail/connect?label=${encodeURIComponent(mailbox.email)}&return_to=${encodeURIComponent('/a/email-auto')}`}><RefreshCw size={13} />重新授权</a>
           <button className="btn btn-primary" disabled={saving} onClick={() => onSave({ enabled, daily_quota: quota })}>保存配置</button>
         </div>
       </div>

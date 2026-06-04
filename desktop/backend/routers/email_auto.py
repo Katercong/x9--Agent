@@ -20,14 +20,14 @@ from ..models.gmail_account import GmailAccount
 from ..models.gmail_sync_state import GmailSyncState
 from ..models.outreach_email import OutreachEmail
 from ..services import gmail_service, product_asset_service
-from ..services.departments import DEFAULT_DEPARTMENT, current_department_code, current_user, department_where, row_in_department
+from ..services.departments import DEFAULT_DEPARTMENT, current_department_code, current_user, department_where, require_super_admin, row_in_department
 from ..services.post_processing import create_outreach_event
 from ..services.tk_script_service import build_tk_context, build_tk_email_subject, generate_strategy_template
 from ..utils.current_status import STATUS_CONTACTED, normalize_current_status
 from ..utils.id_utils import new_id
 
 
-router = APIRouter(prefix="/api/local/email-auto", tags=["email-auto"])
+router = APIRouter(prefix="/api/local/email-auto", tags=["email-auto"], dependencies=[Depends(require_super_admin)])
 
 
 DEFAULT_FILTERS: dict[str, Any] = {

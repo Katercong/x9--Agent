@@ -62,7 +62,6 @@ export const departmentMenu: MenuEntry[] = [
   { key: 'd-creators', label: '达人管理', to: '/d/creators', icon: Users },
   { key: 'd-leads', label: '线索管理', to: '/d/leads', icon: Search },
   { key: 'd-emails', label: '邮件跟踪', to: '/d/emails', icon: Mail },
-  { key: 'd-email-auto', label: '自动邮件控制台', to: '/d/email-auto', icon: CalendarClock },
   { key: 'd-samples', label: '样品管理', to: '/d/samples', icon: Package },
   { key: 'd-videos', label: '视频管理', to: '/d/videos', icon: Video },
   { key: 'd-products', label: '产品管理', to: '/d/products', icon: ShoppingBag },
@@ -86,7 +85,6 @@ export const foreignTradeDepartmentMenu: MenuEntry[] = [
   { key: 'd-talent-leads', label: '跨境人才库', to: '/d/talent-leads', icon: Users },
   { key: 'd-social-leads', label: '社媒线索', to: '/d/social-leads', icon: Heart },
   { key: 'd-emails', label: '邮件管理', to: '/d/emails', icon: Mail },
-  { key: 'd-email-auto', label: '自动邮件控制台', to: '/d/email-auto', icon: CalendarClock },
   { key: 'd-settings', label: '设置中心', to: '/d/settings', icon: Settings },
 ];
 
@@ -133,7 +131,6 @@ export const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/d/creators': { title: '达人管理', subtitle: '管辖范围内达人的全生命周期管理' },
   '/d/leads': { title: '线索管理', subtitle: '从爬虫池筛选高质量达人候选' },
   '/d/emails': { title: '达人邮件跟踪', subtitle: '按达人建联邮箱归档、同步回复并锁定原发件邮箱' },
-  '/d/email-auto': { title: '自动邮件控制台', subtitle: '按时间窗口、邮箱额度和达人筛选条件自动生成并发送建联邮件' },
   '/d/samples': { title: '样品管理', subtitle: '寄样物流、签收跟踪与异常预警' },
   '/d/videos': { title: '视频管理', subtitle: '在投视频实时表现监控' },
   '/d/products': { title: '产品管理', subtitle: 'SKU 主数据维护与文案生成' },

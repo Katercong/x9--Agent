@@ -3,14 +3,36 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta
 
+import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from desktop.backend.database import SessionLocal
+from desktop.backend.main import app
 from desktop.backend.models.creator import Creator
 from desktop.backend.models.email_auto import EmailAutoCampaign, EmailAutoJob, GmailAccountQuota
 from desktop.backend.models.gmail_account import GmailAccount
 from desktop.backend.models.outreach_email import OutreachEmail
 from desktop.backend.routers import email_auto
+from desktop.backend.services import auth_service
+
+
+@pytest.fixture()
+def client():
+    with SessionLocal() as db:
+        user = auth_service.upsert_user(
+            db,
+            username="email_auto_super",
+            password="Preview@2026",
+            role="super_admin",
+            department_code=None,
+            approval_status=auth_service.ACTIVE_STATUS,
+            is_active=True,
+        )
+        token, _ = auth_service.create_session_for_user(db, user, entry_scope="admin")
+    test_client = TestClient(app)
+    test_client.cookies.set(auth_service.SESSION_COOKIE, token)
+    return test_client
 
 
 def test_mailbox_quota_usage_uses_rolling_24_hour_window(monkeypatch):

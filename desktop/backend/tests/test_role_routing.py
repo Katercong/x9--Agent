@@ -71,12 +71,37 @@ def test_super_admin_root_goes_to_workbench_dashboard() -> None:
     assert response.headers["location"] == "/a/dashboard"
 
 
+def test_super_admin_can_enter_email_auto_spa() -> None:
+    client = _client_for_role("route_super_email_auto", "super_admin")
+
+    response = client.get("/a/email-auto", follow_redirects=False)
+
+    assert response.status_code == 200
+
+
 def test_department_admin_can_enter_department_admin_spa() -> None:
     client = _client_for_role("route_department_admin", "department_admin")
 
     response = client.get("/d/dashboard", follow_redirects=False)
 
     assert response.status_code == 200
+
+
+def test_department_admin_cannot_enter_email_auto_spa() -> None:
+    client = _client_for_role("route_department_email_auto", "department_admin")
+
+    response = client.get("/d/email-auto", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/d/dashboard"
+
+
+def test_department_admin_cannot_call_email_auto_api() -> None:
+    client = _client_for_role("route_department_email_auto_api", "department_admin")
+
+    response = client.get("/api/local/email-auto/dashboard")
+
+    assert response.status_code == 403
 
 
 def test_department_admin_cannot_enter_member_portal() -> None:
