@@ -24,6 +24,7 @@ import type {
   ProductAsset,
   EmailAutoCampaignCreate,
   EmailAutoDashboardResponse,
+  EmailAutoHealthCheckResponse,
   EmailAutoMailboxQuota,
   EmailAutoCampaign,
   EmailAutoJob,
@@ -122,13 +123,7 @@ export const endpoints = {
       `${LOCAL}/email-auto/mailboxes/${encodeURIComponent(id)}`,
     ),
   emailAutoHealthCheck: (body?: { max_accounts?: number; poll_seconds?: number }) =>
-    api.post<{
-      ok: boolean;
-      total: number;
-      passed: number;
-      failed: number;
-      items: Array<Record<string, unknown>>;
-    }>(`${LOCAL}/email-auto/mailboxes/health-check`, body || {}),
+    api.post<EmailAutoHealthCheckResponse>(`${LOCAL}/email-auto/mailboxes/health-check`, body || {}),
   emailAutoCreateCampaign: (body: EmailAutoCampaignCreate) =>
     api.post<{ ok: boolean; item: EmailAutoCampaign; created_jobs: number }>(`${LOCAL}/email-auto/campaigns`, body),
   emailAutoCampaignPreview: (body: EmailAutoCampaignCreate) =>

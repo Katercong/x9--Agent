@@ -108,6 +108,39 @@ def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+def _health_step(action: str, label: str, status: str, detail: str = "") -> dict[str, Any]:
+    return {
+        "action": action,
+        "label": label,
+        "status": status,
+        "detail": detail,
+        "at": _iso(_now()),
+    }
+
+
+def _upsert_health_step(
+    item: dict[str, Any],
+    action: str,
+    label: str,
+    status: str,
+    detail: str = "",
+    *,
+    current: bool = True,
+) -> None:
+    steps = item.setdefault("steps", [])
+    for step in steps:
+        if step.get("action") == action:
+            step.update(_health_step(action, label, status, detail))
+            break
+    else:
+        steps.append(_health_step(action, label, status, detail))
+    if current:
+        item["current_action"] = label
+        item["current_action_status"] = status
+    if detail:
+        item["reason"] = detail
+
+
 def _dept_for_write(request: Request) -> str:
     department_code = current_department_code(request)
     user = current_user(request)
@@ -405,6 +438,8 @@ def sync_mailboxes(request: Request, db: Session = Depends(get_db)) -> dict[str,
 def health_check_mailboxes(request: Request, body: MailboxHealthCheckIn | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
     current_user(request)
     payload = body or MailboxHealthCheckIn()
+    started_at = _now()
+    marker = new_id("ehc")
     _sync_mailboxes(db, request)
     department_code = current_department_code(request)
     filters = [GmailAccountQuota.enabled == 1]
@@ -421,6 +456,9 @@ def health_check_mailboxes(request: Request, body: MailboxHealthCheckIn | None =
     if len(pairs) < 2:
         return {
             "ok": True,
+            "marker": marker,
+            "started_at": _iso(started_at),
+            "completed_at": _iso(_now()),
             "total": len(pairs),
             "passed": 0,
             "failed": len(pairs),
@@ -436,12 +474,12 @@ def health_check_mailboxes(request: Request, body: MailboxHealthCheckIn | None =
         }
 
     now = _now()
-    marker = new_id("ehc")
     checks: list[dict[str, Any]] = []
     for idx, (sender_quota, sender_account) in enumerate(pairs):
         recipient_quota, recipient_account = pairs[(idx + 1) % len(pairs)]
         subject = f"X9 mailbox health check {marker}-{idx + 1}"
         item = {
+            "check_id": f"{marker}-{idx + 1}",
             "sender_id": sender_quota.id,
             "sender_account_id": sender_account.id,
             "sender_email": sender_quota.email,
@@ -456,6 +494,22 @@ def health_check_mailboxes(request: Request, body: MailboxHealthCheckIn | None =
             "message_id": None,
             "thread_id": None,
             "found_message_id": None,
+            "current_action": "准备互发配对",
+            "current_action_status": "passed",
+            "started_at": _iso(now),
+            "completed_at": None,
+            "steps": [
+                _health_step(
+                    "prepare_pair",
+                    "准备互发配对",
+                    "passed",
+                    f"{sender_quota.email} -> {recipient_quota.email}",
+                ),
+                _health_step("send_test_email", "发送测试邮件", "running", "正在调用 Gmail 发送内部健康检查邮件"),
+                _health_step("wait_for_delivery", "等待邮件入箱", "pending", "发送成功后开始等待收件箱可读取"),
+                _health_step("read_recipient_mailbox", "读取收件箱确认", "pending", "等待 Gmail readonly 读取测试邮件"),
+                _health_step("update_mailbox_status", "更新邮箱状态", "pending", "等待检查结果"),
+            ],
         }
         try:
             result = gmail_service.send_email(
@@ -483,11 +537,18 @@ def health_check_mailboxes(request: Request, body: MailboxHealthCheckIn | None =
                     "reason": "已发送，等待收件邮箱读取确认",
                 }
             )
+            _upsert_health_step(item, "send_test_email", "发送测试邮件", "passed", f"Gmail 已返回 message_id={result.get('message_id') or 'unknown'}")
+            _upsert_health_step(item, "wait_for_delivery", "等待邮件入箱", "running", "已发送，正在等待收件邮箱同步到测试邮件")
         except Exception as exc:
             status = _mailbox_failure_status(exc)
             sender_quota.status = status
             sender_quota.last_synced_at = now
             item.update({"status": "failed", "reason": f"发送失败: {exc}"})
+        if item["status"] == "failed" and not item["send_ok"]:
+            _upsert_health_step(item, "send_test_email", "发送测试邮件", "failed", str(item.get("reason") or "发送失败"))
+            _upsert_health_step(item, "wait_for_delivery", "等待邮件入箱", "skipped", "发送失败，跳过收件确认", current=False)
+            _upsert_health_step(item, "read_recipient_mailbox", "读取收件箱确认", "skipped", "发送失败，跳过读取", current=False)
+            _upsert_health_step(item, "update_mailbox_status", "更新邮箱状态", "failed", f"发件邮箱状态标记为 {sender_quota.status}")
         checks.append(item)
 
     db.commit()
@@ -500,8 +561,12 @@ def health_check_mailboxes(request: Request, body: MailboxHealthCheckIn | None =
             recipient_quota = db.get(GmailAccountQuota, item["recipient_id"])
             recipient_account = db.get(GmailAccount, item["recipient_account_id"])
             if recipient_quota is None or recipient_account is None:
+                _upsert_health_step(item, "wait_for_delivery", "等待邮件入箱", "failed", "收件邮箱授权记录不存在")
+                _upsert_health_step(item, "read_recipient_mailbox", "读取收件箱确认", "failed", "收件邮箱授权记录不存在")
+                _upsert_health_step(item, "update_mailbox_status", "更新邮箱状态", "failed", "无法更新收件邮箱状态")
                 item.update({"status": "failed", "reason": "收件邮箱授权记录不存在"})
                 continue
+            _upsert_health_step(item, "read_recipient_mailbox", "读取收件箱确认", "running", f"正在读取 {recipient_quota.email} 的收件箱")
             try:
                 found_id = _find_health_check_message(
                     db,
@@ -513,9 +578,13 @@ def health_check_mailboxes(request: Request, body: MailboxHealthCheckIn | None =
                 status = _mailbox_failure_status(exc)
                 recipient_quota.status = status
                 recipient_quota.last_synced_at = _now()
+                _upsert_health_step(item, "read_recipient_mailbox", "读取收件箱确认", "failed", f"读取失败: {exc}")
+                _upsert_health_step(item, "update_mailbox_status", "更新邮箱状态", "failed", f"收件邮箱状态标记为 {status}")
                 item.update({"status": "failed", "reason": f"读取失败: {exc}"})
                 continue
             if found_id:
+                _upsert_health_step(item, "wait_for_delivery", "等待邮件入箱", "passed", "收件箱已出现测试邮件", current=False)
+                _upsert_health_step(item, "read_recipient_mailbox", "读取收件箱确认", "passed", f"已读取到 message_id={found_id}")
                 item.update({"read_ok": True, "found_message_id": found_id, "status": "passed", "reason": "发送和读取均通过"})
                 sender_quota = db.get(GmailAccountQuota, item["sender_id"])
                 if sender_quota is not None:
@@ -523,6 +592,7 @@ def health_check_mailboxes(request: Request, body: MailboxHealthCheckIn | None =
                     sender_quota.last_synced_at = _now()
                 recipient_quota.status = "normal"
                 recipient_quota.last_synced_at = _now()
+                _upsert_health_step(item, "update_mailbox_status", "更新邮箱状态", "passed", "发件和收件邮箱均标记为正常")
         db.commit()
         if any(item["send_ok"] and not item["read_ok"] for item in checks):
             time.sleep(3)
@@ -533,8 +603,15 @@ def health_check_mailboxes(request: Request, body: MailboxHealthCheckIn | None =
             if recipient_quota is not None:
                 recipient_quota.status = "bounce_risk"
                 recipient_quota.last_synced_at = _now()
+            _upsert_health_step(item, "wait_for_delivery", "等待邮件入箱", "failed", f"{payload.poll_seconds} 秒内未读取到测试邮件")
+            _upsert_health_step(item, "read_recipient_mailbox", "读取收件箱确认", "failed", "收件箱查询未命中健康检查邮件")
+            _upsert_health_step(item, "update_mailbox_status", "更新邮箱状态", "failed", "收件邮箱标记为 bounce_risk")
             item.update({"status": "failed", "reason": "已发送但收件邮箱未在等待时间内读取到检查邮件"})
     db.commit()
+
+    completed_at = _now()
+    for item in checks:
+        item["completed_at"] = _iso(completed_at)
 
     public_items = [
         {
@@ -551,12 +628,28 @@ def health_check_mailboxes(request: Request, body: MailboxHealthCheckIn | None =
                 "message_id",
                 "thread_id",
                 "found_message_id",
+                "check_id",
+                "subject",
+                "current_action",
+                "current_action_status",
+                "started_at",
+                "completed_at",
+                "steps",
             }
         }
         for item in checks
     ]
     passed = sum(1 for item in public_items if item["status"] == "passed")
-    return {"ok": True, "total": len(public_items), "passed": passed, "failed": len(public_items) - passed, "items": public_items}
+    return {
+        "ok": True,
+        "marker": marker,
+        "started_at": _iso(started_at),
+        "completed_at": _iso(completed_at),
+        "total": len(public_items),
+        "passed": passed,
+        "failed": len(public_items) - passed,
+        "items": public_items,
+    }
 
 
 def _mailbox_failure_status(exc: Exception) -> str:

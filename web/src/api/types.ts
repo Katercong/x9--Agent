@@ -180,6 +180,44 @@ export interface EmailAutoMailboxQuota {
   last_sent_at?: string | null;
 }
 
+export interface EmailAutoHealthCheckStep {
+  action: string;
+  label: string;
+  status: 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | string;
+  detail?: string;
+  at?: string | null;
+}
+
+export interface EmailAutoHealthCheckItem {
+  check_id?: string;
+  sender_email?: string | null;
+  recipient_email?: string | null;
+  subject?: string | null;
+  send_ok?: boolean;
+  read_ok?: boolean;
+  status: 'pending' | 'sent' | 'passed' | 'failed' | string;
+  reason?: string;
+  message_id?: string | null;
+  thread_id?: string | null;
+  found_message_id?: string | null;
+  current_action?: string;
+  current_action_status?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  steps?: EmailAutoHealthCheckStep[];
+}
+
+export interface EmailAutoHealthCheckResponse {
+  ok: boolean;
+  marker?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  total: number;
+  passed: number;
+  failed: number;
+  items: EmailAutoHealthCheckItem[];
+}
+
 export interface EmailAutoJob {
   id: string;
   time: string;

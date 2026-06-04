@@ -26,7 +26,7 @@ import {
   useEmailAutoMailboxUpdate,
   useEmailAutoSyncMailboxes,
 } from '@/hooks/useApi';
-import type { EmailAutoCampaignCreate, EmailAutoJob } from '@/api/types';
+import type { EmailAutoCampaignCreate, EmailAutoHealthCheckResponse, EmailAutoJob } from '@/api/types';
 
 type CampaignStatus = 'running' | 'paused' | 'draft';
 type MailboxStatus = 'normal' | 'cooldown' | 'limit' | 'auth_expired' | 'bounce_risk';
@@ -584,6 +584,7 @@ export default function EmailAutoConsole() {
           </div>
         </div>
         <DataTable columns={mailboxColumns} data={mailboxes} rowKey={(row) => row.id} emptyText={dashboardQ.isLoading ? '正在读取已绑定邮箱…' : '暂无已绑定 Gmail'} />
+        <HealthCheckPanel result={emailAutoActions.healthCheck.isPending ? null : (emailAutoActions.healthCheck.data ?? null)} running={emailAutoActions.healthCheck.isPending} />
       </section>
 
       <section className="card">
@@ -1200,6 +1201,117 @@ function RecommendationRuleText({
       />
     </label>
   );
+}
+
+function HealthCheckPanel({
+  result,
+  running,
+}: {
+  result: EmailAutoHealthCheckResponse | null;
+  running: boolean;
+}) {
+  if (!running && !result) return null;
+  const items = result?.items ?? [];
+  return (
+    <div className="border-t border-line bg-soft/60 p-4">
+      <div className="rounded-md border border-line bg-white">
+        <div className="flex flex-col gap-2 border-b border-line px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+              <ShieldCheck size={15} className={running ? 'text-blue-600' : 'text-green-600'} />
+              批量健康检查动作状态
+            </div>
+            <div className="mt-1 text-xxs text-muted">
+              {running
+                ? '正在执行真实 Gmail 内部互发互读，完成后显示每个邮箱的发送、等待、读取和状态更新结果。'
+                : `完成时间 ${result?.completed_at ? formatShortTime(result.completed_at) : '-'} · ${result?.passed ?? 0}/${result?.total ?? 0} 通过`}
+            </div>
+          </div>
+          {result ? (
+            <div className="flex flex-wrap gap-2">
+              <Pill tone="good">通过 {result.passed}</Pill>
+              <Pill tone={result.failed > 0 ? 'warn' : 'muted'}>失败 {result.failed}</Pill>
+              {result.marker ? <Pill tone="muted">{result.marker}</Pill> : null}
+            </div>
+          ) : (
+            <Pill tone="info">检查中</Pill>
+          )}
+        </div>
+
+        {running && items.length === 0 ? (
+          <div className="grid gap-2 p-4 text-xs text-muted md:grid-cols-5">
+            {['准备邮箱池', '发送测试邮件', '等待邮件入箱', '读取收件箱确认', '更新邮箱状态'].map((label, index) => (
+              <div key={label} className="flex items-center gap-2 rounded border border-line bg-white px-3 py-2">
+                {index === 0 ? <RefreshCw size={13} className="animate-spin text-blue-600" /> : <span className="h-2 w-2 rounded-full bg-gray-300" />}
+                <span>{label}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {items.length > 0 ? (
+          <div className="grid gap-3 p-4">
+            {items.map((item, index) => (
+              <div key={item.check_id || `${item.sender_email}-${index}`} className="rounded-md border border-line bg-white p-3">
+                <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="num text-xs font-semibold text-gray-900">
+                      {item.sender_email || '-'} <span className="text-muted">-&gt;</span> {item.recipient_email || '-'}
+                    </div>
+                    <div className="mt-1 text-xxs text-muted">
+                      当前动作：{item.current_action || healthStatusLabel(item.status)}
+                      {item.reason ? ` · ${item.reason}` : ''}
+                    </div>
+                  </div>
+                  <HealthStatusBadge status={item.status} />
+                </div>
+                <div className="mt-3 grid gap-2 md:grid-cols-5">
+                  {(item.steps || []).map((step) => (
+                    <div key={step.action} className="rounded border border-line bg-soft px-3 py-2">
+                      <div className="flex items-center gap-2 text-xxs font-semibold text-gray-800">
+                        <StepDot status={step.status} />
+                        <span>{step.label}</span>
+                      </div>
+                      <div className="mt-1 text-[11px] leading-4 text-muted">{step.detail || healthStatusLabel(step.status)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function HealthStatusBadge({ status }: { status: string }) {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'passed') return <Pill tone="good">通过</Pill>;
+  if (normalized === 'failed') return <Pill tone="warn">失败</Pill>;
+  if (normalized === 'sent' || normalized === 'running' || normalized === 'pending') return <Pill tone="info">执行中</Pill>;
+  return <Pill tone="muted">{healthStatusLabel(status)}</Pill>;
+}
+
+function StepDot({ status }: { status: string }) {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'passed') return <CheckCircle2 size={13} className="text-green-600" />;
+  if (normalized === 'failed') return <X size={13} className="text-red-500" />;
+  if (normalized === 'running') return <RefreshCw size={13} className="animate-spin text-blue-600" />;
+  if (normalized === 'skipped') return <span className="h-2 w-2 rounded-full bg-amber-400" />;
+  return <span className="h-2 w-2 rounded-full bg-gray-300" />;
+}
+
+function healthStatusLabel(status: string) {
+  const normalized = String(status || '').toLowerCase();
+  return ({
+    pending: '等待中',
+    running: '执行中',
+    sent: '已发送',
+    passed: '通过',
+    failed: '失败',
+    skipped: '已跳过',
+  } as Record<string, string>)[normalized] || status || '-';
 }
 
 function MailboxModal({
