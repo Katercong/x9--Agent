@@ -529,8 +529,7 @@ export default function EmailAutoConsole() {
         </div>
       </section>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,.75fr)]">
-        <section className="card">
+      <section className="card">
           <div className="card-body border-b border-line">
             <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
               <div>
@@ -543,27 +542,12 @@ export default function EmailAutoConsole() {
           <DataTable columns={campaignColumns} data={campaigns} rowKey={(row) => row.id} emptyText={dashboardQ.isLoading ? '正在读取自动邮件计划…' : '暂无自动发送计划'} />
         </section>
 
-        <section className="card">
-          <div className="card-body border-b border-line">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-gray-900">达人来源：客户推荐库</h3>
-                <p className="mt-0.5 text-xxs text-muted">发送对象只从客户推荐库筛选，发送后状态更新到邮件跟踪。</p>
-              </div>
-              <Pill tone="good">保护规则开启</Pill>
-            </div>
-          </div>
-          <div className="p-4">
-            <RecommendationRulesPanel filters={DEFAULT_RECOMMENDATION_FILTERS} onChange={() => undefined} compact readOnly />
-          </div>
-        </section>
-      </div>
-
-      <section className="card">
+      <div className="grid gap-4 xl:grid-cols-2">
+        <section className="card min-w-0">
         <div className="card-body border-b border-line">
           <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h3 className="text-sm font-semibold text-gray-900">邮箱额度中心</h3>
+              <h3 className="text-sm font-semibold text-gray-900">邮箱健康</h3>
               <p className="mt-0.5 text-xxs text-muted">自动获取当前已绑定 Gmail，可编辑授权信息、启用状态和每日发送数量额度。</p>
             </div>
             <div className="flex gap-2">
@@ -587,11 +571,11 @@ export default function EmailAutoConsole() {
         <HealthCheckPanel result={emailAutoActions.healthCheck.isPending ? null : (emailAutoActions.healthCheck.data ?? null)} running={emailAutoActions.healthCheck.isPending} />
       </section>
 
-      <section className="card">
+        <section className="card min-w-0">
         <div className="card-body border-b border-line">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h3 className="text-sm font-semibold text-gray-900">队列 / 日志</h3>
+              <h3 className="text-sm font-semibold text-gray-900">任务队列</h3>
               <p className="mt-0.5 text-xxs text-muted">发送成功后自动更新达人状态：待建联 → 已发送首封，并进入邮件跟踪系统同步线程。</p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -629,7 +613,8 @@ export default function EmailAutoConsole() {
           </div>
         </div>
         <DataTable columns={jobColumns} data={filteredJobs} rowKey={(row) => row.id} emptyText={dashboardQ.isLoading ? '正在读取队列任务…' : '当前筛选下暂无任务'} />
-      </section>
+        </section>
+      </div>
 
       {showPlanModal && (
         <PlanModal
