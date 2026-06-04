@@ -10,6 +10,7 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Users,
   X,
 } from 'lucide-react';
@@ -21,6 +22,7 @@ import {
   useEmailAutoCampaignStatus,
   useEmailAutoCreateCampaign,
   useEmailAutoDashboard,
+  useEmailAutoMailboxRemove,
   useEmailAutoMailboxUpdate,
   useEmailAutoSyncMailboxes,
 } from '@/hooks/useApi';
@@ -162,6 +164,7 @@ export default function EmailAutoConsole() {
   const createCampaign = useEmailAutoCreateCampaign();
   const campaignStatus = useEmailAutoCampaignStatus();
   const updateMailbox = useEmailAutoMailboxUpdate();
+  const removeMailbox = useEmailAutoMailboxRemove();
   const emailAutoActions = useEmailAutoActions();
   const showNotice = (message: string) => setNotice(message);
 
@@ -465,7 +468,11 @@ export default function EmailAutoConsole() {
               ><RefreshCw size={13} />同步绑定邮箱</button>
               <button
                 className="btn"
-                onClick={() => dashboardQ.refetch().then(() => showNotice('已刷新邮箱健康状态'))}
+                disabled={emailAutoActions.healthCheck.isPending}
+                onClick={() => emailAutoActions.healthCheck.mutate(
+                  { max_accounts: 20, poll_seconds: 30 },
+                  { onSuccess: (res) => showNotice(`健康检查完成：${res.passed}/${res.total} 个邮箱通过互发互读`) },
+                )}
               ><ShieldCheck size={13} />批量健康检查</button>
             </div>
           </div>
@@ -560,7 +567,17 @@ export default function EmailAutoConsole() {
               showNotice('邮箱额度配置已保存');
             },
           })}
+          onRemove={() => {
+            if (!window.confirm(`确定取消 ${editingMailbox.email} 的 Gmail 授权吗？取消后该邮箱将从自动发送邮箱池移除。`)) return;
+            removeMailbox.mutate(editingMailbox.id, {
+              onSuccess: () => {
+                setEditingMailbox(null);
+                showNotice(`已取消 ${editingMailbox.email} 的 Gmail 授权`);
+              },
+            });
+          }}
           saving={updateMailbox.isPending}
+          removing={removeMailbox.isPending}
         />
       )}
     </div>
@@ -963,12 +980,16 @@ function MailboxModal({
   mailbox,
   onClose,
   onSave,
+  onRemove,
   saving,
+  removing,
 }: {
   mailbox: MailboxQuota;
   onClose: () => void;
   onSave: (body: { enabled?: boolean; daily_quota?: number; status?: string }) => void;
+  onRemove: () => void;
   saving?: boolean;
+  removing?: boolean;
 }) {
   const [enabled, setEnabled] = useState(mailbox.enabled);
   const [quota, setQuota] = useState(mailbox.quota);
@@ -1002,6 +1023,7 @@ function MailboxModal({
           </div>
         </div>
         <div className="flex justify-end gap-2 border-t border-line p-4">
+          <button className="btn text-red-600 hover:border-red-200 hover:bg-red-50" disabled={removing || saving} onClick={onRemove}><Trash2 size={13} />取消授权</button>
           <button className="btn" onClick={onClose}>取消</button>
           <a className="btn" href={`/api/local/outreach/gmail/connect?label=${encodeURIComponent(mailbox.email)}&return_to=${encodeURIComponent('/d/email-auto')}`}><RefreshCw size={13} />重新授权</a>
           <button className="btn btn-primary" disabled={saving} onClick={() => onSave({ enabled, daily_quota: quota })}>保存配置</button>

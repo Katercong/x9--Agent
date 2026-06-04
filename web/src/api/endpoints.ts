@@ -117,6 +117,18 @@ export const endpoints = {
     api.post<{ ok: boolean; items: EmailAutoMailboxQuota[]; total: number }>(`${LOCAL}/email-auto/mailboxes/sync`, {}),
   emailAutoUpdateMailbox: (id: string, body: { enabled?: boolean; daily_quota?: number; status?: string }) =>
     api.patch<{ ok: boolean; item: EmailAutoMailboxQuota }>(`${LOCAL}/email-auto/mailboxes/${encodeURIComponent(id)}`, body),
+  emailAutoRemoveMailbox: (id: string) =>
+    api.del<{ ok: boolean; removed: boolean; account_id: string; email: string; promoted_default_id?: string | null }>(
+      `${LOCAL}/email-auto/mailboxes/${encodeURIComponent(id)}`,
+    ),
+  emailAutoHealthCheck: (body?: { max_accounts?: number; poll_seconds?: number }) =>
+    api.post<{
+      ok: boolean;
+      total: number;
+      passed: number;
+      failed: number;
+      items: Array<Record<string, unknown>>;
+    }>(`${LOCAL}/email-auto/mailboxes/health-check`, body || {}),
   emailAutoCreateCampaign: (body: EmailAutoCampaignCreate) =>
     api.post<{ ok: boolean; item: EmailAutoCampaign; created_jobs: number }>(`${LOCAL}/email-auto/campaigns`, body),
   emailAutoCampaignPreview: (body: EmailAutoCampaignCreate) =>

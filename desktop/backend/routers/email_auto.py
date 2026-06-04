@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import random
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -16,6 +17,7 @@ from ..models.creator import Creator
 from ..models.creator_email_message import CreatorEmailMessage
 from ..models.email_auto import EmailAutoCampaign, EmailAutoJob, GmailAccountQuota
 from ..models.gmail_account import GmailAccount
+from ..models.gmail_sync_state import GmailSyncState
 from ..models.outreach_email import OutreachEmail
 from ..services import gmail_service, product_asset_service
 from ..services.departments import DEFAULT_DEPARTMENT, current_department_code, current_user, department_where, row_in_department
@@ -72,6 +74,11 @@ class MailboxQuotaPatch(BaseModel):
     enabled: bool | None = None
     daily_quota: int | None = Field(default=None, ge=1, le=2000)
     status: str | None = Field(default=None, pattern="^(normal|cooldown|limit|auth_expired|bounce_risk)$")
+
+
+class MailboxHealthCheckIn(BaseModel):
+    max_accounts: int = Field(default=20, ge=2, le=50)
+    poll_seconds: int = Field(default=30, ge=5, le=90)
 
 
 class ProcessJobsIn(BaseModel):
@@ -370,6 +377,191 @@ def sync_mailboxes(request: Request, db: Session = Depends(get_db)) -> dict[str,
     return {"ok": True, "items": [_serialize_mailbox(db, row) for row in rows], "total": len(rows)}
 
 
+@router.post("/mailboxes/health-check")
+def health_check_mailboxes(request: Request, body: MailboxHealthCheckIn | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
+    current_user(request)
+    payload = body or MailboxHealthCheckIn()
+    _sync_mailboxes(db, request)
+    department_code = current_department_code(request)
+    filters = [GmailAccountQuota.enabled == 1]
+    where = department_where(GmailAccountQuota, department_code)
+    if where is not None:
+        filters.append(where)
+    quota_rows = list(db.scalars(select(GmailAccountQuota).where(*filters).order_by(GmailAccountQuota.email.asc()).limit(payload.max_accounts)).all())
+    pairs: list[tuple[GmailAccountQuota, GmailAccount]] = []
+    for quota in quota_rows:
+        account = db.get(GmailAccount, quota.account_id)
+        if account is not None and int(account.is_active or 0) == 1:
+            pairs.append((quota, account))
+
+    if len(pairs) < 2:
+        return {
+            "ok": True,
+            "total": len(pairs),
+            "passed": 0,
+            "failed": len(pairs),
+            "items": [
+                {
+                    "sender_email": quota.email,
+                    "recipient_email": None,
+                    "status": "failed",
+                    "reason": "至少需要 2 个启用的内部邮箱才能互发健康检查",
+                }
+                for quota, _account in pairs
+            ],
+        }
+
+    now = _now()
+    marker = new_id("ehc")
+    checks: list[dict[str, Any]] = []
+    for idx, (sender_quota, sender_account) in enumerate(pairs):
+        recipient_quota, recipient_account = pairs[(idx + 1) % len(pairs)]
+        subject = f"X9 mailbox health check {marker}-{idx + 1}"
+        item = {
+            "sender_id": sender_quota.id,
+            "sender_account_id": sender_account.id,
+            "sender_email": sender_quota.email,
+            "recipient_id": recipient_quota.id,
+            "recipient_account_id": recipient_account.id,
+            "recipient_email": recipient_quota.email,
+            "subject": subject,
+            "send_ok": False,
+            "read_ok": False,
+            "status": "pending",
+            "reason": "",
+            "message_id": None,
+            "thread_id": None,
+            "found_message_id": None,
+        }
+        try:
+            result = gmail_service.send_email(
+                to_email=recipient_quota.email,
+                subject=subject,
+                body=(
+                    "X9 internal mailbox health check.\n\n"
+                    f"Marker: {marker}\n"
+                    f"Sender: {sender_quota.email}\n"
+                    f"Recipient: {recipient_quota.email}\n"
+                    f"Time: {now.isoformat()}\n"
+                ),
+                body_format="plain",
+                from_account_id=sender_account.id,
+                user_id=sender_account.user_id,
+                department_code=sender_account.department_code or sender_quota.department_code,
+                include_shared=True,
+            )
+            item.update(
+                {
+                    "send_ok": True,
+                    "message_id": result.get("message_id"),
+                    "thread_id": result.get("thread_id"),
+                    "status": "sent",
+                    "reason": "已发送，等待收件邮箱读取确认",
+                }
+            )
+        except Exception as exc:
+            status = _mailbox_failure_status(exc)
+            sender_quota.status = status
+            sender_quota.last_synced_at = now
+            item.update({"status": "failed", "reason": f"发送失败: {exc}"})
+        checks.append(item)
+
+    db.commit()
+
+    deadline = time.monotonic() + payload.poll_seconds
+    while time.monotonic() < deadline and any(item["send_ok"] and not item["read_ok"] for item in checks):
+        for item in checks:
+            if not item["send_ok"] or item["read_ok"]:
+                continue
+            recipient_quota = db.get(GmailAccountQuota, item["recipient_id"])
+            recipient_account = db.get(GmailAccount, item["recipient_account_id"])
+            if recipient_quota is None or recipient_account is None:
+                item.update({"status": "failed", "reason": "收件邮箱授权记录不存在"})
+                continue
+            try:
+                found_id = _find_health_check_message(
+                    db,
+                    recipient_account,
+                    sender_email=str(item["sender_email"]),
+                    subject=str(item["subject"]),
+                )
+            except Exception as exc:
+                status = _mailbox_failure_status(exc)
+                recipient_quota.status = status
+                recipient_quota.last_synced_at = _now()
+                item.update({"status": "failed", "reason": f"读取失败: {exc}"})
+                continue
+            if found_id:
+                item.update({"read_ok": True, "found_message_id": found_id, "status": "passed", "reason": "发送和读取均通过"})
+                sender_quota = db.get(GmailAccountQuota, item["sender_id"])
+                if sender_quota is not None:
+                    sender_quota.status = "normal"
+                    sender_quota.last_synced_at = _now()
+                recipient_quota.status = "normal"
+                recipient_quota.last_synced_at = _now()
+        db.commit()
+        if any(item["send_ok"] and not item["read_ok"] for item in checks):
+            time.sleep(3)
+
+    for item in checks:
+        if item["send_ok"] and not item["read_ok"] and item["status"] not in {"failed", "passed"}:
+            recipient_quota = db.get(GmailAccountQuota, item["recipient_id"])
+            if recipient_quota is not None:
+                recipient_quota.status = "bounce_risk"
+                recipient_quota.last_synced_at = _now()
+            item.update({"status": "failed", "reason": "已发送但收件邮箱未在等待时间内读取到检查邮件"})
+    db.commit()
+
+    public_items = [
+        {
+            key: value
+            for key, value in item.items()
+            if key
+            in {
+                "sender_email",
+                "recipient_email",
+                "send_ok",
+                "read_ok",
+                "status",
+                "reason",
+                "message_id",
+                "thread_id",
+                "found_message_id",
+            }
+        }
+        for item in checks
+    ]
+    passed = sum(1 for item in public_items if item["status"] == "passed")
+    return {"ok": True, "total": len(public_items), "passed": passed, "failed": len(public_items) - passed, "items": public_items}
+
+
+def _mailbox_failure_status(exc: Exception) -> str:
+    text = str(exc).lower()
+    if "401" in text or "403" in text or "auth" in text or "scope" in text or "permission" in text:
+        return "auth_expired"
+    if "429" in text or "rate" in text or "quota" in text or "limit" in text:
+        return "cooldown"
+    return "bounce_risk"
+
+
+def _find_health_check_message(db: Session, account: GmailAccount, *, sender_email: str, subject: str) -> str | None:
+    if not gmail_service.account_has_readonly_scope(account):
+        raise RuntimeError("Gmail readonly scope missing. Reconnect this mailbox.")
+
+    service = gmail_service.build_gmail_service_for_account(db, account)
+    query = f'from:{sender_email} subject:"{subject}" newer_than:1d'
+    response = service.users().messages().list(
+        userId="me",
+        q=query,
+        maxResults=5,
+        includeSpamTrash=True,
+    ).execute()
+    messages = response.get("messages") or []
+    if not messages:
+        return None
+    return str(messages[0].get("id") or "") or None
+
+
 @router.patch("/mailboxes/{quota_id}")
 def update_mailbox(quota_id: str, body: MailboxQuotaPatch, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     department_code = current_department_code(request)
@@ -386,6 +578,46 @@ def update_mailbox(quota_id: str, body: MailboxQuotaPatch, request: Request, db:
     db.commit()
     db.refresh(row)
     return {"ok": True, "item": _serialize_mailbox(db, row)}
+
+
+@router.delete("/mailboxes/{quota_id}")
+def remove_mailbox(quota_id: str, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    current_user(request)
+    department_code = current_department_code(request)
+    row = db.get(GmailAccountQuota, quota_id)
+    if row is None or not row_in_department(row, department_code):
+        raise HTTPException(status_code=404, detail="mailbox quota not found")
+
+    account_id = row.account_id
+    email = row.email
+    account = db.get(GmailAccount, account_id)
+    sync_state = db.get(GmailSyncState, account_id)
+
+    if sync_state is not None:
+        db.delete(sync_state)
+    db.delete(row)
+
+    promoted_default_id: str | None = None
+    if account is not None:
+        was_default = bool(account.is_default)
+        owner_id = account.user_id
+        account_department_code = account.department_code
+        db.delete(account)
+        db.flush()
+
+        if was_default:
+            q = select(GmailAccount).where(GmailAccount.is_active == 1)
+            if owner_id:
+                q = q.where(GmailAccount.user_id == owner_id)
+            elif account_department_code:
+                q = q.where(GmailAccount.department_code == account_department_code)
+            replacement = db.scalar(q.order_by(GmailAccount.created_at.asc()))
+            if replacement is not None:
+                replacement.is_default = 1
+                promoted_default_id = replacement.id
+
+    db.commit()
+    return {"ok": True, "removed": True, "account_id": account_id, "email": email, "promoted_default_id": promoted_default_id}
 
 
 @router.post("/campaigns")

@@ -177,12 +177,21 @@ export function useEmailAutoMailboxUpdate() {
   });
 }
 
+export function useEmailAutoMailboxRemove() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => endpoints.emailAutoRemoveMailbox(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['email-auto', 'dashboard'] }),
+  });
+}
+
 export function useEmailAutoActions() {
   const qc = useQueryClient();
   const invalidate = () => qc.invalidateQueries({ queryKey: ['email-auto', 'dashboard'] });
   return {
     pauseAll: useMutation({ mutationFn: () => endpoints.emailAutoPauseAll(), onSuccess: invalidate }),
     previewCampaign: useMutation({ mutationFn: (body: Parameters<typeof endpoints.emailAutoCampaignPreview>[0]) => endpoints.emailAutoCampaignPreview(body) }),
+    healthCheck: useMutation({ mutationFn: (body?: Parameters<typeof endpoints.emailAutoHealthCheck>[0]) => endpoints.emailAutoHealthCheck(body), onSuccess: invalidate }),
     generateJobs: useMutation({ mutationFn: ({ id, limit }: { id: string; limit?: number }) => endpoints.emailAutoGenerateJobs(id, limit), onSuccess: invalidate }),
     processJobs: useMutation({ mutationFn: (body: Parameters<typeof endpoints.emailAutoProcessJobs>[0]) => endpoints.emailAutoProcessJobs(body), onSuccess: invalidate }),
     retryJob: useMutation({ mutationFn: (id: string) => endpoints.emailAutoRetryJob(id), onSuccess: invalidate }),
