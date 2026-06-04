@@ -499,45 +499,78 @@ export default function EmailAutoConsole() {
   ];
 
   const jobColumns: Column<AutoJob>[] = [
-    { key: 'time', header: '时间', width: '70px', cell: (row) => <span className="num text-xs">{row.time}</span> },
+    {
+      key: 'time',
+      header: '时间',
+      width: '64px',
+      className: 'w-[64px] whitespace-nowrap align-middle',
+      cell: (row) => <span className="num text-xs">{row.time}</span>,
+    },
     {
       key: 'creator',
       header: '达人',
+      width: '185px',
+      className: 'min-w-[185px] align-middle',
       cell: (row) => (
-        <div className="min-w-[170px]">
-          <div className="font-semibold text-gray-900">{row.creator}</div>
-          <div className="mt-1 text-xxs text-muted">{row.recipient}</div>
+        <div className="min-w-0">
+          <div className="truncate font-semibold text-gray-900" title={row.creator}>{row.creator}</div>
+          <div className="num mt-1 truncate text-xxs text-muted" title={row.recipient}>{row.recipient}</div>
         </div>
       ),
     },
-    { key: 'sender', header: '发件邮箱', cell: (row) => <span className="num text-xs text-muted">{row.sender}</span> },
+    {
+      key: 'sender',
+      header: '发件邮箱',
+      width: '108px',
+      className: 'w-[108px] whitespace-nowrap align-middle',
+      cell: (row) => (
+        <span className="num block max-w-[96px] truncate text-xs text-muted" title={row.sender}>
+          {row.sender}
+        </span>
+      ),
+    },
     {
       key: 'asset',
-      header: '素材/话术',
+      header: '素材 / 计划',
+      width: '245px',
+      className: 'min-w-[245px] align-middle',
       cell: (row) => (
-        <div className="min-w-[180px]">
-          <div className="text-xs font-medium text-gray-800">{row.product}</div>
+        <div className="min-w-0">
+          <div className="truncate text-xs font-medium text-gray-800" title={row.product}>{row.product}</div>
+          <div className="mt-1 truncate text-xxs text-muted" title={row.plan}>{row.plan}</div>
           <div className="mt-1 flex flex-wrap gap-1">
-            {row.filters.map((tag) => <Pill key={tag} tone="info">{tag}</Pill>)}
+            {row.filters.slice(0, 5).map((tag) => <Pill key={tag} tone="info">{tag}</Pill>)}
+            {row.filters.length > 5 ? <Pill tone="muted">+{row.filters.length - 5}</Pill> : null}
           </div>
         </div>
       ),
     },
-    { key: 'plan', header: '计划', cell: (row) => <span className="text-xs text-muted">{row.plan}</span> },
-    { key: 'status', header: '状态', cell: (row) => <JobStatusBadge status={row.status} /> },
-    { key: 'reason', header: '原因', cell: (row) => <span className="text-xs text-muted">{row.reason}</span> },
+    {
+      key: 'status',
+      header: '状态 / 原因',
+      width: '104px',
+      className: 'w-[104px] align-middle',
+      cell: (row) => (
+        <div className="space-y-1">
+          <JobStatusBadge status={row.status} />
+          <div className="max-w-[92px] truncate text-xxs text-muted" title={row.reason}>{row.reason}</div>
+        </div>
+      ),
+    },
     {
       key: 'preview',
       header: '操作',
       align: 'right',
+      width: '138px',
+      className: 'w-[138px] whitespace-nowrap align-middle',
       cell: (row) => (
-        <div className="flex justify-end gap-2">
-          <button className="btn btn-ghost" onClick={() => setPreviewJob(row)}><Eye size={13} />邮件预览</button>
+        <div className="flex justify-end gap-1.5">
+          <button className="btn btn-ghost px-2" onClick={() => setPreviewJob(row)} title="邮件预览"><Eye size={13} />预览</button>
           {row.status === 'failed' || row.status === 'skipped' ? (
-            <button className="btn btn-ghost" onClick={() => emailAutoActions.retryJob.mutate(row.id, { onSuccess: () => showNotice('任务已重新进入待发送队列') })}>重试</button>
+            <button className="btn btn-ghost px-2" onClick={() => emailAutoActions.retryJob.mutate(row.id, { onSuccess: () => showNotice('任务已重新进入待发送队列') })}>重试</button>
           ) : null}
           {row.status === 'pending' || row.status === 'failed' ? (
-            <button className="btn btn-ghost" onClick={() => emailAutoActions.skipJob.mutate(row.id, { onSuccess: () => showNotice('任务已跳过') })}>跳过</button>
+            <button className="btn btn-ghost px-2" onClick={() => emailAutoActions.skipJob.mutate(row.id, { onSuccess: () => showNotice('任务已跳过') })}>跳过</button>
           ) : null}
         </div>
       ),
@@ -604,7 +637,7 @@ export default function EmailAutoConsole() {
           <DataTable columns={campaignColumns} data={campaigns} rowKey={(row) => row.id} emptyText={dashboardQ.isLoading ? '正在读取自动邮件计划…' : '暂无自动发送计划'} />
         </section>
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.15fr)]">
         <section className="card min-w-0">
         <div className="card-body border-b border-line">
           <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
@@ -674,7 +707,13 @@ export default function EmailAutoConsole() {
             </div>
           </div>
         </div>
-        <DataTable columns={jobColumns} data={filteredJobs} rowKey={(row) => row.id} emptyText={dashboardQ.isLoading ? '正在读取队列任务…' : '当前筛选下暂无任务'} />
+        <DataTable
+          columns={jobColumns}
+          data={filteredJobs}
+          rowKey={(row) => row.id}
+          emptyText={dashboardQ.isLoading ? '正在读取队列任务…' : '当前筛选下暂无任务'}
+          compact
+        />
         <div className="flex flex-col gap-2 border-t border-line px-4 py-3 text-xs text-muted sm:flex-row sm:items-center sm:justify-between">
           <span>显示 {jobPageStart}-{jobPageEnd} / {filteredJobTotal} 条</span>
           <div className="flex items-center gap-2">
