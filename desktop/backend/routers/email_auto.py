@@ -893,12 +893,16 @@ def _job_filter_tags(filters: dict[str, Any], creator: Creator) -> list[str]:
 
 def _email_html(plain_body: str, asset: dict[str, Any] | None) -> str:
     paragraphs = [part.strip() for part in plain_body.split("\n\n") if part.strip()]
-    body = "".join(f"<p>{html.escape(part).replace(chr(10), '<br>')}</p>" for part in paragraphs)
+    paragraph_style = "margin:0 0 16px;font-size:14px;line-height:1.7;color:#111827;"
+    body = "".join(
+        f'<p style="{paragraph_style}">{html.escape(part).replace(chr(10), "<br>")}</p>'
+        for part in paragraphs
+    )
     if asset and asset.get("id") and asset.get("image_url"):
         image = (
-            f'<p><img src="/api/local/outreach/product-assets/{html.escape(str(asset["id"]))}/image" '
+            f'<p style="margin:0 0 18px;"><img src="/api/local/outreach/product-assets/{html.escape(str(asset["id"]))}/image" '
             f'alt="{html.escape(str(asset.get("name") or "X9 product image"))}" '
-            'style="max-width:560px;width:100%;height:auto;border:1px solid #e5e7eb;border-radius:10px;" /></p>'
+            'style="display:block;max-width:560px;width:100%;height:auto;border:1px solid #e5e7eb;border-radius:10px;" /></p>'
         )
         body = image + body
     return body

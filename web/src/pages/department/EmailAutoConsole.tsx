@@ -1170,11 +1170,20 @@ function PreviewField({ label, value }: { label: string; value: string }) {
 
 function buildPreviewHtml(job: AutoJob) {
   if (job.body_format === 'html' && job.body) {
-    return job.body;
+    return `
+      <style>
+        .x9-email-preview-html p { margin: 0 0 16px; font-size: 14px; line-height: 1.7; color: #111827; }
+        .x9-email-preview-html p:last-child { margin-bottom: 0; }
+        .x9-email-preview-html img { display: block; margin-bottom: 18px; }
+      </style>
+      <div class="x9-email-preview-html" style="font-family:Arial,Helvetica,sans-serif;background:#ffffff;color:#111827;">
+        ${job.body}
+      </div>
+    `;
   }
   const paragraphs = (job.body || '当前任务还没有生成邮件正文')
     .split(/\n{2,}/)
-    .map((block) => `<p style="margin:0 0 14px;font-size:14px;line-height:1.65;color:#111827;">${escapeHtml(block).replace(/\n/g, '<br/>')}</p>`)
+    .map((block) => `<p style="margin:0 0 16px;font-size:14px;line-height:1.7;color:#111827;">${escapeHtml(block).replace(/\n/g, '<br/>')}</p>`)
     .join('');
   return `
     <div style="font-family:Arial,Helvetica,sans-serif;background:#ffffff;color:#111827;">
