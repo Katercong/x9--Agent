@@ -287,11 +287,13 @@ def _serialize_campaign(db: Session, row: EmailAutoCampaign) -> dict[str, Any]:
 
 def _campaign_generation_stats(db: Session, campaign: EmailAutoCampaign) -> dict[str, int]:
     filters = _json_loads(campaign.filters_json, DEFAULT_FILTERS)
-    query_filters = _base_filters(campaign.department_code)
-    query_filters.append(Creator.email.is_not(None))
-    query_filters.append(Creator.email.like("%@%"))
-    _apply_creator_filters(query_filters, filters)
+    query_filters = _campaign_creator_filters(campaign.department_code, filters, apply_filters=True)
     rows = list(db.scalars(select(Creator).where(*query_filters).order_by(*_sort_clauses(filters))).all())
+    expanded_rows = list(db.scalars(
+        select(Creator)
+        .where(*_campaign_creator_filters(campaign.department_code, filters, apply_filters=False))
+        .order_by(*_sort_clauses(filters))
+    ).all())
     already_contacted = 0
     existing_job = 0
     creatable = 0
@@ -302,6 +304,13 @@ def _campaign_generation_stats(db: Session, campaign: EmailAutoCampaign) -> dict
             existing_job += 1
         else:
             creatable += 1
+    expanded_creatable = 0
+    for creator in expanded_rows:
+        if _creator_already_contacted(db, creator.id):
+            continue
+        if _job_exists(db, campaign.id, creator.id):
+            continue
+        expanded_creatable += 1
     active_jobs = int(db.scalar(
         select(func.count())
         .select_from(EmailAutoJob)
@@ -318,6 +327,8 @@ def _campaign_generation_stats(db: Session, campaign: EmailAutoCampaign) -> dict
         "already_contacted": already_contacted,
         "existing_job": existing_job,
         "creatable": creatable,
+        "expanded_matching_creators": len(expanded_rows),
+        "expanded_creatable": expanded_creatable,
         "active_jobs": active_jobs,
         "queue_total": all_jobs,
     }
@@ -328,7 +339,7 @@ def _generation_reason(created_jobs: int, stats: dict[str, int]) -> str:
         return f"已补充 {created_jobs} 个队列任务"
     if stats["active_jobs"] >= stats["daily_limit"]:
         return "队列已达到计划总量"
-    if stats["creatable"] <= 0:
+    if stats["expanded_creatable"] <= 0:
         return (
             "没有可新增达人："
             f"匹配 {stats['matching_creators']}，已联系 {stats['already_contacted']}，"
@@ -1005,10 +1016,6 @@ def generate_jobs(campaign_id: str, request: Request, db: Session = Depends(get_
 
 def _generate_jobs_for_campaign(db: Session, campaign: EmailAutoCampaign, *, candidate_limit: int) -> int:
     filters = _json_loads(campaign.filters_json, DEFAULT_FILTERS)
-    query_filters = _base_filters(campaign.department_code)
-    query_filters.append(Creator.email.is_not(None))
-    query_filters.append(Creator.email.like("%@%"))
-    _apply_creator_filters(query_filters, filters)
     assets = product_asset_service.list_assets(campaign.department_code)
     created = 0
     now = _now()
@@ -1026,51 +1033,67 @@ def _generate_jobs_for_campaign(db: Session, campaign: EmailAutoCampaign, *, can
     interval_max = max(interval_min, int(campaign.interval_max_seconds or interval_min))
     slot_offsets = [0 for _ in range(mailbox_count)]
     page_size = min(max(remaining_to_create, 200), 1000)
-    offset = 0
-    while created < remaining_to_create:
-        rows = list(db.scalars(
-            select(Creator)
-            .where(*query_filters)
-            .order_by(*_sort_clauses(filters))
-            .offset(offset)
-            .limit(page_size)
-        ).all())
-        if not rows:
-            break
-        offset += len(rows)
-        for creator in rows:
-            if created >= remaining_to_create:
+    strict_filters = _campaign_creator_filters(campaign.department_code, filters, apply_filters=True)
+    expanded_filters = _campaign_creator_filters(campaign.department_code, filters, apply_filters=False)
+    seen_creator_ids: set[str] = set()
+    for query_filters in (strict_filters, expanded_filters):
+        offset = 0
+        while created < remaining_to_create:
+            rows = list(db.scalars(
+                select(Creator)
+                .where(*query_filters)
+                .order_by(*_sort_clauses(filters))
+                .offset(offset)
+                .limit(page_size)
+            ).all())
+            if not rows:
                 break
-            if _creator_already_contacted(db, creator.id):
-                continue
-            if _job_exists(db, campaign.id, creator.id):
-                continue
-            asset = product_asset_service.match_asset_for_creator(creator, assets)
-            ctx = build_tk_context(creator, commission=20, product_asset=asset)
-            subject = build_tk_email_subject(ctx)
-            plain = generate_strategy_template(ctx)
-            body = _email_html(plain, asset)
-            slot_index = created % mailbox_count
-            scheduled_at = now + timedelta(seconds=slot_offsets[slot_index])
-            slot_offsets[slot_index] += random.randint(interval_min, interval_max)
-            job = EmailAutoJob(
-                id=new_id("eaj"),
-                department_code=campaign.department_code,
-                campaign_id=campaign.id,
-                creator_id=creator.id,
-                recipient_email=str(creator.email),
-                subject=subject,
-                body=body,
-                body_format="html",
-                product_asset_id=(asset or {}).get("id") if asset else None,
-                status="pending",
-                scheduled_at=scheduled_at,
-                filters_json=_json_dumps(_job_filter_tags(filters, creator)),
-            )
-            db.add(job)
-            created += 1
+            offset += len(rows)
+            for creator in rows:
+                if created >= remaining_to_create:
+                    break
+                if creator.id in seen_creator_ids:
+                    continue
+                seen_creator_ids.add(creator.id)
+                if _creator_already_contacted(db, creator.id):
+                    continue
+                if _job_exists(db, campaign.id, creator.id):
+                    continue
+                asset = product_asset_service.match_asset_for_creator(creator, assets)
+                ctx = build_tk_context(creator, commission=20, product_asset=asset)
+                subject = build_tk_email_subject(ctx)
+                plain = generate_strategy_template(ctx)
+                body = _email_html(plain, asset)
+                slot_index = created % mailbox_count
+                scheduled_at = now + timedelta(seconds=slot_offsets[slot_index])
+                slot_offsets[slot_index] += random.randint(interval_min, interval_max)
+                job = EmailAutoJob(
+                    id=new_id("eaj"),
+                    department_code=campaign.department_code,
+                    campaign_id=campaign.id,
+                    creator_id=creator.id,
+                    recipient_email=str(creator.email),
+                    subject=subject,
+                    body=body,
+                    body_format="html",
+                    product_asset_id=(asset or {}).get("id") if asset else None,
+                    status="pending",
+                    scheduled_at=scheduled_at,
+                    filters_json=_json_dumps(_job_filter_tags(filters, creator)),
+                )
+                db.add(job)
+                created += 1
     db.commit()
     return created
+
+
+def _campaign_creator_filters(department_code: str | None, filters: dict[str, Any], *, apply_filters: bool) -> list[Any]:
+    query_filters = _base_filters(department_code)
+    query_filters.append(Creator.email.is_not(None))
+    query_filters.append(Creator.email.like("%@%"))
+    if apply_filters:
+        _apply_creator_filters(query_filters, filters)
+    return query_filters
 
 
 def _apply_creator_filters(query_filters: list[Any], filters: dict[str, Any]) -> None:

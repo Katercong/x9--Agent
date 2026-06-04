@@ -136,6 +136,54 @@ def test_generate_jobs_fills_to_campaign_daily_limit_even_when_limit_is_smaller(
     assert total == 3
 
 
+def test_generate_jobs_expands_candidates_to_reach_campaign_daily_limit(client):
+    marker = uuid.uuid4().hex
+    campaign_id = f"eac_expand_{marker}"
+    now = datetime.now()
+    filters = {**email_auto.DEFAULT_FILTERS, "keyword": f"strict_{marker}"}
+
+    with SessionLocal() as db:
+        campaign = EmailAutoCampaign(
+            id=campaign_id,
+            department_code="cross_border",
+            name=f"Expand Queue {marker}",
+            status="running",
+            daily_limit=3,
+            hourly_limit=3,
+            interval_min_seconds=30,
+            interval_max_seconds=30,
+            filters_json=email_auto._json_dumps(filters),
+        )
+        db.add(campaign)
+        for index in range(3):
+            handle = f"strict_{marker}" if index == 0 else f"expanded_{marker}_{index}"
+            db.add(Creator(
+                id=f"creator_expand_{marker}_{index}",
+                platform="queue_expand_test",
+                department_code="cross_border",
+                handle=handle,
+                email=f"queue-expand-{marker}-{index}@example.com",
+                has_email=1,
+                recommendation_score=90,
+                review_required=0,
+                recommended_at=now,
+                collected_at=now,
+            ))
+        db.commit()
+
+    response = client.post(f"/api/local/email-auto/campaigns/{campaign_id}/generate-jobs")
+
+    assert response.status_code == 200
+    assert response.json()["created_jobs"] == 3
+    with SessionLocal() as db:
+        total = db.scalar(
+            select(func.count())
+            .select_from(EmailAutoJob)
+            .where(EmailAutoJob.campaign_id == campaign_id)
+        )
+    assert total == 3
+
+
 def test_update_campaign_daily_limit_auto_backfills_queue(client):
     marker = uuid.uuid4().hex
     campaign_id = f"eac_update_{marker}"
