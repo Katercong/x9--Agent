@@ -280,6 +280,8 @@ def _serialize_campaign(db: Session, row: EmailAutoCampaign) -> dict[str, Any]:
         "mailbox_pool": row.mailbox_pool,
         "send_mode": row.send_mode,
         "filters": _json_loads(row.filters_json, DEFAULT_FILTERS),
+        "queue_window_key": row.queue_window_key,
+        "queue_cleared_window_key": row.queue_cleared_window_key,
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
     }
@@ -311,11 +313,7 @@ def _campaign_generation_stats(db: Session, campaign: EmailAutoCampaign) -> dict
         if _job_exists(db, campaign.id, creator.id):
             continue
         expanded_creatable += 1
-    active_jobs = int(db.scalar(
-        select(func.count())
-        .select_from(EmailAutoJob)
-        .where(EmailAutoJob.campaign_id == campaign.id, EmailAutoJob.status.in_(ACTIVE_JOB_STATUSES))
-    ) or 0)
+    active_jobs = _campaign_window_job_count(db, campaign, getattr(campaign, "queue_window_key", None))
     all_jobs = int(db.scalar(
         select(func.count())
         .select_from(EmailAutoJob)
@@ -346,6 +344,173 @@ def _generation_reason(created_jobs: int, stats: dict[str, int]) -> str:
             f"已有任务 {stats['existing_job']}，可新增 0"
         )
     return "没有生成新任务"
+
+
+def _campaign_window_minutes(campaign: EmailAutoCampaign) -> tuple[int, int]:
+    start_h, start_m = _parse_hhmm(campaign.start_time, "09:30")
+    end_h, end_m = _parse_hhmm(campaign.end_time, "18:00")
+    return start_h * 60 + start_m, end_h * 60 + end_m
+
+
+def _campaign_window_bounds(campaign: EmailAutoCampaign, now: datetime) -> tuple[datetime, datetime]:
+    start_min, end_min = _campaign_window_minutes(campaign)
+    day_start = datetime(now.year, now.month, now.day)
+    current_min = now.hour * 60 + now.minute
+    if start_min <= end_min:
+        return day_start + timedelta(minutes=start_min), day_start + timedelta(minutes=end_min)
+    if current_min <= end_min:
+        start_day = day_start - timedelta(days=1)
+    else:
+        start_day = day_start
+    return start_day + timedelta(minutes=start_min), start_day + timedelta(days=1, minutes=end_min)
+
+
+def _campaign_window_key(campaign: EmailAutoCampaign, now: datetime) -> str:
+    window_start, window_end = _campaign_window_bounds(campaign, now)
+    return f"{window_start:%Y%m%d%H%M}-{window_end:%Y%m%d%H%M}"
+
+
+def _campaign_window_job_count(db: Session, campaign: EmailAutoCampaign, window_key: str | None) -> int:
+    filters = [EmailAutoJob.campaign_id == campaign.id]
+    if window_key:
+        filters.append(EmailAutoJob.queue_window_key == window_key)
+    else:
+        filters.append(EmailAutoJob.status.in_(ACTIVE_JOB_STATUSES))
+    return int(db.scalar(select(func.count()).select_from(EmailAutoJob).where(*filters)) or 0)
+
+
+def _claim_legacy_window_jobs(db: Session, campaign: EmailAutoCampaign, *, window_key: str, window_start: datetime) -> int:
+    rows = list(db.scalars(
+        select(EmailAutoJob).where(
+            EmailAutoJob.campaign_id == campaign.id,
+            EmailAutoJob.status.in_(ACTIVE_JOB_STATUSES),
+            or_(EmailAutoJob.queue_window_key.is_(None), EmailAutoJob.queue_window_key == ""),
+            or_(
+                EmailAutoJob.status == "sending",
+                EmailAutoJob.scheduled_at >= window_start,
+                EmailAutoJob.created_at >= window_start,
+                EmailAutoJob.updated_at >= window_start,
+            ),
+        )
+    ).all())
+    for row in rows:
+        row.queue_window_key = window_key
+    if rows:
+        db.commit()
+    return len(rows)
+
+
+def _clear_pending_jobs_for_campaign(
+    db: Session,
+    campaign: EmailAutoCampaign,
+    *,
+    keep_window_key: str | None = None,
+) -> int:
+    filters = [EmailAutoJob.campaign_id == campaign.id, EmailAutoJob.status == "pending"]
+    if keep_window_key:
+        filters.append(or_(EmailAutoJob.queue_window_key.is_(None), EmailAutoJob.queue_window_key != keep_window_key))
+    rows = list(db.scalars(select(EmailAutoJob).where(*filters)).all())
+    for row in rows:
+        db.delete(row)
+    if rows:
+        db.commit()
+    return len(rows)
+
+
+def _trim_pending_jobs_to_campaign_limit(
+    db: Session,
+    campaign: EmailAutoCampaign,
+    *,
+    window_key: str,
+    candidate_limit: int,
+) -> int:
+    overflow = _campaign_window_job_count(db, campaign, window_key) - int(candidate_limit)
+    if overflow <= 0:
+        return 0
+    rows = list(db.scalars(
+        select(EmailAutoJob)
+        .where(
+            EmailAutoJob.campaign_id == campaign.id,
+            EmailAutoJob.queue_window_key == window_key,
+            EmailAutoJob.status == "pending",
+        )
+        .order_by(EmailAutoJob.scheduled_at.desc().nullslast(), EmailAutoJob.created_at.desc())
+        .limit(overflow)
+    ).all())
+    for row in rows:
+        db.delete(row)
+    if rows:
+        db.commit()
+    return len(rows)
+
+
+def _sync_campaign_queue_to_limit(
+    db: Session,
+    campaign: EmailAutoCampaign,
+    *,
+    window_key: str,
+    base_time: datetime,
+    candidate_limit: int | None = None,
+) -> dict[str, int]:
+    target = max(0, int(candidate_limit if candidate_limit is not None else campaign.daily_limit or 0))
+    trimmed = _trim_pending_jobs_to_campaign_limit(db, campaign, window_key=window_key, candidate_limit=target)
+    created = _generate_jobs_for_campaign(
+        db,
+        campaign,
+        candidate_limit=target,
+        window_key=window_key,
+        base_time=base_time,
+    )
+    return {"created": created, "trimmed": trimmed}
+
+
+def _maintain_campaign_queue(db: Session, campaign: EmailAutoCampaign, *, now: datetime) -> dict[str, int]:
+    summary = {"created": 0, "trimmed": 0, "cleared": 0}
+    if campaign.status != "running":
+        return summary
+    if _campaign_is_due(campaign, now):
+        window_start, _window_end = _campaign_window_bounds(campaign, now)
+        window_key = _campaign_window_key(campaign, now)
+        _claim_legacy_window_jobs(db, campaign, window_key=window_key, window_start=window_start)
+        summary["cleared"] += _clear_pending_jobs_for_campaign(db, campaign, keep_window_key=window_key)
+        campaign.queue_window_key = window_key
+        campaign.queue_cleared_window_key = None
+        db.commit()
+        result = _sync_campaign_queue_to_limit(
+            db,
+            campaign,
+            window_key=window_key,
+            base_time=max(now, window_start),
+        )
+        summary["created"] += result["created"]
+        summary["trimmed"] += result["trimmed"]
+    else:
+        summary["cleared"] += _clear_pending_jobs_for_campaign(db, campaign)
+        if campaign.queue_window_key and campaign.queue_cleared_window_key != campaign.queue_window_key:
+            campaign.queue_cleared_window_key = campaign.queue_window_key
+            db.commit()
+    return summary
+
+
+def maintain_email_auto_campaign_queues(
+    db: Session,
+    *,
+    department_code: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    current = now or _now()
+    filters = [EmailAutoCampaign.status == "running"]
+    where = department_where(EmailAutoCampaign, department_code)
+    if where is not None:
+        filters.append(where)
+    campaigns = list(db.scalars(select(EmailAutoCampaign).where(*filters)).all())
+    summary = {"campaigns": len(campaigns), "created": 0, "trimmed": 0, "cleared": 0}
+    for campaign in campaigns:
+        result = _maintain_campaign_queue(db, campaign, now=current)
+        summary["created"] += result["created"]
+        summary["trimmed"] += result["trimmed"]
+        summary["cleared"] += result["cleared"]
+    return summary
 
 
 def _schedule_label(row: EmailAutoCampaign) -> str:
@@ -454,6 +619,7 @@ def _serialize_job(db: Session, row: EmailAutoJob) -> dict[str, Any]:
         "status": row.status,
         "reason": row.failure_reason or _job_reason(row.status),
         "filters": _json_loads(row.filters_json, []),
+        "queue_window_key": row.queue_window_key,
         "attempts": row.attempts,
         "outreach_email_id": row.outreach_email_id,
     }
@@ -481,6 +647,7 @@ def dashboard(
     current_user(request)
     _sync_mailboxes(db, request)
     department_code = current_department_code(request)
+    maintain_email_auto_campaign_queues(db, department_code=department_code)
     campaign_filters = []
     job_filters = []
     quota_filters = []
@@ -862,7 +1029,6 @@ def create_campaign(body: CampaignIn, request: Request, db: Session = Depends(ge
     if capacity["daily_capacity"] > 0:
         daily_limit = min(daily_limit, capacity["daily_capacity"])
     hourly_limit = min(int(body.hourly_limit), daily_limit)
-    candidate_limit = daily_limit
     filters = {**DEFAULT_FILTERS, **(body.filters or {})}
     interval_min = min(body.interval_min_seconds, body.interval_max_seconds)
     interval_max = max(body.interval_min_seconds, body.interval_max_seconds)
@@ -888,7 +1054,8 @@ def create_campaign(body: CampaignIn, request: Request, db: Session = Depends(ge
     db.add(row)
     db.commit()
     db.refresh(row)
-    created_jobs = _generate_jobs_for_campaign(db, row, candidate_limit=candidate_limit) if body.generate_jobs else 0
+    result = _maintain_campaign_queue(db, row, now=_now())
+    created_jobs = result["created"]
     stats = _campaign_generation_stats(db, row)
     return {"ok": True, "item": _serialize_campaign(db, row), "created_jobs": created_jobs, "reason": _generation_reason(created_jobs, stats), **stats}
 
@@ -901,13 +1068,11 @@ def update_campaign(campaign_id: str, body: CampaignIn, request: Request, db: Se
     row = db.get(EmailAutoCampaign, campaign_id)
     if row is None or not row_in_department(row, department_code):
         raise HTTPException(status_code=404, detail="campaign not found")
-    previous_daily_limit = int(row.daily_limit or 0)
     capacity = _mailbox_send_capacity(db, department_code)
     daily_limit = int(body.daily_limit)
     if capacity["daily_capacity"] > 0:
         daily_limit = min(daily_limit, capacity["daily_capacity"])
     hourly_limit = min(int(body.hourly_limit), daily_limit)
-    candidate_limit = daily_limit
     filters = {**DEFAULT_FILTERS, **(body.filters or {})}
     interval_min = min(body.interval_min_seconds, body.interval_max_seconds)
     interval_max = max(body.interval_min_seconds, body.interval_max_seconds)
@@ -927,10 +1092,10 @@ def update_campaign(campaign_id: str, body: CampaignIn, request: Request, db: Se
     row.filters_json = _json_dumps(filters)
     db.commit()
     db.refresh(row)
-    should_generate_jobs = body.generate_jobs or daily_limit > previous_daily_limit
-    created_jobs = _generate_jobs_for_campaign(db, row, candidate_limit=candidate_limit) if should_generate_jobs else 0
+    result = _maintain_campaign_queue(db, row, now=_now())
+    created_jobs = result["created"]
     stats = _campaign_generation_stats(db, row)
-    return {"ok": True, "item": _serialize_campaign(db, row), "created_jobs": created_jobs, "reason": _generation_reason(created_jobs, stats), **stats}
+    return {"ok": True, "item": _serialize_campaign(db, row), "created_jobs": created_jobs, "trimmed_jobs": result["trimmed"], "cleared_jobs": result["cleared"], "reason": _generation_reason(created_jobs, stats), **stats}
 
 
 @router.post("/campaigns/preview")
@@ -1009,24 +1174,28 @@ def generate_jobs(campaign_id: str, request: Request, db: Session = Depends(get_
     row = db.get(EmailAutoCampaign, campaign_id)
     if row is None or not row_in_department(row, current_department_code(request)):
         raise HTTPException(status_code=404, detail="campaign not found")
-    created = _generate_jobs_for_campaign(db, row, candidate_limit=int(row.daily_limit or limit or 200))
+    result = _maintain_campaign_queue(db, row, now=_now())
+    created = result["created"]
     stats = _campaign_generation_stats(db, row)
-    return {"ok": True, "created_jobs": created, "reason": _generation_reason(created, stats), **stats}
+    return {"ok": True, "created_jobs": created, "trimmed_jobs": result["trimmed"], "cleared_jobs": result["cleared"], "reason": _generation_reason(created, stats), **stats}
 
 
-def _generate_jobs_for_campaign(db: Session, campaign: EmailAutoCampaign, *, candidate_limit: int) -> int:
-    filters = _json_loads(campaign.filters_json, DEFAULT_FILTERS)
-    assets = product_asset_service.list_assets(campaign.department_code)
+def _generate_jobs_for_campaign(
+    db: Session,
+    campaign: EmailAutoCampaign,
+    *,
+    candidate_limit: int,
+    window_key: str | None = None,
+    base_time: datetime | None = None,
+) -> int:
     created = 0
-    now = _now()
-    existing_active = int(db.scalar(
-        select(func.count())
-        .select_from(EmailAutoJob)
-        .where(EmailAutoJob.campaign_id == campaign.id, EmailAutoJob.status.in_(ACTIVE_JOB_STATUSES))
-    ) or 0)
-    remaining_to_create = max(0, int(candidate_limit) - existing_active)
+    now = base_time or _now()
+    existing_jobs = _campaign_window_job_count(db, campaign, window_key)
+    remaining_to_create = max(0, int(candidate_limit) - existing_jobs)
     if remaining_to_create <= 0:
         return 0
+    filters = _json_loads(campaign.filters_json, DEFAULT_FILTERS)
+    assets = product_asset_service.list_assets(campaign.department_code)
     capacity = _mailbox_send_capacity(db, campaign.department_code)
     mailbox_count = max(1, int(capacity.get("mailboxes") or 0))
     interval_min = max(30, int(campaign.interval_min_seconds or 90))
@@ -1080,6 +1249,7 @@ def _generate_jobs_for_campaign(db: Session, campaign: EmailAutoCampaign, *, can
                     status="pending",
                     scheduled_at=scheduled_at,
                     filters_json=_json_dumps(_job_filter_tags(filters, creator)),
+                    queue_window_key=window_key,
                 )
                 db.add(job)
                 created += 1
@@ -1271,18 +1441,16 @@ def _campaign_matches_calendar(campaign: EmailAutoCampaign, now: datetime) -> bo
 
 
 def _campaign_in_time_window(campaign: EmailAutoCampaign, now: datetime) -> bool:
-    start_h, start_m = _parse_hhmm(campaign.start_time, "09:30")
-    end_h, end_m = _parse_hhmm(campaign.end_time, "18:00")
     current = now.hour * 60 + now.minute
-    start = start_h * 60 + start_m
-    end = end_h * 60 + end_m
+    start, end = _campaign_window_minutes(campaign)
     if start <= end:
         return start <= current <= end
     return current >= start or current <= end
 
 
 def _campaign_is_due(campaign: EmailAutoCampaign, now: datetime) -> bool:
-    return _campaign_matches_calendar(campaign, now) and _campaign_in_time_window(campaign, now)
+    window_start, _window_end = _campaign_window_bounds(campaign, now)
+    return _campaign_matches_calendar(campaign, window_start) and _campaign_in_time_window(campaign, now)
 
 
 def _campaign_sent_count(db: Session, campaign: EmailAutoCampaign, since: datetime) -> int:
@@ -1322,6 +1490,7 @@ def process_due_email_auto_jobs(
     user: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     now = _now()
+    maintain_email_auto_campaign_queues(db, department_code=department_code, now=now)
     filters = [EmailAutoJob.status == "pending", or_(EmailAutoJob.scheduled_at.is_(None), EmailAutoJob.scheduled_at <= now)]
     where = department_where(EmailAutoJob, department_code)
     if where is not None:

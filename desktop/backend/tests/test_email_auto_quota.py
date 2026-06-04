@@ -79,10 +79,11 @@ def test_mailbox_quota_usage_uses_rolling_24_hour_window(monkeypatch):
         assert email_auto._daily_auto_sent(db, email, quota) == 1
 
 
-def test_generate_jobs_fills_to_campaign_daily_limit_even_when_limit_is_smaller(client):
+def test_generate_jobs_fills_to_campaign_daily_limit_even_when_limit_is_smaller(client, monkeypatch):
     marker = uuid.uuid4().hex
     campaign_id = f"eac_{marker}"
-    now = datetime.now()
+    now = datetime(2026, 6, 4, 10, 0, 0)
+    monkeypatch.setattr(email_auto, "_now", lambda: now)
 
     with SessionLocal() as db:
         campaign = EmailAutoCampaign(
@@ -90,6 +91,8 @@ def test_generate_jobs_fills_to_campaign_daily_limit_even_when_limit_is_smaller(
             department_code="cross_border",
             name=f"Queue Limit {marker}",
             status="running",
+            start_time="09:30",
+            end_time="18:00",
             daily_limit=3,
             hourly_limit=3,
             interval_min_seconds=30,
@@ -136,10 +139,138 @@ def test_generate_jobs_fills_to_campaign_daily_limit_even_when_limit_is_smaller(
     assert total == 3
 
 
-def test_generate_jobs_expands_candidates_to_reach_campaign_daily_limit(client):
+def test_campaign_queue_is_created_only_when_window_starts(monkeypatch):
+    marker = uuid.uuid4().hex
+    campaign_id = f"eac_window_{marker}"
+    before_window = datetime(2026, 6, 4, 8, 0, 0)
+    in_window = datetime(2026, 6, 4, 10, 0, 0)
+    monkeypatch.setattr(email_auto, "_now", lambda: in_window)
+
+    with SessionLocal() as db:
+        campaign = EmailAutoCampaign(
+            id=campaign_id,
+            department_code="cross_border",
+            name=f"Window Queue {marker}",
+            status="running",
+            start_time="09:30",
+            end_time="18:00",
+            daily_limit=2,
+            hourly_limit=2,
+            interval_min_seconds=30,
+            interval_max_seconds=30,
+            filters_json=email_auto._json_dumps(email_auto.DEFAULT_FILTERS),
+        )
+        db.add(campaign)
+        for index in range(2):
+            db.add(Creator(
+                id=f"creator_window_{marker}_{index}",
+                platform="queue_window_test",
+                department_code="cross_border",
+                handle=f"queue_window_{marker}_{index}",
+                email=f"queue-window-{marker}-{index}@example.com",
+                has_email=1,
+                recommendation_score=90,
+                review_required=0,
+                recommended_at=in_window,
+                collected_at=in_window,
+            ))
+        db.commit()
+
+        before_summary = email_auto.maintain_email_auto_campaign_queues(db, department_code="cross_border", now=before_window)
+        before_total = db.scalar(select(func.count()).select_from(EmailAutoJob).where(EmailAutoJob.campaign_id == campaign_id))
+        assert before_summary["created"] == 0
+        assert before_total == 0
+
+        email_auto.maintain_email_auto_campaign_queues(db, department_code="cross_border", now=in_window)
+        window_key = email_auto._campaign_window_key(campaign, in_window)
+        total = db.scalar(select(func.count()).select_from(EmailAutoJob).where(EmailAutoJob.campaign_id == campaign_id))
+        keyed_total = db.scalar(
+            select(func.count())
+            .select_from(EmailAutoJob)
+            .where(EmailAutoJob.campaign_id == campaign_id, EmailAutoJob.queue_window_key == window_key)
+        )
+
+    assert total == 2
+    assert keyed_total == 2
+
+
+def test_campaign_queue_clears_pending_when_window_ends(monkeypatch):
+    marker = uuid.uuid4().hex
+    campaign_id = f"eac_clear_{marker}"
+    in_window = datetime(2026, 6, 4, 10, 0, 0)
+    after_window = datetime(2026, 6, 4, 19, 0, 0)
+    monkeypatch.setattr(email_auto, "_now", lambda: after_window)
+
+    with SessionLocal() as db:
+        campaign = EmailAutoCampaign(
+            id=campaign_id,
+            department_code="cross_border",
+            name=f"Clear Queue {marker}",
+            status="running",
+            start_time="09:30",
+            end_time="18:00",
+            daily_limit=3,
+            hourly_limit=3,
+            interval_min_seconds=30,
+            interval_max_seconds=30,
+            filters_json=email_auto._json_dumps(email_auto.DEFAULT_FILTERS),
+        )
+        db.add(campaign)
+        db.flush()
+        window_key = email_auto._campaign_window_key(campaign, in_window)
+        campaign.queue_window_key = window_key
+        for index, status in enumerate(["pending", "pending", "sent"]):
+            creator_id = f"creator_clear_{marker}_{index}"
+            db.add(Creator(
+                id=creator_id,
+                platform="queue_clear_test",
+                department_code="cross_border",
+                handle=f"queue_clear_{marker}_{index}",
+                email=f"queue-clear-{marker}-{index}@example.com",
+                has_email=1,
+                recommendation_score=90,
+                review_required=0,
+                recommended_at=in_window,
+                collected_at=in_window,
+            ))
+            db.add(EmailAutoJob(
+                id=f"job_clear_{marker}_{index}",
+                department_code="cross_border",
+                campaign_id=campaign_id,
+                creator_id=creator_id,
+                recipient_email=f"queue-clear-{marker}-{index}@example.com",
+                subject="subject",
+                body="body",
+                status=status,
+                scheduled_at=in_window,
+                queue_window_key=window_key,
+            ))
+        db.commit()
+
+        email_auto.maintain_email_auto_campaign_queues(db, department_code="cross_border", now=after_window)
+        pending = db.scalar(
+            select(func.count())
+            .select_from(EmailAutoJob)
+            .where(EmailAutoJob.campaign_id == campaign_id, EmailAutoJob.status == "pending")
+        )
+        sent = db.scalar(
+            select(func.count())
+            .select_from(EmailAutoJob)
+            .where(EmailAutoJob.campaign_id == campaign_id, EmailAutoJob.status == "sent")
+        )
+        db.refresh(campaign)
+        cleared_window_key = campaign.queue_cleared_window_key
+
+    assert pending == 0
+    assert sent == 1
+    assert cleared_window_key == window_key
+
+
+def test_generate_jobs_expands_candidates_to_reach_campaign_daily_limit(client, monkeypatch):
     marker = uuid.uuid4().hex
     campaign_id = f"eac_expand_{marker}"
-    now = datetime.now()
+    now = datetime(2026, 6, 4, 10, 0, 0)
+    monkeypatch.setattr(email_auto, "_now", lambda: now)
     filters = {**email_auto.DEFAULT_FILTERS, "keyword": f"strict_{marker}"}
 
     with SessionLocal() as db:
@@ -148,6 +279,8 @@ def test_generate_jobs_expands_candidates_to_reach_campaign_daily_limit(client):
             department_code="cross_border",
             name=f"Expand Queue {marker}",
             status="running",
+            start_time="09:30",
+            end_time="18:00",
             daily_limit=3,
             hourly_limit=3,
             interval_min_seconds=30,
@@ -184,10 +317,11 @@ def test_generate_jobs_expands_candidates_to_reach_campaign_daily_limit(client):
     assert total == 3
 
 
-def test_update_campaign_daily_limit_auto_backfills_queue(client):
+def test_update_campaign_daily_limit_auto_backfills_queue(client, monkeypatch):
     marker = uuid.uuid4().hex
     campaign_id = f"eac_update_{marker}"
-    now = datetime.now()
+    now = datetime(2026, 6, 4, 10, 0, 0)
+    monkeypatch.setattr(email_auto, "_now", lambda: now)
 
     with SessionLocal() as db:
         campaign = EmailAutoCampaign(
@@ -195,6 +329,8 @@ def test_update_campaign_daily_limit_auto_backfills_queue(client):
             department_code="cross_border",
             name=f"Auto Backfill {marker}",
             status="running",
+            start_time="09:30",
+            end_time="18:00",
             daily_limit=1,
             hourly_limit=1,
             interval_min_seconds=30,
