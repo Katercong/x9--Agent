@@ -125,9 +125,9 @@ export const endpoints = {
   emailAutoHealthCheck: (body?: { max_accounts?: number; poll_seconds?: number }) =>
     api.post<EmailAutoHealthCheckResponse>(`${LOCAL}/email-auto/mailboxes/health-check`, body || {}),
   emailAutoCreateCampaign: (body: EmailAutoCampaignCreate) =>
-    api.post<{ ok: boolean; item: EmailAutoCampaign; created_jobs: number }>(`${LOCAL}/email-auto/campaigns`, body),
+    api.post<{ ok: boolean; item: EmailAutoCampaign; created_jobs: number; reason?: string }>(`${LOCAL}/email-auto/campaigns`, body),
   emailAutoUpdateCampaign: (id: string, body: EmailAutoCampaignCreate) =>
-    api.patch<{ ok: boolean; item: EmailAutoCampaign; created_jobs: number }>(`${LOCAL}/email-auto/campaigns/${encodeURIComponent(id)}`, body),
+    api.patch<{ ok: boolean; item: EmailAutoCampaign; created_jobs: number; reason?: string }>(`${LOCAL}/email-auto/campaigns/${encodeURIComponent(id)}`, body),
   emailAutoCampaignPreview: (body: EmailAutoCampaignCreate) =>
     api.post<{ ok: boolean; item: EmailAutoJob }>(`${LOCAL}/email-auto/campaigns/preview`, body),
   emailAutoCampaignStatus: (id: string, status: 'running' | 'paused' | 'draft') =>
@@ -135,7 +135,7 @@ export const endpoints = {
   emailAutoPauseAll: () =>
     api.post<{ ok: boolean; updated: number }>(`${LOCAL}/email-auto/campaigns/pause-all`, {}),
   emailAutoGenerateJobs: (id: string, limit?: number) =>
-    api.post<{ ok: boolean; created_jobs: number }>(`${LOCAL}/email-auto/campaigns/${encodeURIComponent(id)}/generate-jobs${limit ? `?limit=${limit}` : ''}`, {}),
+    api.post<{ ok: boolean; created_jobs: number; reason?: string }>(`${LOCAL}/email-auto/campaigns/${encodeURIComponent(id)}/generate-jobs${limit ? `?limit=${limit}` : ''}`, {}),
   emailAutoProcessJobs: (body: { limit?: number; confirm_send: boolean }) =>
     api.post<{ ok: boolean; processed: number; results: Array<Record<string, unknown>> }>(`${LOCAL}/email-auto/jobs/process`, body),
   emailAutoRetryJob: (id: string) =>

@@ -285,6 +285,58 @@ def _serialize_campaign(db: Session, row: EmailAutoCampaign) -> dict[str, Any]:
     }
 
 
+def _campaign_generation_stats(db: Session, campaign: EmailAutoCampaign) -> dict[str, int]:
+    filters = _json_loads(campaign.filters_json, DEFAULT_FILTERS)
+    query_filters = _base_filters(campaign.department_code)
+    query_filters.append(Creator.email.is_not(None))
+    query_filters.append(Creator.email.like("%@%"))
+    _apply_creator_filters(query_filters, filters)
+    rows = list(db.scalars(select(Creator).where(*query_filters).order_by(*_sort_clauses(filters))).all())
+    already_contacted = 0
+    existing_job = 0
+    creatable = 0
+    for creator in rows:
+        if _creator_already_contacted(db, creator.id):
+            already_contacted += 1
+        elif _job_exists(db, campaign.id, creator.id):
+            existing_job += 1
+        else:
+            creatable += 1
+    active_jobs = int(db.scalar(
+        select(func.count())
+        .select_from(EmailAutoJob)
+        .where(EmailAutoJob.campaign_id == campaign.id, EmailAutoJob.status.in_(ACTIVE_JOB_STATUSES))
+    ) or 0)
+    all_jobs = int(db.scalar(
+        select(func.count())
+        .select_from(EmailAutoJob)
+        .where(EmailAutoJob.campaign_id == campaign.id)
+    ) or 0)
+    return {
+        "daily_limit": int(campaign.daily_limit or 0),
+        "matching_creators": len(rows),
+        "already_contacted": already_contacted,
+        "existing_job": existing_job,
+        "creatable": creatable,
+        "active_jobs": active_jobs,
+        "queue_total": all_jobs,
+    }
+
+
+def _generation_reason(created_jobs: int, stats: dict[str, int]) -> str:
+    if created_jobs > 0:
+        return f"已补充 {created_jobs} 个队列任务"
+    if stats["active_jobs"] >= stats["daily_limit"]:
+        return "队列已达到计划总量"
+    if stats["creatable"] <= 0:
+        return (
+            "没有可新增达人："
+            f"匹配 {stats['matching_creators']}，已联系 {stats['already_contacted']}，"
+            f"已有任务 {stats['existing_job']}，可新增 0"
+        )
+    return "没有生成新任务"
+
+
 def _schedule_label(row: EmailAutoCampaign) -> str:
     if row.schedule_type == "weekly":
         weekdays = _json_loads(row.weekdays_json, [])
@@ -826,7 +878,8 @@ def create_campaign(body: CampaignIn, request: Request, db: Session = Depends(ge
     db.commit()
     db.refresh(row)
     created_jobs = _generate_jobs_for_campaign(db, row, candidate_limit=candidate_limit) if body.generate_jobs else 0
-    return {"ok": True, "item": _serialize_campaign(db, row), "created_jobs": created_jobs}
+    stats = _campaign_generation_stats(db, row)
+    return {"ok": True, "item": _serialize_campaign(db, row), "created_jobs": created_jobs, "reason": _generation_reason(created_jobs, stats), **stats}
 
 
 @router.patch("/campaigns/{campaign_id}")
@@ -865,7 +918,8 @@ def update_campaign(campaign_id: str, body: CampaignIn, request: Request, db: Se
     db.refresh(row)
     should_generate_jobs = body.generate_jobs or daily_limit > previous_daily_limit
     created_jobs = _generate_jobs_for_campaign(db, row, candidate_limit=candidate_limit) if should_generate_jobs else 0
-    return {"ok": True, "item": _serialize_campaign(db, row), "created_jobs": created_jobs}
+    stats = _campaign_generation_stats(db, row)
+    return {"ok": True, "item": _serialize_campaign(db, row), "created_jobs": created_jobs, "reason": _generation_reason(created_jobs, stats), **stats}
 
 
 @router.post("/campaigns/preview")
@@ -945,7 +999,8 @@ def generate_jobs(campaign_id: str, request: Request, db: Session = Depends(get_
     if row is None or not row_in_department(row, current_department_code(request)):
         raise HTTPException(status_code=404, detail="campaign not found")
     created = _generate_jobs_for_campaign(db, row, candidate_limit=int(row.daily_limit or limit or 200))
-    return {"ok": True, "created_jobs": created}
+    stats = _campaign_generation_stats(db, row)
+    return {"ok": True, "created_jobs": created, "reason": _generation_reason(created, stats), **stats}
 
 
 def _generate_jobs_for_campaign(db: Session, campaign: EmailAutoCampaign, *, candidate_limit: int) -> int:

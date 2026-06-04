@@ -46,6 +46,7 @@ interface AutoCampaign {
   startTime: string;
   endTime: string;
   sent: number;
+  queueTotal: number;
   dailyLimit: number;
   hourlyLimit: number;
   intervalMinSeconds: number;
@@ -322,6 +323,7 @@ export default function EmailAutoConsole() {
     startTime: item.start_time,
     endTime: item.end_time,
     sent: item.sent,
+    queueTotal: item.queue_total ?? item.daily_limit,
     dailyLimit: item.daily_limit,
     hourlyLimit: item.hourly_limit,
     intervalMinSeconds: item.interval_min_seconds,
@@ -411,11 +413,11 @@ export default function EmailAutoConsole() {
       header: '发送量',
       cell: (row) => (
         <div className="min-w-[140px]">
-          <div className="num font-semibold text-gray-900">{row.sent}/{row.dailyLimit}</div>
+          <div className="num font-semibold text-gray-900">{row.sent}/{row.queueTotal}</div>
           <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-gray-100">
-            <div className="h-full rounded-full bg-brand-500" style={{ width: `${Math.min(100, (row.sent / row.dailyLimit) * 100)}%` }} />
+            <div className="h-full rounded-full bg-brand-500" style={{ width: `${Math.min(100, (row.sent / Math.max(1, row.queueTotal)) * 100)}%` }} />
           </div>
-          <div className="mt-1 text-xxs text-muted">{row.hourlyLimit}/小时</div>
+          <div className="mt-1 text-xxs text-muted">{row.hourlyLimit}/小时 · 计划总量 {row.dailyLimit}</div>
         </div>
       ),
     },
@@ -447,7 +449,7 @@ export default function EmailAutoConsole() {
           <button
             className="btn btn-ghost"
             disabled={emailAutoActions.generateJobs.isPending}
-            onClick={() => emailAutoActions.generateJobs.mutate({ id: row.id, limit: row.dailyLimit }, { onSuccess: (res) => showNotice(`已生成 ${res.created_jobs} 个队列任务`) })}
+            onClick={() => emailAutoActions.generateJobs.mutate({ id: row.id, limit: row.dailyLimit }, { onSuccess: (res) => showNotice(res.reason || `已生成 ${res.created_jobs} 个队列任务`) })}
           ><Sparkles size={13} />补充队列</button>
         </div>
       ),
@@ -717,10 +719,10 @@ export default function EmailAutoConsole() {
           onSubmit={(payload) => {
             if (editingCampaign) {
               updateCampaign.mutate({ id: editingCampaign.id, body: payload }, {
-                onSuccess: () => {
+                onSuccess: (res) => {
                   setShowPlanModal(false);
                   setEditingCampaign(null);
-                  showNotice('计划已保存');
+                  showNotice(res.reason || '计划已保存');
                 },
               });
               return;
@@ -729,7 +731,7 @@ export default function EmailAutoConsole() {
               onSuccess: (res) => {
                 setShowPlanModal(false);
                 setEditingCampaign(null);
-                showNotice(`计划已创建，生成 ${res.created_jobs} 个真实队列任务`);
+                showNotice(res.reason || `计划已创建，生成 ${res.created_jobs} 个真实队列任务`);
               },
             });
           }}
