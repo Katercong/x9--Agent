@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import String, and_, cast, func, or_, select
+from sqlalchemy import String, and_, case, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -31,6 +31,7 @@ router = APIRouter(prefix="/api/local/email-auto", tags=["email-auto"])
 
 
 DEFAULT_FILTERS: dict[str, Any] = {
+    "keyword": "",
     "source": "all",
     "priority": "all",
     "contact": "email",
@@ -691,7 +692,7 @@ def preview_campaign(body: CampaignIn, request: Request, db: Session = Depends(g
     query_filters.append(Creator.email.is_not(None))
     query_filters.append(Creator.email.like("%@%"))
     _apply_creator_filters(query_filters, filters)
-    rows = list(db.scalars(select(Creator).where(*query_filters).order_by(_sort_clause(filters)).limit(body.candidate_limit)).all())
+    rows = list(db.scalars(select(Creator).where(*query_filters).order_by(*_sort_clauses(filters)).limit(body.candidate_limit)).all())
     if not rows:
         raise HTTPException(status_code=404, detail="no matching creator found")
     assets = product_asset_service.list_assets(department_code)
@@ -768,7 +769,7 @@ def _generate_jobs_for_campaign(db: Session, campaign: EmailAutoCampaign, *, can
     query_filters.append(Creator.email.is_not(None))
     query_filters.append(Creator.email.like("%@%"))
     _apply_creator_filters(query_filters, filters)
-    rows = list(db.scalars(select(Creator).where(*query_filters).order_by(_sort_clause(filters)).limit(candidate_limit)).all())
+    rows = list(db.scalars(select(Creator).where(*query_filters).order_by(*_sort_clauses(filters)).limit(candidate_limit)).all())
     assets = product_asset_service.list_assets(campaign.department_code)
     created = 0
     now = _now()
@@ -804,12 +805,28 @@ def _generate_jobs_for_campaign(db: Session, campaign: EmailAutoCampaign, *, can
 
 
 def _apply_creator_filters(query_filters: list[Any], filters: dict[str, Any]) -> None:
+    keyword = str(filters.get("keyword") or filters.get("q") or "").strip().lower()
+    if keyword:
+        pattern = f"%{keyword}%"
+        query_filters.append(or_(
+            func.lower(func.coalesce(Creator.handle, "")).like(pattern),
+            func.lower(func.coalesce(Creator.email, "")).like(pattern),
+            func.lower(func.coalesce(Creator.display_name, "")).like(pattern),
+            func.lower(func.coalesce(Creator.primary_product_category, "")).like(pattern),
+            func.lower(func.coalesce(Creator.recommended_product_type, "")).like(pattern),
+            func.lower(func.coalesce(Creator.recommendation_reason, "")).like(pattern),
+        ))
     source = str(filters.get("source") or "all")
-    if source != "all":
-        query_filters.append(Creator.source == source)
+    if source == "other":
+        query_filters.append(or_(Creator.source.is_(None), ~Creator.source.in_(["tiktok_shop", "x9_leads", "table_import"])))
+    elif source != "all":
+        query_filters.append(or_(Creator.source == source, Creator.platform == source))
     priority = str(filters.get("priority") or "all")
     if priority != "all":
         query_filters.append(or_(Creator.outreach_priority == priority, Creator.priority_level == priority))
+    contact = str(filters.get("contact") or "email")
+    if contact == "contactable":
+        query_filters.append(or_(Creator.has_email == 1, Creator.contactability_score > 0))
     score = str(filters.get("score") or "all")
     if score == "gte85":
         query_filters.append(Creator.recommendation_score >= 85)
@@ -819,6 +836,15 @@ def _apply_creator_filters(query_filters: list[Any], filters: dict[str, Any]) ->
         query_filters.append(and_(Creator.recommendation_score >= 50, Creator.recommendation_score <= 69))
     elif score == "lt50":
         query_filters.append(Creator.recommendation_score < 50)
+    product = str(filters.get("product") or "all")
+    if product != "all":
+        query_filters.append(or_(Creator.recommended_product_type == product, Creator.primary_product_category == product))
+    collab = str(filters.get("collab") or "all")
+    if collab != "all":
+        query_filters.append(Creator.recommended_collab_type == collab)
+    status = str(filters.get("status") or "all")
+    if status != "all":
+        query_filters.append(or_(Creator.current_status == status, Creator.recommendation_status == status))
     review = str(filters.get("review") or "all")
     if review == "clean":
         query_filters.append(or_(Creator.review_required == 0, Creator.review_required.is_(None)))
@@ -845,19 +871,40 @@ def _apply_creator_filters(query_filters: list[Any], filters: dict[str, Any]) ->
         query_filters.append(or_(Creator.recommended_at >= cutoff, Creator.collected_at >= cutoff, Creator.created_at >= cutoff))
 
 
-def _sort_clause(filters: dict[str, Any]):
+def _priority_rank_clause():
+    return case(
+        (Creator.outreach_priority == "P1", 1),
+        (Creator.outreach_priority == "P2", 2),
+        (Creator.outreach_priority == "P3", 3),
+        (Creator.outreach_priority == "P4", 4),
+        else_=9,
+    )
+
+
+def _sort_clauses(filters: dict[str, Any]) -> list[Any]:
     sort = str(filters.get("sort") or "recommended")
+    recent = Creator.collected_at.desc().nullslast()
+    created = Creator.created_at.desc().nullslast()
+    followers_desc = Creator.followers_count.desc().nullslast()
+    followers_asc = Creator.followers_count.asc().nullslast()
+    score_desc = Creator.recommendation_score.desc()
+    fit_desc = Creator.primary_product_fit_score.desc()
+    priority_rank = _priority_rank_clause().asc()
     if sort == "score":
-        return Creator.recommendation_score.desc()
+        return [score_desc, fit_desc, followers_desc, recent, created]
     if sort == "followers":
-        return Creator.followers_count.desc()
+        return [followers_desc, score_desc, fit_desc, recent, created]
+    if sort == "fit":
+        return [fit_desc, score_desc, followers_desc, recent, created]
     if sort == "priority":
-        return Creator.outreach_priority.asc()
-    if sort == "recent":
-        return Creator.created_at.desc()
+        return [priority_rank, score_desc, fit_desc, recent, created]
+    if sort in {"recent", "collected_at"}:
+        return [recent, created, score_desc, followers_desc]
+    if sort == "contactable":
+        return [Creator.has_email.desc(), Creator.contactability_score.desc(), priority_rank, score_desc, recent, created]
     if sort == "micro":
-        return Creator.followers_count.asc()
-    return Creator.recommendation_score.desc()
+        return [followers_asc, score_desc, fit_desc, recent, created]
+    return [priority_rank, score_desc, fit_desc, followers_desc, recent, created]
 
 
 def _creator_already_contacted(db: Session, creator_id: str) -> bool:
@@ -880,7 +927,7 @@ def _job_exists(db: Session, campaign_id: str, creator_id: str) -> bool:
 
 def _job_filter_tags(filters: dict[str, Any], creator: Creator) -> list[str]:
     tags = ["客户推荐库", "有邮箱"]
-    for key in ("priority", "score", "review", "date", "sort"):
+    for key in ("keyword", "priority", "score", "product", "collab", "status", "review", "owner", "date", "sort"):
         value = filters.get(key)
         if value and value != "all":
             tags.append(str(value))

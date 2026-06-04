@@ -81,65 +81,169 @@ interface AutoJob {
   body_format?: string;
 }
 
+type RecommendationFilters = {
+  keyword: string;
+  source: string;
+  priority: string;
+  contact: string;
+  score: string;
+  product: string;
+  collab: string;
+  status: string;
+  review: string;
+  owner: string;
+  date: string;
+  sort: string;
+  min_followers: string;
+  max_followers: string;
+};
+
+type FilterOption = { value: string; label: string };
+
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
-const recommendationSelectFields = [
-  {
-    label: '来源',
-    defaultOption: '全部来源',
-    options: ['全部来源', 'TikTok Shop', 'X9 线索', '表格导入', '其他'],
-  },
-  {
-    label: '优先级',
-    defaultOption: '全部优先级',
-    options: ['全部优先级', 'P1', 'P2', 'P3', 'P4'],
-  },
-  {
-    label: '联系方式',
-    defaultOption: '有邮箱',
-    options: ['全部联系', '可联系', '有邮箱', '无联系方式'],
-  },
-  {
-    label: '评分',
-    defaultOption: '85+ 强推荐',
-    options: ['全部评分', '85+ 强推荐', '70-84 可测试', '50-69 观察', '<50 低分'],
-  },
-  {
-    label: '产品',
-    defaultOption: '动态读取：主品类 / 推荐产品 / 标签',
-    options: ['全部产品', '动态读取：主品类 / 推荐产品 / 标签'],
-  },
-  {
-    label: '合作',
-    defaultOption: '动态读取：推荐合作方式',
-    options: ['全部合作', '动态读取：推荐合作方式'],
-  },
-  {
-    label: '建联状态',
-    defaultOption: '动态读取：待建联 / 已建联 / 已回复等',
-    options: ['全部状态', '动态读取：待建联 / 已建联 / 已回复等'],
-  },
-  {
-    label: '复核状态',
-    defaultOption: '无复核/风险',
-    options: ['全部复核状态', '需要复核', '有风险提示', '无复核/风险'],
-  },
-  {
-    label: '归属',
-    defaultOption: '全部归属',
-    options: ['全部归属', '已分配 BD', '未分配 BD'],
-  },
-  {
-    label: '入库时间',
-    defaultOption: '近 30 天',
-    options: ['全部入库时间', '近 24 小时', '近 7 天', '近 30 天'],
-  },
-  {
-    label: '排序',
-    defaultOption: '综合推荐排序',
-    options: ['综合推荐排序', '评分从高到低', '粉丝从高到低', '产品匹配优先', '优先级 P1 优先', '最近入库优先', '可联系优先', '小达人优先'],
-  },
+const DEFAULT_RECOMMENDATION_FILTERS: RecommendationFilters = {
+  keyword: '',
+  source: 'all',
+  priority: 'all',
+  contact: 'email',
+  score: 'gte85',
+  product: 'all',
+  collab: 'all',
+  status: 'all',
+  review: 'clean',
+  owner: 'all',
+  date: '30d',
+  sort: 'recommended',
+  min_followers: '',
+  max_followers: '',
+};
+
+const sourceOptions: FilterOption[] = [
+  { value: 'all', label: '全部来源' },
+  { value: 'tiktok_shop', label: 'TikTok Shop' },
+  { value: 'x9_leads', label: 'X9 线索' },
+  { value: 'table_import', label: '表格导入' },
+  { value: 'other', label: '其他' },
 ];
+
+const priorityOptions: FilterOption[] = [
+  { value: 'all', label: '全部优先级' },
+  { value: 'P1', label: 'P1' },
+  { value: 'P2', label: 'P2' },
+  { value: 'P3', label: 'P3' },
+  { value: 'P4', label: 'P4' },
+];
+
+const contactOptions: FilterOption[] = [
+  { value: 'email', label: '有邮箱' },
+  { value: 'all', label: '全部联系' },
+  { value: 'contactable', label: '可联系' },
+];
+
+const scoreOptions: FilterOption[] = [
+  { value: 'all', label: '全部评分' },
+  { value: 'gte85', label: '85+ 强推荐' },
+  { value: '70_84', label: '70-84 可测试' },
+  { value: '50_69', label: '50-69 观察' },
+  { value: 'lt50', label: '<50 低分' },
+];
+
+const productOptions: FilterOption[] = [
+  { value: 'all', label: '全部产品' },
+  { value: 'wellness_self_care_bundle', label: '健康自护理组合' },
+  { value: 'feminine_care', label: '女性护理' },
+  { value: 'feminine_care_daily_liner', label: '日用护垫' },
+  { value: 'period_care_pad', label: '经期护理' },
+  { value: 'sensitive_skin_care', label: '敏感肌护理' },
+  { value: 'travel_hygiene_pack', label: '旅行卫生包' },
+  { value: 'postpartum_mom_care', label: '产后妈妈护理' },
+  { value: 'teen_first_period_care', label: '青少初潮护理' },
+  { value: 'mom_baby', label: '母婴护理' },
+  { value: 'adult_care', label: '成人护理' },
+  { value: 'pet_care', label: '宠物护理' },
+  { value: 'home_care', label: '居家护理' },
+  { value: 'health_mask', label: '健康防护口罩' },
+  { value: 'general_lifestyle', label: '生活方式' },
+];
+
+const collabOptions: FilterOption[] = [
+  { value: 'all', label: '全部合作' },
+  { value: 'affiliate_collab', label: '联盟佣金合作' },
+  { value: 'sample_collab', label: '样品合作' },
+  { value: 'brand_awareness_collab', label: '品牌曝光合作' },
+  { value: 'gifted_review', label: '赠品测评' },
+  { value: 'paid_test_collab', label: '付费测试' },
+  { value: 'do_not_contact_now', label: '暂不建联' },
+];
+
+const statusOptions: FilterOption[] = [
+  { value: 'all', label: '全部状态' },
+  { value: 'prospect', label: '待建联' },
+  { value: 'new', label: '新达人' },
+  { value: 'recommended', label: '推荐建联' },
+  { value: 'recommended_after_review', label: '复核后推荐' },
+  { value: 'low_cost_test', label: '低成本测试' },
+  { value: 'affiliate_test', label: '联盟测试' },
+  { value: 'brand_awareness_only', label: '品牌曝光' },
+  { value: 'manual_review_before_outreach', label: '建联前复核' },
+  { value: 'hold', label: '暂缓' },
+  { value: 'not_recommended_now', label: '暂不推荐' },
+  { value: 'no_contact_info', label: '无联系方式' },
+  { value: '已建联', label: '已建联' },
+  { value: 'contacted', label: '已联系' },
+  { value: '待跟进', label: '待跟进' },
+  { value: '沟通中', label: '沟通中' },
+  { value: 'sample_shipped', label: '样品已寄' },
+  { value: 'video_published', label: '视频已发布' },
+  { value: 'ad_authorized', label: '广告已授权' },
+  { value: 'ad_running', label: '广告投放中' },
+];
+
+const reviewOptions: FilterOption[] = [
+  { value: 'clean', label: '无复核/风险' },
+  { value: 'all', label: '全部复核状态' },
+  { value: 'need_review', label: '需要复核' },
+  { value: 'has_risk', label: '有风险提示' },
+];
+
+const ownerOptions: FilterOption[] = [
+  { value: 'all', label: '全部归属' },
+  { value: 'assigned', label: '已分配 BD' },
+  { value: 'unassigned', label: '未分配 BD' },
+];
+
+const dateOptions: FilterOption[] = [
+  { value: 'all', label: '全部入库时间' },
+  { value: '1d', label: '近 24 小时' },
+  { value: '7d', label: '近 7 天' },
+  { value: '30d', label: '近 30 天' },
+];
+
+const sortOptions: FilterOption[] = [
+  { value: 'recommended', label: '综合推荐排序' },
+  { value: 'score', label: '评分从高到低' },
+  { value: 'followers', label: '粉丝从高到低' },
+  { value: 'fit', label: '产品匹配优先' },
+  { value: 'priority', label: '优先级 P1 优先' },
+  { value: 'recent', label: '最近入库优先' },
+  { value: 'contactable', label: '可联系优先' },
+  { value: 'micro', label: '小达人优先' },
+];
+
+const filterOptionLabels: Record<string, Record<string, string>> = {
+  source: Object.fromEntries(sourceOptions.map((item) => [item.value, item.label])),
+  priority: Object.fromEntries(priorityOptions.map((item) => [item.value, item.label])),
+  contact: Object.fromEntries(contactOptions.map((item) => [item.value, item.label])),
+  score: Object.fromEntries(scoreOptions.map((item) => [item.value, item.label])),
+  product: Object.fromEntries(productOptions.map((item) => [item.value, item.label])),
+  collab: Object.fromEntries(collabOptions.map((item) => [item.value, item.label])),
+  status: Object.fromEntries(statusOptions.map((item) => [item.value, item.label])),
+  review: Object.fromEntries(reviewOptions.map((item) => [item.value, item.label])),
+  owner: Object.fromEntries(ownerOptions.map((item) => [item.value, item.label])),
+  date: Object.fromEntries(dateOptions.map((item) => [item.value, item.label])),
+  sort: Object.fromEntries(sortOptions.map((item) => [item.value, item.label])),
+};
 
 const recommendationProtectionRules = [
   '客户推荐库 uncontacted=true',
@@ -450,7 +554,7 @@ export default function EmailAutoConsole() {
             </div>
           </div>
           <div className="p-4">
-            <RecommendationRulesPanel compact />
+            <RecommendationRulesPanel filters={DEFAULT_RECOMMENDATION_FILTERS} onChange={() => undefined} compact readOnly />
           </div>
         </section>
       </div>
@@ -619,21 +723,13 @@ function formatShortTime(value: string) {
 
 function filterSummary(filters: Record<string, unknown>) {
   const labels: string[] = ['客户推荐库'];
-  const map: Record<string, Record<string, string>> = {
-    source: { all: '全部来源' },
-    priority: { all: '全部优先级', P1: 'P1', P2: 'P2', P3: 'P3', P4: 'P4' },
-    contact: { email: '有邮箱', all: '全部联系' },
-    score: { gte85: '85+ 强推荐', '70_84': '70-84 可测试', '50_69': '50-69 观察', lt50: '<50 低分' },
-    review: { clean: '无复核/风险', need_review: '需要复核', has_risk: '有风险提示' },
-    owner: { assigned: '已分配 BD', unassigned: '未分配 BD' },
-    date: { '1d': '近 24 小时', '7d': '近 7 天', '30d': '近 30 天' },
-    sort: { recommended: '综合推荐排序', score: '评分优先', followers: '粉丝优先', priority: '优先级优先', recent: '最近入库', micro: '小达人优先' },
-  };
-  for (const key of ['source', 'priority', 'contact', 'score', 'review', 'owner', 'date', 'sort']) {
+  for (const key of ['source', 'priority', 'contact', 'score', 'product', 'collab', 'status', 'review', 'owner', 'date', 'sort']) {
     const value = String(filters[key] ?? 'all');
-    const label = map[key]?.[value];
+    const label = filterOptionLabels[key]?.[value];
     if (label && !label.startsWith('全部')) labels.push(label);
   }
+  const keyword = String(filters.keyword ?? '').trim();
+  if (keyword) labels.push(`关键词 ${keyword}`);
   const minFollowers = filters.min_followers;
   const maxFollowers = filters.max_followers;
   if (minFollowers || maxFollowers) labels.push(`粉丝 ${minFollowers || 0}-${maxFollowers || '不限'}`);
@@ -752,6 +848,7 @@ function PlanModal({
   const [intervalMax, setIntervalMax] = useState(240);
   const [sendMode, setSendMode] = useState<'draft' | 'send'>('send');
   const [candidateLimit, setCandidateLimit] = useState(200);
+  const [filters, setFilters] = useState<RecommendationFilters>(DEFAULT_RECOMMENDATION_FILTERS);
   const usTimeReference = buildUsTimeReference(startTime, endTime);
   const capacityMailboxes = useMemo(
     () => mailboxes.filter((item) => item.enabled && item.quota > 0 && !['auth_expired', 'bounce_risk', 'cooldown'].includes(item.status)),
@@ -782,6 +879,27 @@ function PlanModal({
     }
   };
 
+  const updateFilter = (key: keyof RecommendationFilters, value: string) => {
+    setFilters((current) => ({ ...current, [key]: value }));
+  };
+
+  const filterPayload = () => ({
+    keyword: filters.keyword.trim(),
+    source: filters.source,
+    priority: filters.priority,
+    contact: filters.contact,
+    score: filters.score,
+    product: filters.product,
+    collab: filters.collab,
+    status: filters.status,
+    review: filters.review,
+    owner: filters.owner,
+    date: filters.date,
+    sort: filters.sort,
+    min_followers: filters.min_followers ? Number(filters.min_followers) : null,
+    max_followers: filters.max_followers ? Number(filters.max_followers) : null,
+  });
+
   const createPayload = (): EmailAutoCampaignCreate => ({
     name: planName,
     status: 'running',
@@ -796,15 +914,7 @@ function PlanModal({
     interval_max_seconds: Math.max(intervalMin, intervalMax),
     mailbox_pool: 'all',
     send_mode: sendMode,
-    filters: {
-      source: 'all',
-      priority: 'all',
-      contact: 'email',
-      score: 'gte85',
-      review: 'clean',
-      date: '30d',
-      sort: 'recommended',
-    },
+    filters: filterPayload(),
     generate_jobs: true,
     candidate_limit: protectedCandidateLimit,
   });
@@ -944,7 +1054,7 @@ function PlanModal({
 
           <div className="mt-4 rounded-md border border-line p-4">
             <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-900"><Users size={15} />达人筛选条件</div>
-            <RecommendationRulesPanel />
+            <RecommendationRulesPanel filters={filters} onChange={updateFilter} />
           </div>
 
           <div className="mt-4 grid gap-3 rounded-md border border-green-200 bg-green-50 p-4 text-xs text-green-700">
@@ -965,24 +1075,62 @@ function PlanModal({
   );
 }
 
-function RecommendationRulesPanel({ compact = false }: { compact?: boolean }) {
+function RecommendationRulesPanel({
+  filters,
+  onChange,
+  compact = false,
+  readOnly = false,
+}: {
+  filters: RecommendationFilters;
+  onChange: (key: keyof RecommendationFilters, value: string) => void;
+  compact?: boolean;
+  readOnly?: boolean;
+}) {
   return (
     <div className="space-y-3">
       <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
         <div className="font-semibold text-blue-800">沿用客户推荐库高级筛选规则</div>
-        <div className="mt-1 text-xxs">字段与推荐库保持一致：来源、关键词、优先级、联系方式、评分、粉丝、产品、合作、状态、复核、归属、入库时间和排序。</div>
+        <div className="mt-1 text-xxs">所有条件均为固定选项，保存计划时按当前选择写入筛选规则。</div>
       </div>
 
       <div className={cn('grid gap-3', compact ? 'grid-cols-1' : 'md:grid-cols-2 xl:grid-cols-3')}>
-        <RecommendationRuleText label="关键词搜索" value="handle / 邮箱 / 商品 / 推荐理由" />
-        {recommendationSelectFields.map((field) => (
-          <RecommendationRuleSelect key={field.label} label={field.label} options={field.options} defaultOption={field.defaultOption} />
-        ))}
+        <RecommendationRuleText
+          label="关键词搜索"
+          value={filters.keyword}
+          placeholder="handle / 邮箱 / 商品 / 推荐理由"
+          readOnly={readOnly}
+          onChange={(value) => onChange('keyword', value)}
+        />
+        <RecommendationRuleSelect label="来源" value={filters.source} options={sourceOptions} readOnly={readOnly} onChange={(value) => onChange('source', value)} />
+        <RecommendationRuleSelect label="优先级" value={filters.priority} options={priorityOptions} readOnly={readOnly} onChange={(value) => onChange('priority', value)} />
+        <RecommendationRuleSelect label="联系方式" value={filters.contact} options={contactOptions} readOnly={readOnly} onChange={(value) => onChange('contact', value)} />
+        <RecommendationRuleSelect label="评分" value={filters.score} options={scoreOptions} readOnly={readOnly} onChange={(value) => onChange('score', value)} />
+        <RecommendationRuleSelect label="产品" value={filters.product} options={productOptions} readOnly={readOnly} onChange={(value) => onChange('product', value)} />
+        <RecommendationRuleSelect label="合作" value={filters.collab} options={collabOptions} readOnly={readOnly} onChange={(value) => onChange('collab', value)} />
+        <RecommendationRuleSelect label="建联状态" value={filters.status} options={statusOptions} readOnly={readOnly} onChange={(value) => onChange('status', value)} />
+        <RecommendationRuleSelect label="复核状态" value={filters.review} options={reviewOptions} readOnly={readOnly} onChange={(value) => onChange('review', value)} />
+        <RecommendationRuleSelect label="归属" value={filters.owner} options={ownerOptions} readOnly={readOnly} onChange={(value) => onChange('owner', value)} />
+        <RecommendationRuleSelect label="入库时间" value={filters.date} options={dateOptions} readOnly={readOnly} onChange={(value) => onChange('date', value)} />
+        <RecommendationRuleSelect label="排序" value={filters.sort} options={sortOptions} readOnly={readOnly} onChange={(value) => onChange('sort', value)} />
         <div>
           <div className="mb-1 text-xxs font-semibold text-muted">粉丝区间</div>
           <div className="grid grid-cols-2 gap-2">
-            <input className="h-9 w-full rounded-md border border-line bg-white px-3 text-xs outline-none focus:border-brand-300" placeholder="最小" defaultValue="" inputMode="numeric" />
-            <input className="h-9 w-full rounded-md border border-line bg-white px-3 text-xs outline-none focus:border-brand-300" placeholder="最大" defaultValue="" inputMode="numeric" />
+            <input
+              className="h-9 w-full rounded-md border border-line bg-white px-3 text-xs outline-none focus:border-brand-300 disabled:bg-soft"
+              placeholder="最小"
+              value={filters.min_followers}
+              disabled={readOnly}
+              inputMode="numeric"
+              onChange={(event) => onChange('min_followers', event.target.value.replace(/[^0-9]/g, ''))}
+            />
+            <input
+              className="h-9 w-full rounded-md border border-line bg-white px-3 text-xs outline-none focus:border-brand-300 disabled:bg-soft"
+              placeholder="最大"
+              value={filters.max_followers}
+              disabled={readOnly}
+              inputMode="numeric"
+              onChange={(event) => onChange('max_followers', event.target.value.replace(/[^0-9]/g, ''))}
+            />
           </div>
         </div>
       </div>
@@ -999,22 +1147,57 @@ function RecommendationRulesPanel({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function RecommendationRuleSelect({ label, options, defaultOption }: { label: string; options: string[]; defaultOption: string }) {
+function RecommendationRuleSelect({
+  label,
+  options,
+  value,
+  onChange,
+  readOnly = false,
+}: {
+  label: string;
+  options: FilterOption[];
+  value: string;
+  onChange: (value: string) => void;
+  readOnly?: boolean;
+}) {
   return (
     <label className="block">
       <span className="mb-1 block text-xxs font-semibold text-muted">{label}</span>
-      <select className="h-9 w-full rounded-md border border-line bg-white px-3 text-xs text-gray-800 outline-none focus:border-brand-300" defaultValue={defaultOption}>
-        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+      <select
+        className="h-9 w-full rounded-md border border-line bg-white px-3 text-xs text-gray-800 outline-none focus:border-brand-300 disabled:bg-soft"
+        value={value}
+        disabled={readOnly}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
       </select>
     </label>
   );
 }
 
-function RecommendationRuleText({ label, value }: { label: string; value: string }) {
+function RecommendationRuleText({
+  label,
+  value,
+  placeholder,
+  onChange,
+  readOnly = false,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+  readOnly?: boolean;
+}) {
   return (
     <label className="block">
       <span className="mb-1 block text-xxs font-semibold text-muted">{label}</span>
-      <input className="h-9 w-full rounded-md border border-line bg-white px-3 text-xs outline-none focus:border-brand-300" defaultValue={value} />
+      <input
+        className="h-9 w-full rounded-md border border-line bg-white px-3 text-xs outline-none focus:border-brand-300 disabled:bg-soft"
+        value={value}
+        placeholder={placeholder}
+        disabled={readOnly}
+        onChange={(event) => onChange(event.target.value)}
+      />
     </label>
   );
 }

@@ -99,7 +99,22 @@ def active_lock_summaries(
     creator_ids: Iterable[Any],
     user: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    return {}
+    ids = [str(creator_id) for creator_id in creator_ids if creator_id]
+    if not ids:
+        return {}
+    rows = list(db.scalars(
+        select(CreatorOutreachLock)
+        .where(CreatorOutreachLock.creator_id.in_(ids))
+        .where(CreatorOutreachLock.released_at.is_(None))
+        .where(CreatorOutreachLock.expires_at > utcnow())
+        .order_by(CreatorOutreachLock.creator_id.asc(), CreatorOutreachLock.expires_at.desc())
+    ).all())
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = str(row.creator_id)
+        if key not in out:
+            out[key] = serialize_lock(row, user)
+    return out
 
 
 def filter_rows_visible_by_lock(
@@ -109,7 +124,21 @@ def filter_rows_visible_by_lock(
     *,
     id_getter: Callable[[dict[str, Any]], Any] = lambda row: row.get("id"),
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
-    return rows, {}
+    locks = active_lock_summaries(db, [id_getter(row) for row in rows], user)
+    if not locks:
+        return rows, {}
+    admin = is_admin_user(user)
+    visible: list[dict[str, Any]] = []
+    visible_locks: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        creator_id = str(id_getter(row) or "")
+        lock = locks.get(creator_id)
+        if lock and not lock.get("is_mine") and not admin:
+            continue
+        visible.append(row)
+        if lock:
+            visible_locks[creator_id] = lock
+    return visible, visible_locks
 
 
 def acquire_creator_lock(
@@ -166,7 +195,13 @@ def require_creator_lock(
     creator_id: str,
     user: dict[str, Any] | None,
 ) -> CreatorOutreachLock | None:
-    return None
+    lock = active_lock_for_creator(db, str(creator_id))
+    if lock is None:
+        return None
+    if lock_owner_matches(lock, user) or is_admin_user(user):
+        return lock
+    label = lock.owner_label or lock.owner_email or "another user"
+    raise HTTPException(status_code=409, detail=f"creator outreach is locked by {label}")
 
 
 def heartbeat_lock(
