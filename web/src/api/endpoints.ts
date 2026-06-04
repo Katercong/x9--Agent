@@ -134,8 +134,8 @@ export const endpoints = {
     api.patch<{ ok: boolean; item: EmailAutoCampaign }>(`${LOCAL}/email-auto/campaigns/${encodeURIComponent(id)}/status`, { status }),
   emailAutoPauseAll: () =>
     api.post<{ ok: boolean; updated: number }>(`${LOCAL}/email-auto/campaigns/pause-all`, {}),
-  emailAutoGenerateJobs: (id: string, limit = 200) =>
-    api.post<{ ok: boolean; created_jobs: number }>(`${LOCAL}/email-auto/campaigns/${encodeURIComponent(id)}/generate-jobs?limit=${limit}`, {}),
+  emailAutoGenerateJobs: (id: string, limit?: number) =>
+    api.post<{ ok: boolean; created_jobs: number }>(`${LOCAL}/email-auto/campaigns/${encodeURIComponent(id)}/generate-jobs${limit ? `?limit=${limit}` : ''}`, {}),
   emailAutoProcessJobs: (body: { limit?: number; confirm_send: boolean }) =>
     api.post<{ ok: boolean; processed: number; results: Array<Record<string, unknown>> }>(`${LOCAL}/email-auto/jobs/process`, body),
   emailAutoRetryJob: (id: string) =>

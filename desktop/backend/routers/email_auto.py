@@ -48,6 +48,8 @@ DEFAULT_FILTERS: dict[str, Any] = {
     "pause_on_failure": False,
 }
 
+ACTIVE_JOB_STATUSES = ["pending", "sending", "sent", "draft_created"]
+
 
 class CampaignIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
@@ -241,11 +243,16 @@ def _daily_direction_count(db: Session, email: str, direction: str) -> int:
 
 
 def _serialize_campaign(db: Session, row: EmailAutoCampaign) -> dict[str, Any]:
-    sent = int(db.scalar(
-        select(func.count())
-        .select_from(EmailAutoJob)
-        .where(EmailAutoJob.campaign_id == row.id, EmailAutoJob.status.in_(["sent", "draft_created"]))
-    ) or 0)
+    status_counts = {
+        str(status): int(count or 0)
+        for status, count in db.execute(
+            select(EmailAutoJob.status, func.count())
+            .where(EmailAutoJob.campaign_id == row.id)
+            .group_by(EmailAutoJob.status)
+        ).all()
+    }
+    sent = int(status_counts.get("sent", 0)) + int(status_counts.get("draft_created", 0))
+    queue_total = sum(status_counts.values())
     return {
         "id": row.id,
         "name": row.name,
@@ -258,6 +265,13 @@ def _serialize_campaign(db: Session, row: EmailAutoCampaign) -> dict[str, Any]:
         "start_time": row.start_time,
         "end_time": row.end_time,
         "sent": sent,
+        "queue_total": queue_total,
+        "queue_pending": int(status_counts.get("pending", 0)),
+        "queue_sending": int(status_counts.get("sending", 0)),
+        "queue_sent": int(status_counts.get("sent", 0)),
+        "queue_draft_created": int(status_counts.get("draft_created", 0)),
+        "queue_failed": int(status_counts.get("failed", 0)),
+        "queue_skipped": int(status_counts.get("skipped", 0)),
         "daily_limit": row.daily_limit,
         "hourly_limit": row.hourly_limit,
         "interval_min_seconds": row.interval_min_seconds,
@@ -785,7 +799,7 @@ def create_campaign(body: CampaignIn, request: Request, db: Session = Depends(ge
     if capacity["daily_capacity"] > 0:
         daily_limit = min(daily_limit, capacity["daily_capacity"])
     hourly_limit = min(int(body.hourly_limit), daily_limit)
-    candidate_limit = min(int(body.candidate_limit), daily_limit)
+    candidate_limit = daily_limit
     filters = {**DEFAULT_FILTERS, **(body.filters or {})}
     interval_min = min(body.interval_min_seconds, body.interval_max_seconds)
     interval_max = max(body.interval_min_seconds, body.interval_max_seconds)
@@ -823,12 +837,13 @@ def update_campaign(campaign_id: str, body: CampaignIn, request: Request, db: Se
     row = db.get(EmailAutoCampaign, campaign_id)
     if row is None or not row_in_department(row, department_code):
         raise HTTPException(status_code=404, detail="campaign not found")
+    previous_daily_limit = int(row.daily_limit or 0)
     capacity = _mailbox_send_capacity(db, department_code)
     daily_limit = int(body.daily_limit)
     if capacity["daily_capacity"] > 0:
         daily_limit = min(daily_limit, capacity["daily_capacity"])
     hourly_limit = min(int(body.hourly_limit), daily_limit)
-    candidate_limit = min(int(body.candidate_limit), daily_limit)
+    candidate_limit = daily_limit
     filters = {**DEFAULT_FILTERS, **(body.filters or {})}
     interval_min = min(body.interval_min_seconds, body.interval_max_seconds)
     interval_max = max(body.interval_min_seconds, body.interval_max_seconds)
@@ -848,7 +863,8 @@ def update_campaign(campaign_id: str, body: CampaignIn, request: Request, db: Se
     row.filters_json = _json_dumps(filters)
     db.commit()
     db.refresh(row)
-    created_jobs = _generate_jobs_for_campaign(db, row, candidate_limit=candidate_limit) if body.generate_jobs else 0
+    should_generate_jobs = body.generate_jobs or daily_limit > previous_daily_limit
+    created_jobs = _generate_jobs_for_campaign(db, row, candidate_limit=candidate_limit) if should_generate_jobs else 0
     return {"ok": True, "item": _serialize_campaign(db, row), "created_jobs": created_jobs}
 
 
@@ -924,11 +940,11 @@ def pause_all_campaigns(request: Request, db: Session = Depends(get_db)) -> dict
 
 
 @router.post("/campaigns/{campaign_id}/generate-jobs")
-def generate_jobs(campaign_id: str, request: Request, db: Session = Depends(get_db), limit: int = Query(default=200, ge=1, le=1000)) -> dict[str, Any]:
+def generate_jobs(campaign_id: str, request: Request, db: Session = Depends(get_db), limit: int | None = Query(default=None, ge=1, le=100000)) -> dict[str, Any]:
     row = db.get(EmailAutoCampaign, campaign_id)
     if row is None or not row_in_department(row, current_department_code(request)):
         raise HTTPException(status_code=404, detail="campaign not found")
-    created = _generate_jobs_for_campaign(db, row, candidate_limit=limit)
+    created = _generate_jobs_for_campaign(db, row, candidate_limit=int(row.daily_limit or limit or 200))
     return {"ok": True, "created_jobs": created}
 
 
@@ -938,44 +954,66 @@ def _generate_jobs_for_campaign(db: Session, campaign: EmailAutoCampaign, *, can
     query_filters.append(Creator.email.is_not(None))
     query_filters.append(Creator.email.like("%@%"))
     _apply_creator_filters(query_filters, filters)
-    rows = list(db.scalars(select(Creator).where(*query_filters).order_by(*_sort_clauses(filters)).limit(candidate_limit)).all())
     assets = product_asset_service.list_assets(campaign.department_code)
     created = 0
     now = _now()
+    existing_active = int(db.scalar(
+        select(func.count())
+        .select_from(EmailAutoJob)
+        .where(EmailAutoJob.campaign_id == campaign.id, EmailAutoJob.status.in_(ACTIVE_JOB_STATUSES))
+    ) or 0)
+    remaining_to_create = max(0, int(candidate_limit) - existing_active)
+    if remaining_to_create <= 0:
+        return 0
     capacity = _mailbox_send_capacity(db, campaign.department_code)
     mailbox_count = max(1, int(capacity.get("mailboxes") or 0))
     interval_min = max(30, int(campaign.interval_min_seconds or 90))
     interval_max = max(interval_min, int(campaign.interval_max_seconds or interval_min))
     slot_offsets = [0 for _ in range(mailbox_count)]
-    for creator in rows:
-        if _creator_already_contacted(db, creator.id):
-            continue
-        if _job_exists(db, campaign.id, creator.id):
-            continue
-        asset = product_asset_service.match_asset_for_creator(creator, assets)
-        ctx = build_tk_context(creator, commission=20, product_asset=asset)
-        subject = build_tk_email_subject(ctx)
-        plain = generate_strategy_template(ctx)
-        body = _email_html(plain, asset)
-        slot_index = created % mailbox_count
-        scheduled_at = now + timedelta(seconds=slot_offsets[slot_index])
-        slot_offsets[slot_index] += random.randint(interval_min, interval_max)
-        job = EmailAutoJob(
-            id=new_id("eaj"),
-            department_code=campaign.department_code,
-            campaign_id=campaign.id,
-            creator_id=creator.id,
-            recipient_email=str(creator.email),
-            subject=subject,
-            body=body,
-            body_format="html",
-            product_asset_id=(asset or {}).get("id") if asset else None,
-            status="pending",
-            scheduled_at=scheduled_at,
-            filters_json=_json_dumps(_job_filter_tags(filters, creator)),
-        )
-        db.add(job)
-        created += 1
+    page_size = min(max(remaining_to_create, 200), 1000)
+    offset = 0
+    while created < remaining_to_create:
+        rows = list(db.scalars(
+            select(Creator)
+            .where(*query_filters)
+            .order_by(*_sort_clauses(filters))
+            .offset(offset)
+            .limit(page_size)
+        ).all())
+        if not rows:
+            break
+        offset += len(rows)
+        for creator in rows:
+            if created >= remaining_to_create:
+                break
+            if _creator_already_contacted(db, creator.id):
+                continue
+            if _job_exists(db, campaign.id, creator.id):
+                continue
+            asset = product_asset_service.match_asset_for_creator(creator, assets)
+            ctx = build_tk_context(creator, commission=20, product_asset=asset)
+            subject = build_tk_email_subject(ctx)
+            plain = generate_strategy_template(ctx)
+            body = _email_html(plain, asset)
+            slot_index = created % mailbox_count
+            scheduled_at = now + timedelta(seconds=slot_offsets[slot_index])
+            slot_offsets[slot_index] += random.randint(interval_min, interval_max)
+            job = EmailAutoJob(
+                id=new_id("eaj"),
+                department_code=campaign.department_code,
+                campaign_id=campaign.id,
+                creator_id=creator.id,
+                recipient_email=str(creator.email),
+                subject=subject,
+                body=body,
+                body_format="html",
+                product_asset_id=(asset or {}).get("id") if asset else None,
+                status="pending",
+                scheduled_at=scheduled_at,
+                filters_json=_json_dumps(_job_filter_tags(filters, creator)),
+            )
+            db.add(job)
+            created += 1
     db.commit()
     return created
 
@@ -1096,7 +1134,7 @@ def _job_exists(db: Session, campaign_id: str, creator_id: str) -> bool:
     total = int(db.scalar(
         select(func.count())
         .select_from(EmailAutoJob)
-        .where(EmailAutoJob.campaign_id == campaign_id, EmailAutoJob.creator_id == creator_id, EmailAutoJob.status.in_(["pending", "sending", "sent", "draft_created"]))
+        .where(EmailAutoJob.campaign_id == campaign_id, EmailAutoJob.creator_id == creator_id, EmailAutoJob.status.in_(ACTIVE_JOB_STATUSES))
     ) or 0)
     return total > 0
 

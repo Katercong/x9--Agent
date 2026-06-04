@@ -447,7 +447,7 @@ export default function EmailAutoConsole() {
           <button
             className="btn btn-ghost"
             disabled={emailAutoActions.generateJobs.isPending}
-            onClick={() => emailAutoActions.generateJobs.mutate({ id: row.id, limit: 200 }, { onSuccess: (res) => showNotice(`已生成 ${res.created_jobs} 个队列任务`) })}
+            onClick={() => emailAutoActions.generateJobs.mutate({ id: row.id, limit: row.dailyLimit }, { onSuccess: (res) => showNotice(`已生成 ${res.created_jobs} 个队列任务`) })}
           ><Sparkles size={13} />补充队列</button>
         </div>
       ),

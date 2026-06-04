@@ -152,6 +152,13 @@ export interface EmailAutoCampaign {
   start_time: string;
   end_time: string;
   sent: number;
+  queue_total?: number;
+  queue_pending?: number;
+  queue_sending?: number;
+  queue_sent?: number;
+  queue_draft_created?: number;
+  queue_failed?: number;
+  queue_skipped?: number;
   daily_limit: number;
   hourly_limit: number;
   interval_min_seconds: number;
