@@ -125,6 +125,111 @@ export interface ProductAsset {
   updated_at?: string;
 }
 
+export type EmailAutoCampaignStatus = 'running' | 'paused' | 'draft';
+export type EmailAutoJobStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped' | 'draft_created';
+export type EmailAutoMailboxStatus = 'normal' | 'cooldown' | 'limit' | 'auth_expired' | 'bounce_risk';
+
+export interface EmailAutoDashboardSummary {
+  today_sent: number;
+  today_target: number;
+  available_mailboxes: number;
+  mailbox_total: number;
+  queue_count: number;
+  reply_count: number;
+  bounce_count: number;
+  risk_mailboxes: number;
+}
+
+export interface EmailAutoCampaign {
+  id: string;
+  name: string;
+  status: EmailAutoCampaignStatus;
+  schedule_type: 'daily' | 'weekly' | 'monthly' | string;
+  schedule_label: string;
+  time_window: string;
+  start_time: string;
+  end_time: string;
+  sent: number;
+  daily_limit: number;
+  hourly_limit: number;
+  interval_min_seconds: number;
+  interval_max_seconds: number;
+  interval: string;
+  mailbox_pool: string;
+  send_mode: 'draft' | 'send' | string;
+  filters: Record<string, unknown>;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface EmailAutoMailboxQuota {
+  id: string;
+  account_id: string;
+  email: string;
+  owner: string;
+  status: EmailAutoMailboxStatus;
+  enabled: boolean;
+  auto_sent: number;
+  quota: number;
+  remaining: number;
+  replies: number;
+  bounces: number;
+  failures: number;
+  next_send_at: string;
+  last_sync_at?: string | null;
+  last_sent_at?: string | null;
+}
+
+export interface EmailAutoJob {
+  id: string;
+  time: string;
+  scheduled_at?: string | null;
+  sent_at?: string | null;
+  creator_id: string;
+  creator: string;
+  recipient: string;
+  sender: string;
+  subject: string;
+  body: string;
+  body_format: 'plain' | 'html' | string;
+  product_asset_id?: string | null;
+  product: string;
+  plan: string;
+  campaign_id: string;
+  status: EmailAutoJobStatus;
+  reason: string;
+  filters: string[];
+  attempts: number;
+  outreach_email_id?: string | null;
+}
+
+export interface EmailAutoDashboardResponse {
+  ok: boolean;
+  dashboard: EmailAutoDashboardSummary;
+  campaigns: EmailAutoCampaign[];
+  mailboxes: EmailAutoMailboxQuota[];
+  jobs: EmailAutoJob[];
+}
+
+export interface EmailAutoCampaignCreate {
+  name: string;
+  status?: EmailAutoCampaignStatus;
+  schedule_type?: 'daily' | 'weekly' | 'monthly';
+  weekdays?: string[];
+  month_days?: number[];
+  start_time?: string;
+  end_time?: string;
+  daily_limit?: number;
+  hourly_limit?: number;
+  interval_min_seconds?: number;
+  interval_max_seconds?: number;
+  mailbox_pool?: string;
+  send_mode?: 'draft' | 'send';
+  filters?: Record<string, unknown>;
+  generate_jobs?: boolean;
+  candidate_limit?: number;
+}
+
 export interface Outreach {
   id: number;
   department_id?: number | null;

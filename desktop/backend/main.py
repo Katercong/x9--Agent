@@ -37,6 +37,7 @@ from .routers import (
     dashboard,
     data as data_router,
     db as db_router,
+    email_auto,
     export as export_router,
     extension,
     extension_ingest_compat,
@@ -90,6 +91,7 @@ app.include_router(export_router.router)
 app.include_router(imports.router)
 app.include_router(post_process.outreach_router)
 app.include_router(outreach.router)
+app.include_router(email_auto.router)
 app.include_router(analytics.router)
 app.include_router(recommendations.router)
 app.include_router(shared.router)

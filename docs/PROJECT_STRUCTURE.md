@@ -2,14 +2,20 @@
 
 This repository is now organized around a few active roots plus an archive area.
 
+The current runtime mainline is `desktop/` plus two React source roots:
+`web/` for the admin/global UI and `web-user/` for the department portal.
+`core/` still provides the product/AI/data center and the proxied `/api/v1`
+surface. See `docs/system_boundary_and_acceptance.md` for the operational
+boundary and verification checklist.
+
 ## Active Roots
 
 | Path | Role | Notes |
 |---|---|---|
-| `core/` | Core API and shared business data services | Port `18765`; this should hold shared product, creator, AI, and central data logic. |
-| `desktop/` | Desktop/backend portal runtime | Port `8000`; active FastAPI backend, Chrome extension bridge, Gmail outreach, and portal static host. |
-| `web-user/` | Portal frontend source | React/Vite source for `/portal/*`; build output is generated and should not be edited manually. |
-| `web/` | Admin/global frontend source | React/Vite source for admin/global dashboards where applicable. |
+| `desktop/` | Main backend/runtime | Port `8000`; active FastAPI backend, auth, role routing, Chrome extension bridge, Gmail outreach, recommendation pipeline, foreign-trade leads, and static host. |
+| `web/` | Admin/global frontend source | React/Vite source for `/`, `/a/*`, `/c/*`, `/d/*`, and `/preview/*`; deploys to `desktop/backend/ui/admin/`. |
+| `web-user/` | Portal frontend source | React/Vite source for `/portal/*`; deploys to `desktop/backend/ui/portal/`. |
+| `core/` | Core API and shared business data services | Port `18765`; product catalog, legacy data center, LLM/AI routes, and `/api/v1` resources proxied by desktop. |
 | `scrapers/` | Collection utilities | CLI and helper tools that collect or normalize source platform data. |
 | `infra/` | Infrastructure and deployment scripts | Docker, local/remote startup, database setup, tunnel scripts. |
 | `tools/` | One-off maintenance tools | Diagnostics, sync, smoke tests, data checks. |
@@ -34,7 +40,14 @@ Generated frontend bundles are ignored going forward:
 - `desktop/backend/ui/_react/`
 - matching generated UI folders under `x9_creator_desktop_system/`
 
-Source changes should be made in `web-user/src`, `web/src`, or backend code, then rebuilt and deployed by scripts.
+Source changes should be made in `web-user/src`, `web/src`, or backend code,
+then rebuilt and deployed by scripts:
+
+- `web`: `npm run build:root` then `npm run deploy:root`
+- `web-user`: `npm run build:deploy` then `npm run deploy`
+- backend code: restart the desktop backend after deploying
+
+Markdown-only documentation changes do not require frontend rebuilds or backend restart.
 
 ## Data and Secrets Policy
 

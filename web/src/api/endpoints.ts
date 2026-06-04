@@ -22,6 +22,11 @@ import type {
   OutreachArchiveItem,
   OutreachTrackingResponse,
   ProductAsset,
+  EmailAutoCampaignCreate,
+  EmailAutoDashboardResponse,
+  EmailAutoMailboxQuota,
+  EmailAutoCampaign,
+  EmailAutoJob,
   SystemMetrics,
 } from './types';
 
@@ -106,6 +111,30 @@ export const endpoints = {
     api.get<GmailReplySyncStatus>(`${LOCAL}/outreach/gmail/sync-status`),
   gmailSyncReplies: (body?: { account_ids?: string[]; limit_per_account?: number }) =>
     api.post<GmailReplySyncStatus>(`${LOCAL}/outreach/gmail/sync-replies`, body || {}),
+  emailAutoDashboard: () =>
+    api.get<EmailAutoDashboardResponse>(`${LOCAL}/email-auto/dashboard`),
+  emailAutoSyncMailboxes: () =>
+    api.post<{ ok: boolean; items: EmailAutoMailboxQuota[]; total: number }>(`${LOCAL}/email-auto/mailboxes/sync`, {}),
+  emailAutoUpdateMailbox: (id: string, body: { enabled?: boolean; daily_quota?: number; status?: string }) =>
+    api.patch<{ ok: boolean; item: EmailAutoMailboxQuota }>(`${LOCAL}/email-auto/mailboxes/${encodeURIComponent(id)}`, body),
+  emailAutoCreateCampaign: (body: EmailAutoCampaignCreate) =>
+    api.post<{ ok: boolean; item: EmailAutoCampaign; created_jobs: number }>(`${LOCAL}/email-auto/campaigns`, body),
+  emailAutoCampaignPreview: (body: EmailAutoCampaignCreate) =>
+    api.post<{ ok: boolean; item: EmailAutoJob }>(`${LOCAL}/email-auto/campaigns/preview`, body),
+  emailAutoCampaignStatus: (id: string, status: 'running' | 'paused' | 'draft') =>
+    api.patch<{ ok: boolean; item: EmailAutoCampaign }>(`${LOCAL}/email-auto/campaigns/${encodeURIComponent(id)}/status`, { status }),
+  emailAutoPauseAll: () =>
+    api.post<{ ok: boolean; updated: number }>(`${LOCAL}/email-auto/campaigns/pause-all`, {}),
+  emailAutoGenerateJobs: (id: string, limit = 200) =>
+    api.post<{ ok: boolean; created_jobs: number }>(`${LOCAL}/email-auto/campaigns/${encodeURIComponent(id)}/generate-jobs?limit=${limit}`, {}),
+  emailAutoProcessJobs: (body: { limit?: number; confirm_send: boolean }) =>
+    api.post<{ ok: boolean; processed: number; results: Array<Record<string, unknown>> }>(`${LOCAL}/email-auto/jobs/process`, body),
+  emailAutoRetryJob: (id: string) =>
+    api.post<{ ok: boolean; item: EmailAutoJob }>(`${LOCAL}/email-auto/jobs/${encodeURIComponent(id)}/retry`, {}),
+  emailAutoRetryFailed: () =>
+    api.post<{ ok: boolean; updated: number }>(`${LOCAL}/email-auto/jobs/retry-failed`, {}),
+  emailAutoSkipJob: (id: string) =>
+    api.post<{ ok: boolean; item: EmailAutoJob }>(`${LOCAL}/email-auto/jobs/${encodeURIComponent(id)}/skip`, {}),
   analyticsMe: (days = 30) =>
     api.get<AnalyticsSummary>(`${LOCAL}/analytics/me`, { days }),
   analyticsDepartment: (params?: { department_code?: string; days?: number }) =>

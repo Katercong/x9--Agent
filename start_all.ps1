@@ -1,53 +1,127 @@
-# start_all: one-click launcher for the X9 local stack.
+# X9 one-click launcher for the local stack.
 #
-# Boot order:
-#   1. PostgreSQL container (if not running)
-#   2. Desktop FastAPI UI    (127.0.0.1:8000, reached publicly through cloudflared/usx9.us)
-#   3. Open the current workspace dashboard
+# Default boot order:
+#   1. PostgreSQL container, if :15432 is not already listening
+#   2. Desktop FastAPI backend on 127.0.0.1:8000
+#   3. Open the public workspace URL, unless -NoBrowser is passed
 #
-# Core (:18765, /api/v1) is OPTIONAL and OFF by default. The public usx9.us face is the
-# Desktop app on :8000, so a missing/broken Core must never block the one-click launch.
-# Add -StartCore to also launch it.
+# Core (:18765, /api/v1) is optional. Start it with -StartCore.
+# Use -RequireCore when /api/v1 must be available for the current task.
 #
-# Optional:
+# Examples:
+#   .\start_all.ps1
 #   .\start_all.ps1 -NoBrowser
-#   .\start_all.ps1 -StartCore   # also start Core (:18765, /api/v1)
+#   .\start_all.ps1 -StartCore -NoBrowser
+#   .\start_all.ps1 -StartCore -RequireCore -OpenLocal
 
 param(
     [switch]$NoBrowser,
-    [switch]$StartCore,   # also start Core (:18765, /api/v1); off by default
-    [switch]$SkipCore     # back-compat: force-skip Core even if -StartCore is given
+    [switch]$StartCore,
+    [switch]$SkipCore,       # Back-compat: force-skip Core even if -StartCore is provided.
+    [switch]$RequireCore,    # Fail the launcher if Core does not become healthy.
+    [switch]$OpenLocal       # Open http://localhost:8000/portal/ instead of the public URL.
 )
 
 $ErrorActionPreference = "Stop"
+
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$logDir = Join-Path $root "logs"
 $corePort = 18765
 $desktopPort = 8000
+$pgPort = 15432
+
 $workspaceSlug = if ($env:X9_WORKSPACE_SLUG) { $env:X9_WORKSPACE_SLUG } else { "cross-border" }
 $coreUrl = "http://localhost:$corePort"
 $desktopUrl = "http://localhost:$desktopPort"
-$publicBaseUrl = if ($env:PUBLIC_BASE_URL) { $env:PUBLIC_BASE_URL.TrimEnd("/") } else { "https://usx9.us" }
-$workspaceUrl = "$publicBaseUrl/workspace/$workspaceSlug/"
+$desktopHealthUrl = "$desktopUrl/health"
+$coreHealthUrl = "$coreUrl/api/v1/version"
+
+if ($env:X9_PUBLIC_BASE_URL) {
+    $publicBaseUrl = $env:X9_PUBLIC_BASE_URL.TrimEnd("/")
+} elseif ($env:PUBLIC_BASE_URL) {
+    $publicBaseUrl = $env:PUBLIC_BASE_URL.TrimEnd("/")
+} else {
+    $publicBaseUrl = "https://usx9.us"
+}
+
+if ($env:X9_OPEN_URL) {
+    $openUrl = $env:X9_OPEN_URL
+} elseif ($OpenLocal) {
+    $openUrl = "$desktopUrl/portal/"
+} else {
+    $openUrl = "$publicBaseUrl/workspace/$workspaceSlug/"
+}
+
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+function Write-Step([string]$message) {
+    Write-Host "[start_all] $message"
+}
+
+function Write-Ok([string]$message) {
+    Write-Host "[start_all] OK $message"
+}
 
 function Test-PortListening([int]$port) {
     return [bool](Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
 }
 
+function Get-PortOwnerSummary([int]$port) {
+    $listeners = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue
+    if (-not $listeners) { return "" }
+
+    $parts = @()
+    foreach ($listener in $listeners) {
+        $ownerPid = $listener.OwningProcess
+        $name = "unknown"
+        try {
+            $proc = Get-Process -Id $ownerPid -ErrorAction Stop
+            $name = $proc.ProcessName
+        } catch {
+            $name = "pid-$ownerPid"
+        }
+        $parts += "$name#$ownerPid"
+    }
+    return ($parts | Sort-Object -Unique) -join ", "
+}
+
 function Wait-Port([int]$port, [int]$timeoutSeconds = 60) {
-    $retries = 0
-    while ($retries -lt $timeoutSeconds) {
+    $deadline = (Get-Date).AddSeconds($timeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
         if (Test-PortListening $port) { return $true }
         Start-Sleep -Seconds 1
-        $retries++
     }
     return $false
 }
 
-# Confirm an interpreter actually runs (a stub python.exe missing its stdlib must
-# never be picked just because it exists on PATH).
-function Test-PythonWorks([string]$file, [string[]]$pre) {
+function Get-HttpStatus([string]$url) {
     try {
-        $callArgs = @($pre) + @("-c", "import sys")
+        $response = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 5
+        return [int]$response.StatusCode
+    } catch {
+        $resp = $_.Exception.Response
+        if ($resp -and $resp.StatusCode) {
+            return [int]$resp.StatusCode
+        }
+        return 0
+    }
+}
+
+function Wait-HttpStatus([string]$url, [int[]]$acceptedStatusCodes, [int]$timeoutSeconds = 60) {
+    $deadline = (Get-Date).AddSeconds($timeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $status = Get-HttpStatus $url
+        if ($acceptedStatusCodes -contains $status) {
+            return $true
+        }
+        Start-Sleep -Seconds 1
+    }
+    return $false
+}
+
+function Test-PythonWorks([string]$file, [string[]]$prefixArgs) {
+    try {
+        $callArgs = @($prefixArgs) + @("-c", "import sys")
         & $file @callArgs 2>$null
         return ($LASTEXITCODE -eq 0)
     } catch {
@@ -56,22 +130,29 @@ function Test-PythonWorks([string]$file, [string[]]$pre) {
 }
 
 function Resolve-PythonCommand {
-    # The stack targets Python 3.11. Prefer the launcher's explicit 3.11, but VALIDATE
-    # it runs so a broken default (e.g. py -> 3.12 with a missing stdlib) can't slip in.
     if (Get-Command py -ErrorAction SilentlyContinue) {
-        if (Test-PythonWorks "py" @("-3.11")) { return @{ File = "py"; Args = @("-3.11") } }
+        if (Test-PythonWorks "py" @("-3.11")) {
+            return @{ File = "py"; Args = @("-3.11") }
+        }
     }
+
     $candidates = @(
         "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
         "C:\Python311\python.exe",
         "C:\Program Files\Python311\python.exe"
     )
-    foreach ($c in $candidates) {
-        if ((Test-Path $c) -and (Test-PythonWorks $c @())) { return @{ File = $c; Args = @() } }
+    foreach ($candidate in $candidates) {
+        if ((Test-Path $candidate) -and (Test-PythonWorks $candidate @())) {
+            return @{ File = $candidate; Args = @() }
+        }
     }
+
     $python = Get-Command python -ErrorAction SilentlyContinue
-    if ($python -and (Test-PythonWorks $python.Source @())) { return @{ File = $python.Source; Args = @() } }
-    throw "No working Python 3.11 found (tried 'py -3.11', %LOCALAPPDATA%\Programs\Python\Python311, PATH python). Install Python 3.11 or fix the py launcher."
+    if ($python -and (Test-PythonWorks $python.Source @())) {
+        return @{ File = $python.Source; Args = @() }
+    }
+
+    throw "No working Python 3.11 found. Install Python 3.11 or fix the py launcher."
 }
 
 function Test-DockerUsable {
@@ -89,7 +170,7 @@ function Start-DockerDesktop {
 
     foreach ($path in $candidates) {
         if ($path -and (Test-Path $path)) {
-            Write-Host "[start_all] starting Docker Desktop..."
+            Write-Step "starting Docker Desktop"
             Start-Process -FilePath $path -WindowStyle Minimized
             return $true
         }
@@ -104,94 +185,142 @@ function Wait-Docker([int]$timeoutSeconds = 120) {
         Start-Sleep -Seconds 3
         $elapsed += 3
         if (($elapsed % 15) -eq 0) {
-            Write-Host "[start_all] waiting for Docker Desktop... ${elapsed}s"
+            Write-Step "waiting for Docker Desktop... ${elapsed}s"
         }
     }
     return $false
 }
 
-# ----- 1. PostgreSQL -----
-$docker = Get-Command docker -ErrorAction SilentlyContinue
-$dockerUsable = $false
-if (Test-PortListening 15432) {
-    Write-Host "[start_all] postgres is already listening on :15432"
-} else {
-    if ($docker) {
-        $dockerUsable = Test-DockerUsable
+function Ensure-Postgres {
+    if (Test-PortListening $pgPort) {
+        Write-Ok "PostgreSQL is listening on :$pgPort ($(Get-PortOwnerSummary $pgPort))"
+        return
     }
-    if ($dockerUsable) {
-        $pgRunning = docker ps --filter "name=x9-postgres" --filter "status=running" --format "{{.Names}}" 2>$null
-        if (-not $pgRunning) {
-            Write-Host "[start_all] postgres is not running, starting..."
-            & "$root\infra\scripts\db_init.ps1"
-            if ($LASTEXITCODE -ne 0) { throw "db_init failed" }
-        } else {
-            Write-Host "[start_all] postgres container is running; waiting for :15432"
-        }
-    } elseif ($docker) {
+
+    $docker = Get-Command docker -ErrorAction SilentlyContinue
+    if (-not $docker) {
+        throw "PostgreSQL :$pgPort is not listening and docker.exe was not found. Install/start Docker Desktop, then rerun start_all."
+    }
+
+    if (-not (Test-DockerUsable)) {
         if (-not (Start-DockerDesktop)) {
-            throw "postgres port 15432 is not listening and Docker Desktop was not found. Start Docker Desktop, then run start_all.bat again."
+            throw "Docker Desktop was not found. Start Docker Desktop manually, then rerun start_all."
         }
         if (-not (Wait-Docker 120)) {
-            throw "Docker Desktop did not become ready within 120s. Wait until Docker Desktop says it is running, then run start_all.bat again."
+            throw "Docker Desktop did not become ready within 120 seconds."
         }
-        Write-Host "[start_all] Docker is ready; starting postgres..."
-        & "$root\infra\scripts\db_init.ps1"
-        if ($LASTEXITCODE -ne 0) { throw "db_init failed" }
+    }
+
+    Write-Step "starting or verifying PostgreSQL container"
+    & "$root\infra\scripts\db_init.ps1"
+    if ($LASTEXITCODE -ne 0) { throw "db_init.ps1 failed" }
+    if (-not (Wait-Port $pgPort 30)) { throw "PostgreSQL :$pgPort did not become ready" }
+    Write-Ok "PostgreSQL is listening on :$pgPort"
+}
+
+function Start-LoggedProcess(
+    [string]$name,
+    [string]$file,
+    [string[]]$arguments,
+    [string]$workingDirectory
+) {
+    $stdout = Join-Path $logDir "$name.out.log"
+    $stderr = Join-Path $logDir "$name.err.log"
+    Write-Step "starting $name"
+    Write-Step "$name stdout: $stdout"
+    Write-Step "$name stderr: $stderr"
+
+    Start-Process `
+        -FilePath $file `
+        -ArgumentList $arguments `
+        -WorkingDirectory $workingDirectory `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $stdout `
+        -RedirectStandardError $stderr
+}
+
+function Ensure-Desktop {
+    if (Test-PortListening $desktopPort) {
+        Write-Step "desktop is already listening on :$desktopPort ($(Get-PortOwnerSummary $desktopPort))"
     } else {
-        throw "postgres port 15432 is not listening and docker.exe was not found. Install/start Docker Desktop, then run start_all.bat again."
+        $python = Resolve-PythonCommand
+        Write-Step "using python: $($python.File) $($python.Args -join ' ')"
+        $args = @($python.Args) + @(
+            "-m", "uvicorn",
+            "desktop.backend.main:app",
+            "--host", "127.0.0.1",
+            "--port", "$desktopPort"
+        )
+        Start-LoggedProcess "desktop-backend" $python.File $args $root
     }
-    if (-not (Wait-Port 15432 30)) { throw "postgres port 15432 not listening" }
-}
 
-# ----- 2. Core backend (:18765) — OPTIONAL (/api/v1). Off by default. -----
-# Core depends on core/.venv and is not required for the Desktop UI (the public
-# usx9.us face is the Desktop app on :8000). Pass -StartCore to launch it; its
-# readiness is best-effort and never fails the launch.
-$wantCore = $StartCore -and (-not $SkipCore)
-if (-not $wantCore) {
-    Write-Host "[start_all] core (:$corePort) not started (pass -StartCore to enable /api/v1)"
-} elseif (Test-PortListening $corePort) {
-    Write-Host "[start_all] core is already running on :$corePort"
-} else {
-    Write-Host "[start_all] starting core API (:$corePort)..."
-    $coreCmd = "set X9_NO_BROWSER=1&& call `"$root\core\run.bat`""
-    Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $coreCmd -WindowStyle Minimized
-}
-
-# ----- 3. Desktop backend (:8000) — the required service -----
-if (Test-PortListening $desktopPort) {
-    Write-Host "[start_all] desktop is already running on :$desktopPort"
-} else {
-    Write-Host "[start_all] starting desktop UI (:$desktopPort)..."
-    # Bind to loopback only. Public traffic enters through Cloudflare Tunnel/usx9.us.
-    $python = Resolve-PythonCommand
-    Write-Host "[start_all] using python: $($python.File) $($python.Args -join ' ')"
-    $uvicornArgs = @($python.Args) + @("-m", "uvicorn", "desktop.backend.main:app", "--host", "127.0.0.1", "--port", "$desktopPort")
-    Start-Process -FilePath $python.File -ArgumentList $uvicornArgs -WorkingDirectory $root -WindowStyle Minimized
-}
-
-# ----- Readiness: Desktop is required; Core is best-effort and never blocks the launch -----
-Write-Host "[start_all] waiting for desktop (:$desktopPort) to be ready..."
-$desktopReady = Wait-Port $desktopPort 60
-
-$coreReady = $false
-if ($wantCore) {
-    $coreReady = Wait-Port $corePort 60
-    if (-not $coreReady) {
-        Write-Warning "core (:$corePort) did not become ready; /api/v1 features unavailable. Check core/logs (core/.venv may need rebuilding)."
+    if (-not (Wait-HttpStatus $desktopHealthUrl @(200) 60)) {
+        throw "Desktop backend did not become healthy at $desktopHealthUrl. Check logs\desktop-backend.err.log and logs\desktop-backend.out.log."
     }
+    Write-Ok "Desktop health: $desktopHealthUrl"
 }
 
-if ($desktopReady) {
-    Write-Host ""
-    if ($wantCore -and $coreReady) { Write-Host "OK Core API : $coreUrl" }
-    Write-Host "OK Desktop  : $workspaceUrl"
-    Write-Host ""
-    if (-not $NoBrowser) {
-        Start-Process $workspaceUrl
+function Ensure-Core {
+    if ($SkipCore) {
+        Write-Step "core skipped (-SkipCore)"
+        return $false
     }
-} else {
-    Write-Warning "desktop (:$desktopPort) did not become ready within 60s; check desktop/logs"
-    exit 1
+    if (-not $StartCore) {
+        Write-Step "core not started (pass -StartCore to enable /api/v1)"
+        return $false
+    }
+
+    if (Test-PortListening $corePort) {
+        Write-Step "core is already listening on :$corePort ($(Get-PortOwnerSummary $corePort))"
+    } else {
+        $env:X9_NO_BROWSER = "1"
+        if (-not $env:X9_CORE_API_AUTH_DISABLED) {
+            $env:X9_CORE_API_AUTH_DISABLED = "1"
+        }
+
+        $python = Resolve-PythonCommand
+        Write-Step "using python for core: $($python.File) $($python.Args -join ' ')"
+        $args = @($python.Args) + @(
+            "-m", "uvicorn",
+            "app.main:app",
+            "--host", "127.0.0.1",
+            "--port", "$corePort"
+        )
+        Start-LoggedProcess "core-backend" $python.File $args (Join-Path $root "core")
+    }
+
+    $ready = Wait-HttpStatus $coreHealthUrl @(200) 75
+    if ($ready) {
+        Write-Ok "Core API: $coreHealthUrl"
+        return $true
+    }
+
+    $message = "Core did not become healthy at $coreHealthUrl. Check logs\core-backend.err.log and logs\core-backend.out.log."
+    if ($RequireCore) {
+        throw $message
+    }
+    Write-Warning "$message /api/v1 features may be unavailable."
+    return $false
+}
+
+Write-Step "root: $root"
+Write-Step "logs: $logDir"
+
+Ensure-Postgres
+$coreReady = Ensure-Core
+Ensure-Desktop
+
+Write-Host ""
+Write-Ok "PostgreSQL : localhost:$pgPort"
+if ($StartCore -and $coreReady) {
+    Write-Ok "Core API   : $coreUrl"
+} elseif ($StartCore) {
+    Write-Warning "Core API requested but not healthy"
+}
+Write-Ok "Desktop    : $desktopUrl"
+Write-Ok "Open URL   : $openUrl"
+Write-Host ""
+
+if (-not $NoBrowser) {
+    Start-Process $openUrl
 }

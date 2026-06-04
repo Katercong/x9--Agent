@@ -137,6 +137,60 @@ export function useGmailSyncReplies() {
   });
 }
 
+export function useEmailAutoDashboard() {
+  return useQuery({
+    queryKey: ['email-auto', 'dashboard'],
+    queryFn: () => endpoints.emailAutoDashboard(),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useEmailAutoSyncMailboxes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => endpoints.emailAutoSyncMailboxes(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['email-auto', 'dashboard'] }),
+  });
+}
+
+export function useEmailAutoCreateCampaign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Parameters<typeof endpoints.emailAutoCreateCampaign>[0]) => endpoints.emailAutoCreateCampaign(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['email-auto', 'dashboard'] }),
+  });
+}
+
+export function useEmailAutoCampaignStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status }: { id: string; status: 'running' | 'paused' | 'draft' }) => endpoints.emailAutoCampaignStatus(id, status),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['email-auto', 'dashboard'] }),
+  });
+}
+
+export function useEmailAutoMailboxUpdate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Parameters<typeof endpoints.emailAutoUpdateMailbox>[1] }) => endpoints.emailAutoUpdateMailbox(id, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['email-auto', 'dashboard'] }),
+  });
+}
+
+export function useEmailAutoActions() {
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['email-auto', 'dashboard'] });
+  return {
+    pauseAll: useMutation({ mutationFn: () => endpoints.emailAutoPauseAll(), onSuccess: invalidate }),
+    previewCampaign: useMutation({ mutationFn: (body: Parameters<typeof endpoints.emailAutoCampaignPreview>[0]) => endpoints.emailAutoCampaignPreview(body) }),
+    generateJobs: useMutation({ mutationFn: ({ id, limit }: { id: string; limit?: number }) => endpoints.emailAutoGenerateJobs(id, limit), onSuccess: invalidate }),
+    processJobs: useMutation({ mutationFn: (body: Parameters<typeof endpoints.emailAutoProcessJobs>[0]) => endpoints.emailAutoProcessJobs(body), onSuccess: invalidate }),
+    retryJob: useMutation({ mutationFn: (id: string) => endpoints.emailAutoRetryJob(id), onSuccess: invalidate }),
+    retryFailed: useMutation({ mutationFn: () => endpoints.emailAutoRetryFailed(), onSuccess: invalidate }),
+    skipJob: useMutation({ mutationFn: (id: string) => endpoints.emailAutoSkipJob(id), onSuccess: invalidate }),
+  };
+}
+
 export function useAnalyticsMe(days = 30) {
   return useQuery({ queryKey: ['analytics', 'me', days], queryFn: () => endpoints.analyticsMe(days) });
 }

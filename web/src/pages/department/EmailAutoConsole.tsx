@@ -16,12 +16,19 @@ import {
 import { DataTable, type Column } from '@/components/table/DataTable';
 import { Pill } from '@/components/Pill';
 import { cn } from '@/lib/cn';
-import { useProductAssets } from '@/hooks/useApi';
-import type { ProductAsset } from '@/api/types';
+import {
+  useEmailAutoActions,
+  useEmailAutoCampaignStatus,
+  useEmailAutoCreateCampaign,
+  useEmailAutoDashboard,
+  useEmailAutoMailboxUpdate,
+  useEmailAutoSyncMailboxes,
+} from '@/hooks/useApi';
+import type { EmailAutoCampaignCreate, EmailAutoJob } from '@/api/types';
 
 type CampaignStatus = 'running' | 'paused' | 'draft';
 type MailboxStatus = 'normal' | 'cooldown' | 'limit' | 'auth_expired' | 'bounce_risk';
-type JobStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped';
+type JobStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped' | 'draft_created';
 type ScheduleType = 'daily' | 'weekly' | 'monthly';
 
 interface AutoCampaign {
@@ -66,152 +73,12 @@ interface AutoJob {
   status: JobStatus;
   reason: string;
   filters: string[];
+  subject?: string;
+  body?: string;
+  body_format?: string;
 }
 
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-
-const campaigns: AutoCampaign[] = [
-  {
-    id: 'campaign-us-daily',
-    name: '客户推荐库每日首封',
-    status: 'running',
-    scheduleType: 'daily',
-    scheduleLabel: '每天',
-    timeWindow: '09:30-18:00',
-    sent: 128,
-    dailyLimit: 300,
-    hourlyLimit: 40,
-    interval: '90-240s',
-    mailboxPool: '全部已启用绑定邮箱',
-    filters: ['客户推荐库', '有邮箱', '未建联', 'Fit S/A/B', '30 天未联系', '美国/加拿大'],
-    action: '发送后更新达人状态并进入邮件跟踪系统',
-  },
-  {
-    id: 'campaign-mid-tier',
-    name: '中腰部达人每周测试',
-    status: 'paused',
-    scheduleType: 'weekly',
-    scheduleLabel: '每周一、周三、周五',
-    timeWindow: '14:00-17:30',
-    sent: 46,
-    dailyLimit: 120,
-    hourlyLimit: 24,
-    interval: '150-360s',
-    mailboxPool: 'Creator Team 邮箱池',
-    filters: ['客户推荐库', 'P1/P2 优先', '可联系', '粉丝 5k-80k', '合作: 寄样测评'],
-    action: '先生成草稿，人工确认后发送',
-  },
-];
-
-const mailboxes: MailboxQuota[] = [
-  {
-    id: 'x9m5155',
-    email: 'x9m5155@gmail.com',
-    owner: 'X9 Outreach',
-    status: 'normal',
-    enabled: true,
-    autoSent: 22,
-    quota: 60,
-    replies: 4,
-    bounces: 1,
-    failures: 0,
-    nextSendAt: '2 分钟后',
-    lastSyncAt: '刚刚',
-  },
-  {
-    id: 'sanitex002',
-    email: 'sanitex002@gmail.com',
-    owner: 'Sanitex Collab',
-    status: 'cooldown',
-    enabled: true,
-    autoSent: 40,
-    quota: 40,
-    replies: 2,
-    bounces: 3,
-    failures: 1,
-    nextSendAt: '明天 09:30',
-    lastSyncAt: '8 分钟前',
-  },
-  {
-    id: 'hello-x9',
-    email: 'hello.x9outreach@gmail.com',
-    owner: 'X9 Creator Team',
-    status: 'normal',
-    enabled: true,
-    autoSent: 18,
-    quota: 80,
-    replies: 6,
-    bounces: 0,
-    failures: 0,
-    nextSendAt: '可立即发送',
-    lastSyncAt: '3 分钟前',
-  },
-  {
-    id: 'ops-x9',
-    email: 'creator.ops.x9@gmail.com',
-    owner: 'Creator Ops',
-    status: 'auth_expired',
-    enabled: false,
-    autoSent: 0,
-    quota: 50,
-    replies: 0,
-    bounces: 0,
-    failures: 4,
-    nextSendAt: '需重新授权',
-    lastSyncAt: '2 天前',
-  },
-];
-
-const jobs: AutoJob[] = [
-  {
-    id: 'job-1042',
-    time: '10:42',
-    creator: '@hannah.waits.for.no.one',
-    recipient: 'hannah.carolinaa@creator.co',
-    sender: 'x9m5155@gmail.com',
-    product: 'Green Full Category + AI 图片',
-    plan: '客户推荐库每日首封',
-    status: 'pending',
-    reason: '间隔等待',
-    filters: ['P1', 'Fit S', 'Home & Kitchen'],
-  },
-  {
-    id: 'job-1038',
-    time: '10:38',
-    creator: '@momlife_oasis',
-    recipient: 'hello@momoasis.com',
-    sender: 'hello.x9outreach@gmail.com',
-    product: 'Pink Series + AI 图片',
-    plan: '客户推荐库每日首封',
-    status: 'sent',
-    reason: '已进入邮件跟踪',
-    filters: ['P2', 'Fit A', '美区'],
-  },
-  {
-    id: 'job-1034',
-    time: '10:34',
-    creator: '@preview_creator',
-    recipient: 'preview.creator@email.com',
-    sender: 'x9m5155@gmail.com',
-    product: 'Auto Matched Product + AI 图片',
-    plan: '中腰部达人每周测试',
-    status: 'failed',
-    reason: '邮箱处于冷却',
-    filters: ['P2', '可联系', '粉丝 5k-80k'],
-  },
-  {
-    id: 'job-1029',
-    time: '10:29',
-    creator: '@familycare_daily',
-    recipient: 'contact@familycare.co',
-    sender: 'hello.x9outreach@gmail.com',
-    product: 'Baby Care + AI 图片',
-    plan: '客户推荐库每日首封',
-    status: 'sending',
-    reason: '正在发送',
-    filters: ['P1', 'Fit A', '30 天未联系'],
-  },
-];
 
 const recommendationSelectFields = [
   {
@@ -290,20 +157,58 @@ export default function EmailAutoConsole() {
   const [scheduleType, setScheduleType] = useState<ScheduleType>('daily');
   const [selectedWeekdays, setSelectedWeekdays] = useState(['周一', '周二', '周三', '周四', '周五']);
   const [notice, setNotice] = useState('');
-  const productAssetsQuery = useProductAssets();
-  const selectedProductAsset = useMemo(() => {
-    const items = productAssetsQuery.data?.items ?? [];
-    return productAssetsQuery.data?.matched || items.find((item) => item.image_url) || items[0] || null;
-  }, [productAssetsQuery.data?.items, productAssetsQuery.data?.matched]);
-  const showNotice = (message: string) => setNotice(`${message} · 本地预览`);
+  const dashboardQ = useEmailAutoDashboard();
+  const syncMailboxes = useEmailAutoSyncMailboxes();
+  const createCampaign = useEmailAutoCreateCampaign();
+  const campaignStatus = useEmailAutoCampaignStatus();
+  const updateMailbox = useEmailAutoMailboxUpdate();
+  const emailAutoActions = useEmailAutoActions();
+  const showNotice = (message: string) => setNotice(message);
 
-  const totalSent = campaigns.reduce((sum, item) => sum + item.sent, 0);
-  const totalTarget = campaigns.reduce((sum, item) => sum + item.dailyLimit, 0);
-  const availableMailboxes = mailboxes.filter((item) => item.enabled && item.status === 'normal').length;
-  const riskMailboxes = mailboxes.filter((item) => item.status !== 'normal').length;
-  const queueCount = 742;
-  const replyCount = mailboxes.reduce((sum, item) => sum + item.replies, 0);
-  const bounceCount = mailboxes.reduce((sum, item) => sum + item.bounces, 0);
+  const campaigns: AutoCampaign[] = useMemo(() => (dashboardQ.data?.campaigns ?? []).map((item) => ({
+    id: item.id,
+    name: item.name,
+    status: item.status as CampaignStatus,
+    scheduleType: item.schedule_type as ScheduleType,
+    scheduleLabel: item.schedule_label,
+    timeWindow: item.time_window,
+    sent: item.sent,
+    dailyLimit: item.daily_limit,
+    hourlyLimit: item.hourly_limit,
+    interval: item.interval,
+    mailboxPool: item.mailbox_pool === 'all' ? '全部已启用绑定邮箱' : item.mailbox_pool,
+    filters: filterSummary(item.filters),
+    action: item.send_mode === 'send' ? '自动发送并进入邮件跟踪' : '只生成草稿，人工确认后发送',
+  })), [dashboardQ.data?.campaigns]);
+
+  const mailboxes: MailboxQuota[] = useMemo(() => (dashboardQ.data?.mailboxes ?? []).map((item) => ({
+    id: item.id,
+    email: item.email,
+    owner: item.owner,
+    status: item.status as MailboxStatus,
+    enabled: item.enabled,
+    autoSent: item.auto_sent,
+    quota: item.quota,
+    replies: item.replies,
+    bounces: item.bounces,
+    failures: item.failures,
+    nextSendAt: item.next_send_at,
+    lastSyncAt: item.last_sync_at ? formatShortTime(item.last_sync_at) : '未同步',
+  })), [dashboardQ.data?.mailboxes]);
+
+  const jobs: AutoJob[] = useMemo(() => (dashboardQ.data?.jobs ?? []).map(mapApiJob), [dashboardQ.data?.jobs]);
+
+  const totalSent = dashboardQ.data?.dashboard.today_sent ?? 0;
+  const totalTarget = dashboardQ.data?.dashboard.today_target ?? 0;
+  const availableMailboxes = dashboardQ.data?.dashboard.available_mailboxes ?? 0;
+  const riskMailboxes = dashboardQ.data?.dashboard.risk_mailboxes ?? 0;
+  const queueCount = dashboardQ.data?.dashboard.queue_count ?? 0;
+  const replyCount = dashboardQ.data?.dashboard.reply_count ?? 0;
+  const bounceCount = dashboardQ.data?.dashboard.bounce_count ?? 0;
+  const jobStatusCounts = useMemo(() => jobs.reduce<Record<string, number>>((acc, item) => {
+    acc[item.status] = (acc[item.status] || 0) + 1;
+    return acc;
+  }, {}), [jobs]);
 
   const filteredJobs = useMemo(
     () => jobs.filter((item) => selectedStatus === 'all' || item.status === selectedStatus),
@@ -362,8 +267,19 @@ export default function EmailAutoConsole() {
       align: 'right',
       cell: (row) => (
         <div className="flex justify-end gap-2">
-          <button className="btn btn-ghost" onClick={() => showNotice(row.status === 'paused' ? '已模拟恢复计划' : '已模拟暂停计划')}>{row.status === 'paused' ? <Play size={13} /> : <Pause size={13} />}{row.status === 'paused' ? '恢复' : '暂停'}</button>
-          <button className="btn btn-ghost" onClick={() => setShowPlanModal(true)}><Edit3 size={13} />编辑</button>
+          <button
+            className="btn btn-ghost"
+            disabled={campaignStatus.isPending}
+            onClick={() => {
+              const next = row.status === 'running' ? 'paused' : 'running';
+              campaignStatus.mutate({ id: row.id, status: next }, { onSuccess: () => showNotice(next === 'running' ? '计划已恢复运行' : '计划已暂停') });
+            }}
+          >{row.status === 'running' ? <Pause size={13} /> : <Play size={13} />}{row.status === 'running' ? '暂停' : '恢复'}</button>
+          <button
+            className="btn btn-ghost"
+            disabled={emailAutoActions.generateJobs.isPending}
+            onClick={() => emailAutoActions.generateJobs.mutate({ id: row.id, limit: 200 }, { onSuccess: (res) => showNotice(`已生成 ${res.created_jobs} 个队列任务`) })}
+          ><Edit3 size={13} />补充队列</button>
         </div>
       ),
     },
@@ -444,7 +360,15 @@ export default function EmailAutoConsole() {
       header: '操作',
       align: 'right',
       cell: (row) => (
-        <button className="btn btn-ghost" onClick={() => setPreviewJob(row)}><Eye size={13} />邮件预览</button>
+        <div className="flex justify-end gap-2">
+          <button className="btn btn-ghost" onClick={() => setPreviewJob(row)}><Eye size={13} />邮件预览</button>
+          {row.status === 'failed' || row.status === 'skipped' ? (
+            <button className="btn btn-ghost" onClick={() => emailAutoActions.retryJob.mutate(row.id, { onSuccess: () => showNotice('任务已重新进入待发送队列') })}>重试</button>
+          ) : null}
+          {row.status === 'pending' || row.status === 'failed' ? (
+            <button className="btn btn-ghost" onClick={() => emailAutoActions.skipJob.mutate(row.id, { onSuccess: () => showNotice('任务已跳过') })}>跳过</button>
+          ) : null}
+        </div>
       ),
     },
   ];
@@ -472,8 +396,16 @@ export default function EmailAutoConsole() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button className="btn" onClick={() => showNotice('已模拟暂停全部计划')}><Pause size={14} />暂停全部</button>
-              <button className="btn" onClick={() => showNotice('已模拟同步当前绑定邮箱')}><RefreshCw size={14} />同步邮箱</button>
+              <button
+                className="btn"
+                disabled={emailAutoActions.pauseAll.isPending}
+                onClick={() => emailAutoActions.pauseAll.mutate(undefined, { onSuccess: (res) => showNotice(`已暂停 ${res.updated} 个计划`) })}
+              ><Pause size={14} />暂停全部</button>
+              <button
+                className="btn"
+                disabled={syncMailboxes.isPending}
+                onClick={() => syncMailboxes.mutate(undefined, { onSuccess: (res) => showNotice(`已同步 ${res.total} 个绑定邮箱`) })}
+              ><RefreshCw size={14} />同步邮箱</button>
               <button className="btn btn-primary" onClick={() => setShowPlanModal(true)}><CalendarClock size={14} />新建计划</button>
             </div>
           </div>
@@ -499,7 +431,7 @@ export default function EmailAutoConsole() {
               <button className="btn btn-primary" onClick={() => setShowPlanModal(true)}><Sparkles size={13} />创建自动发送计划</button>
             </div>
           </div>
-          <DataTable columns={campaignColumns} data={campaigns} rowKey={(row) => row.id} />
+          <DataTable columns={campaignColumns} data={campaigns} rowKey={(row) => row.id} emptyText={dashboardQ.isLoading ? '正在读取自动邮件计划…' : '暂无自动发送计划'} />
         </section>
 
         <section className="card">
@@ -526,12 +458,19 @@ export default function EmailAutoConsole() {
               <p className="mt-0.5 text-xxs text-muted">自动获取当前已绑定 Gmail，可编辑授权信息、启用状态和每日发送数量额度。</p>
             </div>
             <div className="flex gap-2">
-              <button className="btn" onClick={() => showNotice('已模拟同步绑定邮箱')}><RefreshCw size={13} />同步绑定邮箱</button>
-              <button className="btn" onClick={() => showNotice('已模拟批量健康检查')}><ShieldCheck size={13} />批量健康检查</button>
+              <button
+                className="btn"
+                disabled={syncMailboxes.isPending}
+                onClick={() => syncMailboxes.mutate(undefined, { onSuccess: (res) => showNotice(`已同步 ${res.total} 个绑定邮箱`) })}
+              ><RefreshCw size={13} />同步绑定邮箱</button>
+              <button
+                className="btn"
+                onClick={() => dashboardQ.refetch().then(() => showNotice('已刷新邮箱健康状态'))}
+              ><ShieldCheck size={13} />批量健康检查</button>
             </div>
           </div>
         </div>
-        <DataTable columns={mailboxColumns} data={mailboxes} rowKey={(row) => row.id} />
+        <DataTable columns={mailboxColumns} data={mailboxes} rowKey={(row) => row.id} emptyText={dashboardQ.isLoading ? '正在读取已绑定邮箱…' : '暂无已绑定 Gmail'} />
       </section>
 
       <section className="card">
@@ -544,11 +483,12 @@ export default function EmailAutoConsole() {
             <div className="flex flex-wrap gap-2">
               {[
                 ['all', '全部'],
-                ['pending', '待发送 742'],
-                ['sending', '发送中 1'],
-                ['sent', '已发送 128'],
-                ['failed', '失败 5'],
-                ['skipped', '已跳过 31'],
+                ['pending', `待发送 ${jobStatusCounts.pending || 0}`],
+                ['sending', `发送中 ${jobStatusCounts.sending || 0}`],
+                ['sent', `已发送 ${jobStatusCounts.sent || 0}`],
+                ['draft_created', `已生成草稿 ${jobStatusCounts.draft_created || 0}`],
+                ['failed', `失败 ${jobStatusCounts.failed || 0}`],
+                ['skipped', `已跳过 ${jobStatusCounts.skipped || 0}`],
               ].map(([key, label]) => (
                 <button
                   key={key}
@@ -558,11 +498,23 @@ export default function EmailAutoConsole() {
                   {label}
                 </button>
               ))}
-              <button className="btn" onClick={() => showNotice('已模拟重试失败任务')}><RefreshCw size={13} />重试失败</button>
+              <button
+                className="btn"
+                disabled={emailAutoActions.retryFailed.isPending}
+                onClick={() => emailAutoActions.retryFailed.mutate(undefined, { onSuccess: (res) => showNotice(`已重试 ${res.updated} 个失败任务`) })}
+              ><RefreshCw size={13} />重试失败</button>
+              <button
+                className="btn btn-primary"
+                disabled={emailAutoActions.processJobs.isPending}
+                onClick={() => {
+                  if (!window.confirm('确认执行到点任务？如果计划为自动发送，将真实调用 Gmail 发出邮件。')) return;
+                  emailAutoActions.processJobs.mutate({ limit: 10, confirm_send: true }, { onSuccess: (res) => showNotice(`已处理 ${res.processed} 个任务`) });
+                }}
+              ><Play size={13} />执行到点任务</button>
             </div>
           </div>
         </div>
-        <DataTable columns={jobColumns} data={filteredJobs} rowKey={(row) => row.id} emptyText="当前筛选下暂无任务" />
+        <DataTable columns={jobColumns} data={filteredJobs} rowKey={(row) => row.id} emptyText={dashboardQ.isLoading ? '正在读取队列任务…' : '当前筛选下暂无任务'} />
       </section>
 
       {showPlanModal && (
@@ -572,19 +524,28 @@ export default function EmailAutoConsole() {
           onScheduleTypeChange={setScheduleType}
           onWeekdaysChange={setSelectedWeekdays}
           onClose={() => setShowPlanModal(false)}
-          onPreview={() => setPreviewJob(jobs[0])}
-          onCreate={() => {
-            setShowPlanModal(false);
-            showNotice('已模拟创建预览计划');
+          onPreview={(payload) => {
+            emailAutoActions.previewCampaign.mutate(payload, {
+              onSuccess: (res) => setPreviewJob(mapApiJob(res.item)),
+              onError: (error) => showNotice(error instanceof Error ? error.message : '没有找到符合筛选条件的达人'),
+            });
           }}
+          onCreate={(payload) => {
+            createCampaign.mutate(payload, {
+              onSuccess: (res) => {
+                setShowPlanModal(false);
+                showNotice(`计划已创建，生成 ${res.created_jobs} 个真实队列任务`);
+              },
+            });
+          }}
+          submitting={createCampaign.isPending}
+          previewing={emailAutoActions.previewCampaign.isPending}
         />
       )}
 
       {previewJob && (
         <MailPreviewModal
           job={previewJob}
-          productAsset={selectedProductAsset}
-          productAssetsLoading={productAssetsQuery.isLoading}
           onClose={() => setPreviewJob(null)}
         />
       )}
@@ -593,11 +554,70 @@ export default function EmailAutoConsole() {
         <MailboxModal
           mailbox={editingMailbox}
           onClose={() => setEditingMailbox(null)}
-          onNotice={showNotice}
+          onSave={(body) => updateMailbox.mutate({ id: editingMailbox.id, body }, {
+            onSuccess: () => {
+              setEditingMailbox(null);
+              showNotice('邮箱额度配置已保存');
+            },
+          })}
+          saving={updateMailbox.isPending}
         />
       )}
     </div>
   );
+}
+
+function mapApiJob(item: EmailAutoJob): AutoJob {
+  return {
+    id: item.id,
+    time: item.time || (item.scheduled_at ? formatShortTime(item.scheduled_at) : ''),
+    creator: item.creator,
+    recipient: item.recipient,
+    sender: item.sender,
+    product: item.product,
+    plan: item.plan,
+    status: item.status as JobStatus,
+    reason: item.reason,
+    filters: item.filters ?? [],
+    subject: item.subject,
+    body: item.body,
+    body_format: item.body_format,
+  };
+}
+
+function formatShortTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function filterSummary(filters: Record<string, unknown>) {
+  const labels: string[] = ['客户推荐库'];
+  const map: Record<string, Record<string, string>> = {
+    source: { all: '全部来源' },
+    priority: { all: '全部优先级', P1: 'P1', P2: 'P2', P3: 'P3', P4: 'P4' },
+    contact: { email: '有邮箱', all: '全部联系' },
+    score: { gte85: '85+ 强推荐', '70_84': '70-84 可测试', '50_69': '50-69 观察', lt50: '<50 低分' },
+    review: { clean: '无复核/风险', need_review: '需要复核', has_risk: '有风险提示' },
+    owner: { assigned: '已分配 BD', unassigned: '未分配 BD' },
+    date: { '1d': '近 24 小时', '7d': '近 7 天', '30d': '近 30 天' },
+    sort: { recommended: '综合推荐排序', score: '评分优先', followers: '粉丝优先', priority: '优先级优先', recent: '最近入库', micro: '小达人优先' },
+  };
+  for (const key of ['source', 'priority', 'contact', 'score', 'review', 'owner', 'date', 'sort']) {
+    const value = String(filters[key] ?? 'all');
+    const label = map[key]?.[value];
+    if (label && !label.startsWith('全部')) labels.push(label);
+  }
+  const minFollowers = filters.min_followers;
+  const maxFollowers = filters.max_followers;
+  if (minFollowers || maxFollowers) labels.push(`粉丝 ${minFollowers || 0}-${maxFollowers || '不限'}`);
+  return labels.slice(0, 8);
 }
 
 function Metric({ label, value, sub, tone }: { label: string; value: string | number; sub: string; tone: 'blue' | 'green' | 'cyan' | 'amber' | 'red' }) {
@@ -641,6 +661,7 @@ function JobStatusBadge({ status }: { status: JobStatus }) {
     pending: { tone: 'warn', label: '待发送' },
     sending: { tone: 'info', label: '发送中' },
     sent: { tone: 'good', label: '已发送' },
+    draft_created: { tone: 'info', label: '已生成草稿' },
     failed: { tone: 'bad', label: '失败' },
     skipped: { tone: 'muted', label: '已跳过' },
   };
@@ -687,17 +708,28 @@ function PlanModal({
   onClose,
   onPreview,
   onCreate,
+  submitting,
+  previewing,
 }: {
   scheduleType: ScheduleType;
   selectedWeekdays: string[];
   onScheduleTypeChange: (value: ScheduleType) => void;
   onWeekdaysChange: (value: string[]) => void;
   onClose: () => void;
-  onPreview: () => void;
-  onCreate: () => void;
+  onPreview: (payload: EmailAutoCampaignCreate) => void;
+  onCreate: (payload: EmailAutoCampaignCreate) => void;
+  submitting?: boolean;
+  previewing?: boolean;
 }) {
+  const [planName, setPlanName] = useState('客户推荐库每日首封');
   const [startTime, setStartTime] = useState('09:30');
   const [endTime, setEndTime] = useState('18:00');
+  const [dailyLimit, setDailyLimit] = useState(300);
+  const [hourlyLimit, setHourlyLimit] = useState(40);
+  const [intervalMin, setIntervalMin] = useState(90);
+  const [intervalMax, setIntervalMax] = useState(240);
+  const [sendMode, setSendMode] = useState<'draft' | 'send'>('draft');
+  const [candidateLimit, setCandidateLimit] = useState(200);
   const usTimeReference = buildUsTimeReference(startTime, endTime);
 
   const toggleWeekday = (day: string) => {
@@ -708,13 +740,40 @@ function PlanModal({
     }
   };
 
+  const createPayload = (): EmailAutoCampaignCreate => ({
+    name: planName,
+    status: sendMode === 'send' ? 'paused' : 'running',
+    schedule_type: scheduleType,
+    weekdays: selectedWeekdays,
+    month_days: [1],
+    start_time: startTime,
+    end_time: endTime,
+    daily_limit: dailyLimit,
+    hourly_limit: hourlyLimit,
+    interval_min_seconds: Math.min(intervalMin, intervalMax),
+    interval_max_seconds: Math.max(intervalMin, intervalMax),
+    mailbox_pool: 'all',
+    send_mode: sendMode,
+    filters: {
+      source: 'all',
+      priority: 'all',
+      contact: 'email',
+      score: 'gte85',
+      review: 'clean',
+      date: '30d',
+      sort: 'recommended',
+    },
+    generate_jobs: true,
+    candidate_limit: candidateLimit,
+  });
+
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-4">
       <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-line bg-white shadow-xl">
         <div className="flex items-start justify-between gap-4 border-b border-line p-4">
           <div>
             <h3 className="text-base font-bold text-gray-900">新建自动发送计划</h3>
-            <p className="mt-1 text-xs text-muted">预览页只更新本地 mock 数据，不写入数据库。</p>
+            <p className="mt-1 text-xs text-muted">计划会写入数据库，并按客户推荐库筛选生成真实队列任务。</p>
           </div>
           <button className="btn btn-ghost" onClick={onClose}><X size={14} />关闭</button>
         </div>
@@ -722,7 +781,7 @@ function PlanModal({
         <div className="overflow-y-auto p-4">
           <div className="grid gap-4 lg:grid-cols-2">
             <FormField label="计划名称">
-              <input className="w-full rounded-md border border-line px-3 py-2 text-xs" defaultValue="客户推荐库每日首封" />
+              <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={planName} onChange={(event) => setPlanName(event.target.value)} />
             </FormField>
             <FormField label="邮箱池">
               <select className="w-full rounded-md border border-line px-3 py-2 text-xs" defaultValue="enabled">
@@ -798,19 +857,28 @@ function PlanModal({
 
           <div className="mt-4 grid gap-4 lg:grid-cols-4">
             <FormField label="每日总量">
-              <input className="w-full rounded-md border border-line px-3 py-2 text-xs" defaultValue="300" />
+              <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={dailyLimit} onChange={(event) => setDailyLimit(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
             </FormField>
             <FormField label="每小时上限">
-              <input className="w-full rounded-md border border-line px-3 py-2 text-xs" defaultValue="40" />
+              <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={hourlyLimit} onChange={(event) => setHourlyLimit(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
             </FormField>
             <FormField label="随机间隔">
-              <input className="w-full rounded-md border border-line px-3 py-2 text-xs" defaultValue="90-240 秒" />
+              <div className="grid grid-cols-2 gap-2">
+                <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={intervalMin} onChange={(event) => setIntervalMin(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
+                <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={intervalMax} onChange={(event) => setIntervalMax(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
+              </div>
             </FormField>
             <FormField label="发送方式">
-              <select className="w-full rounded-md border border-line px-3 py-2 text-xs" defaultValue="send">
-                <option value="send">生成并自动发送</option>
+              <select className="w-full rounded-md border border-line px-3 py-2 text-xs" value={sendMode} onChange={(event) => setSendMode(event.target.value as 'draft' | 'send')}>
                 <option value="draft">只生成草稿不发送</option>
+                <option value="send">生成并自动发送</option>
               </select>
+            </FormField>
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-4">
+            <FormField label="候选上限">
+              <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={candidateLimit} onChange={(event) => setCandidateLimit(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
             </FormField>
           </div>
 
@@ -829,8 +897,8 @@ function PlanModal({
 
         <div className="flex justify-end gap-2 border-t border-line p-4">
           <button className="btn" onClick={onClose}>取消</button>
-          <button className="btn" onClick={onPreview}><Eye size={13} />邮件预览</button>
-          <button className="btn btn-primary" onClick={onCreate}>创建预览计划</button>
+          <button className="btn" disabled={previewing} onClick={() => onPreview(createPayload())}><Eye size={13} />邮件预览</button>
+          <button className="btn btn-primary" disabled={submitting} onClick={() => onCreate(createPayload())}>创建真实计划</button>
         </div>
       </div>
     </div>
@@ -891,7 +959,19 @@ function RecommendationRuleText({ label, value }: { label: string; value: string
   );
 }
 
-function MailboxModal({ mailbox, onClose, onNotice }: { mailbox: MailboxQuota; onClose: () => void; onNotice: (message: string) => void }) {
+function MailboxModal({
+  mailbox,
+  onClose,
+  onSave,
+  saving,
+}: {
+  mailbox: MailboxQuota;
+  onClose: () => void;
+  onSave: (body: { enabled?: boolean; daily_quota?: number; status?: string }) => void;
+  saving?: boolean;
+}) {
+  const [enabled, setEnabled] = useState(mailbox.enabled);
+  const [quota, setQuota] = useState(mailbox.quota);
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/45 p-4">
       <div className="w-full max-w-xl rounded-lg border border-line bg-white shadow-xl">
@@ -908,23 +988,23 @@ function MailboxModal({ mailbox, onClose, onNotice }: { mailbox: MailboxQuota; o
           </FormField>
           <div className="grid gap-3 sm:grid-cols-2">
             <FormField label="启用状态">
-              <select className="w-full rounded-md border border-line px-3 py-2 text-xs" defaultValue={mailbox.enabled ? 'enabled' : 'disabled'}>
+              <select className="w-full rounded-md border border-line px-3 py-2 text-xs" value={enabled ? 'enabled' : 'disabled'} onChange={(event) => setEnabled(event.target.value === 'enabled')}>
                 <option value="enabled">启用自动发送</option>
                 <option value="disabled">暂停此邮箱</option>
               </select>
             </FormField>
             <FormField label="每日数量额度">
-              <input className="w-full rounded-md border border-line px-3 py-2 text-xs" defaultValue={mailbox.quota} />
+              <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={quota} onChange={(event) => setQuota(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
             </FormField>
           </div>
           <div className="rounded-md border border-line bg-soft p-3 text-xs text-muted">
-            后续接真实接口时，这里会保存 Gmail 授权标签、启用状态、每日自动发送额度、冷却时间和健康阈值。
+            保存后会写入邮箱额度中心；授权信息仍沿用现有 Gmail OAuth 绑定。
           </div>
         </div>
         <div className="flex justify-end gap-2 border-t border-line p-4">
           <button className="btn" onClick={onClose}>取消</button>
-          <button className="btn" onClick={() => onNotice('已模拟重新授权邮箱')}><RefreshCw size={13} />重新授权</button>
-          <button className="btn btn-primary" onClick={() => { onClose(); onNotice('已模拟保存邮箱配置'); }}>保存配置</button>
+          <a className="btn" href={`/api/local/outreach/gmail/connect?label=${encodeURIComponent(mailbox.email)}&return_to=${encodeURIComponent('/d/email-auto')}`}><RefreshCw size={13} />重新授权</a>
+          <button className="btn btn-primary" disabled={saving} onClick={() => onSave({ enabled, daily_quota: quota })}>保存配置</button>
         </div>
       </div>
     </div>
@@ -933,17 +1013,12 @@ function MailboxModal({ mailbox, onClose, onNotice }: { mailbox: MailboxQuota; o
 
 function MailPreviewModal({
   job,
-  productAsset,
-  productAssetsLoading,
   onClose,
 }: {
   job: AutoJob;
-  productAsset: ProductAsset | null;
-  productAssetsLoading: boolean;
   onClose: () => void;
 }) {
-  const preview = buildUserSideAiPreview(job, productAsset);
-  const html = buildEmailHtml(preview);
+  const html = buildPreviewHtml(job);
 
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-4">
@@ -951,60 +1026,34 @@ function MailPreviewModal({
         <div className="flex items-start justify-between gap-4 border-b border-line p-4">
           <div>
             <h3 className="text-base font-bold text-gray-900">邮件预览</h3>
-            <p className="mt-1 text-xs text-muted">创建任务时调用用户端同一套 AI 图片和 20% commission 话术预览。</p>
+            <p className="mt-1 text-xs text-muted">来自真实队列或实时筛选预览，沿用用户端 AI 图片和 20% commission 话术链路。</p>
           </div>
           <button className="btn btn-ghost" onClick={onClose}><X size={14} />关闭</button>
         </div>
         <div className="overflow-y-auto bg-soft p-4">
           <div className="rounded-lg border border-line bg-white p-4">
             <div className="mb-3 flex flex-wrap items-center gap-2">
-              <Pill tone="good">已替换为 AI 邀约话术</Pill>
-              <Pill tone={preview.imageUrl ? 'info' : 'warn'}>{preview.imageUrl ? '系统 SKU 图片' : productAssetsLoading ? '正在读取系统图片' : '未读取到系统图片'}</Pill>
+              <Pill tone="good">用户端同款 AI 话术</Pill>
+              <Pill tone={job.body?.includes('/api/local/outreach/product-assets/') ? 'info' : 'warn'}>
+                {job.body?.includes('/api/local/outreach/product-assets/') ? '系统 SKU 图片' : '当前邮件无图片'}
+              </Pill>
               <Pill tone="muted">{job.plan}</Pill>
             </div>
             <div className="grid gap-4">
-              <div className="hidden">
-                <div className="aspect-[4/5] overflow-hidden rounded-lg border border-cyan-200 bg-white">
-                  <img src={preview.imageUrl} alt={preview.productName} className="h-full w-full object-cover" />
-                </div>
-                <div className="mt-3 text-sm font-bold text-cyan-900">{preview.productName}</div>
-                <div className="mt-1 text-xs text-cyan-700">Generated product image preview</div>
-              </div>
               <div className="space-y-3">
                 <PreviewField label="收件人" value={job.recipient} />
-                <PreviewField label="主题" value={preview.subject} />
+                <PreviewField label="发件邮箱" value={job.sender} />
+                <PreviewField label="主题" value={job.subject || '未生成主题'} />
                 <div className="rounded-md border border-line bg-white">
                   <div className="flex items-center justify-between border-b border-line px-3 py-2">
                     <div className="flex items-center gap-2 text-xs font-semibold text-gray-800">最终邮件效果</div>
-                    <label className="hidden">
-                      <input type="checkbox" checked readOnly />
-                      插入图片
-                    </label>
                   </div>
-                  <div className="grid gap-3 p-3">
-                    <div className="overflow-hidden rounded-md border border-line bg-gray-50 p-3">
-                      <div className="mx-auto max-w-[520px] rounded border border-line bg-white p-3" dangerouslySetInnerHTML={{ __html: html }} />
-                    </div>
-                    <div className="hidden">
-                      <div className="rounded-md border border-line bg-soft p-3">
-                        <div className="font-semibold text-gray-900">图片设置</div>
-                        <div className="mt-2 grid gap-2">
-                          <Row label="位置" value="正文开头" />
-                          <Row label="对齐" value="居中" />
-                          <Row label="宽度" value="560px" />
-                          <Row label="说明" value="自动匹配 SKU 图片" />
-                        </div>
-                      </div>
-                      <div className="rounded-md border border-green-200 bg-green-50 p-3 text-green-700">
-                        发送后达人状态更新为已发送首封，并进入邮件跟踪系统。
-                      </div>
+                  <div className="p-3">
+                    <div className="overflow-hidden rounded-md border border-line bg-gray-50 px-3 py-4">
+                      <div className="mx-auto max-w-[680px] rounded border border-line bg-white p-4 shadow-sm" dangerouslySetInnerHTML={{ __html: html }} />
                     </div>
                   </div>
                 </div>
-                <label className="hidden">
-                  <span className="mb-1 block text-xxs font-semibold text-muted">正文</span>
-                  <textarea className="h-48 w-full resize-none rounded-md border border-line bg-white px-3 py-2 text-xs leading-6" readOnly value={preview.body} />
-                </label>
               </div>
             </div>
           </div>
@@ -1045,56 +1094,16 @@ function PreviewField({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-muted">{label}</span>
-      <span className="font-medium text-gray-900">{value}</span>
-    </div>
-  );
-}
-
-function buildUserSideAiPreview(job: AutoJob, productAsset?: ProductAsset | null) {
-  const displayName = job.creator.replace(/^@/, '') || 'creator';
-  const greetingName = displayName.split(/[._-]/)[0] || 'there';
-  const productName = productAsset?.name || job.product.replace(/\s*\+\s*AI 图片$/, '') || 'X9 Green Full Category';
-  return {
-    productName,
-    imageUrl: productAsset?.image_url || '',
-    subject: `X9 x ${displayName} - collaboration idea with 20% commission`,
-    body: [
-      `Hi ${capitalize(greetingName)},`,
-      '',
-      "I'm reaching out from X9. We're a care brand with four product series: women care, baby care, adult care, and pet care. They cover everyday needs for women, babies, adults, and pets.",
-      '',
-      'Your content feels natural and easy to trust, so we think there could be a good fit between your page and our care products.',
-      '',
-      "We'd love to explore a collaboration with you. If you're interested, we can first share the product line that best matches your audience, along with product images, key details, and a simple content idea for you to review.",
-      '',
-      "For this collaboration, we offer 20% commission on sales generated through your content. We'll also provide the product information and tracking support before you decide how to present it.",
-      '',
-      "Looking forward to your reply. If this sounds interesting, just let us know and we'll send over the next details.",
-      '',
-      'Best regards,',
-      'X9 Outreach Team',
-    ].join('\n'),
-  };
-}
-
-function buildEmailHtml(preview: ReturnType<typeof buildUserSideAiPreview>) {
-  const paragraphs = preview.body
+function buildPreviewHtml(job: AutoJob) {
+  if (job.body_format === 'html' && job.body) {
+    return job.body;
+  }
+  const paragraphs = (job.body || '当前任务还没有生成邮件正文')
     .split(/\n{2,}/)
     .map((block) => `<p style="margin:0 0 14px;font-size:14px;line-height:1.65;color:#111827;">${escapeHtml(block).replace(/\n/g, '<br/>')}</p>`)
     .join('');
-  const imageMarkup = preview.imageUrl
-    ? `<img src="${escapeHtml(preview.imageUrl)}" alt="${escapeHtml(preview.productName)}" style="width:100%;max-width:420px;max-height:280px;object-fit:contain;border-radius:8px;border:1px solid #d1d5db;display:block;margin:0 auto;background:#f8fafc;"/>`
-    : '<div style="max-width:420px;margin:0 auto;padding:32px 16px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;color:#64748b;font:13px/1.6 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">未读取到系统 SKU 图片</div>';
-
   return `
     <div style="font-family:Arial,Helvetica,sans-serif;background:#ffffff;color:#111827;">
-      <div style="text-align:center;margin:0 0 18px;">
-        ${imageMarkup}
-      </div>
       ${paragraphs}
     </div>
   `;
@@ -1107,9 +1116,4 @@ function escapeHtml(value: string) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-function capitalize(value: string) {
-  if (!value) return value;
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }

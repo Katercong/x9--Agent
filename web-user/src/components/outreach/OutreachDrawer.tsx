@@ -617,11 +617,17 @@ export function OutreachDrawer({ creator, open, onClose, initialLock = null }: P
         creator_id: creator.id,
         commission,
         strategy,
-        product_asset_id: selectedAsset?.id,
       },
       {
         onSuccess: (result) => {
           const asset = result.product_asset || selectedAsset;
+          if (result.product_asset?.id) {
+            setSelectedAssetId(result.product_asset.id);
+          }
+          setIncludeProductImage(Boolean(asset?.image_url));
+          if (asset?.image_url && !emailImageCaption.trim()) {
+            setEmailImageCaption(asset.name || '');
+          }
           setSubject(result.subject || fallbackSubject(creator, asset));
           setBody(result.body || result.script || '');
           setGenerationMeta({

@@ -63,8 +63,72 @@ py -3.11 .\tools\x9_creator_db_check.py
 ```
 
 完成后:
-- Core:`http://localhost:18765`
-- Desktop:`http://localhost:8000`(UI 在 `/ui/`)
+- Desktop:`http://localhost:8000`
+- 管理后台:`http://localhost:8000/`、`/a/*`、`/c/*`、`/d/*`
+- 员工门户:`http://localhost:8000/portal/`
+
+默认只启动 PostgreSQL + Desktop。需要 Core `/api/v1` 或 Core 产品库页面时:
+
+```powershell
+.\start_all.ps1 -StartCore
+```
+
+常用参数:
+
+- `-NoBrowser`: 只启动服务,不自动打开浏览器。
+- `-StartCore`: 同时启动 Core `:18765`。
+- `-RequireCore`: Core 未健康时让脚本失败退出。
+- `-OpenLocal`: 打开 `http://localhost:8000/portal/`,而不是线上域名。
+- 日志目录:`F:\X9_AI_system\logs\`。
+
+## 代码变更后的构建/部署
+
+只修改 Markdown 文档时不需要重启后端,也不需要重新构建前端。
+
+如果修改 `web/` 管理后台源码:
+
+```powershell
+cd F:\X9_AI_system\web
+npm run build:root
+npm run deploy:root
+```
+
+如果修改 `web-user/` 员工门户源码:
+
+```powershell
+cd F:\X9_AI_system\web-user
+npm run build:deploy
+npm run deploy
+```
+
+如果修改 `desktop/backend/` 或 `core/app/` 后端源码,部署后必须重启对应后端进程。否则线上进程可能仍使用旧代码。
+
+## 变更后验收
+
+整理性修复或部署后,至少执行:
+
+```powershell
+cd F:\X9_AI_system
+py -3.11 -m pytest desktop\backend\tests -q
+
+cd F:\X9_AI_system\web
+npm run build
+
+cd F:\X9_AI_system\web-user
+npm run build
+```
+
+服务启动后检查:
+
+- `http://localhost:18765`
+- `http://localhost:8000/health`
+- `http://localhost:8000/login`
+- `http://localhost:8000/`
+- `http://localhost:8000/portal/`
+- `http://localhost:8000/api/local/auth/me`
+- `http://localhost:8000/api/local/dashboard/unified`
+
+完整清单见 `docs/system_boundary_and_acceptance.md`。
 
 ## 日常停服
 

@@ -12,6 +12,7 @@ from .creator_tag import CreatorTag
 from .extension_command import ExtensionCommand
 from .extension_run_progress import ExtensionRunProgress
 from .extension_session import ExtensionSession
+from .email_auto import EmailAutoCampaign, EmailAutoJob, GmailAccountQuota
 from .followup_task import FollowupTask
 from .foreign_trade_contact import ForeignTradeContactRecord
 from .gmail_account import GmailAccount
@@ -65,8 +66,11 @@ __all__ = [
     "ExtensionCommand",
     "ExtensionRunProgress",
     "ExtensionSession",
+    "EmailAutoCampaign",
+    "EmailAutoJob",
     "FollowupTask",
     "ForeignTradeContactRecord",
+    "GmailAccountQuota",
     "GmailAccount",
     "GmailSyncState",
     "OutreachEmail",
