@@ -814,6 +814,7 @@ function filterSummary(filters: Record<string, unknown>) {
   const minFollowers = filters.min_followers;
   const maxFollowers = filters.max_followers;
   if (minFollowers || maxFollowers) labels.push(`粉丝 ${minFollowers || 0}-${maxFollowers || '不限'}`);
+  if (filters.pause_on_failure) labels.push('失败暂停');
   return labels.slice(0, 8);
 }
 
@@ -968,6 +969,7 @@ function PlanModal({
   const [intervalMax, setIntervalMax] = useState(campaign?.intervalMaxSeconds ?? 240);
   const [sendMode, setSendMode] = useState<'draft' | 'send'>(campaign?.sendMode === 'draft' ? 'draft' : 'send');
   const [mailboxPool, setMailboxPool] = useState(campaign?.mailboxPoolValue || 'all');
+  const [pauseOnFailure, setPauseOnFailure] = useState(Boolean(campaign?.filtersRaw?.pause_on_failure));
   const [candidateLimit, setCandidateLimit] = useState(campaign?.dailyLimit ?? 200);
   const [filters, setFilters] = useState<RecommendationFilters>(() => normalizeRecommendationFilters(campaign?.filtersRaw));
   const usTimeReference = buildUsTimeReference(startTime, endTime);
@@ -1037,6 +1039,7 @@ function PlanModal({
     sort: filters.sort,
     min_followers: filters.min_followers ? Number(filters.min_followers) : null,
     max_followers: filters.max_followers ? Number(filters.max_followers) : null,
+    pause_on_failure: pauseOnFailure,
   });
 
   const createPayload = (): EmailAutoCampaignCreate => ({
@@ -1170,6 +1173,17 @@ function PlanModal({
           <div className="mt-4 grid gap-4 lg:grid-cols-4">
             <FormField label="本次生成队列数">
               <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={candidateLimit} onChange={(event) => setCandidateLimit(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
+            </FormField>
+            <FormField label="失败处理">
+              <div className="flex h-9 items-center gap-2 rounded-md border border-line bg-white px-3 text-xs text-gray-800">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-line text-brand-600"
+                  checked={pauseOnFailure}
+                  onChange={(event) => setPauseOnFailure(event.target.checked)}
+                />
+                <span>发送失败立即暂停计划</span>
+              </div>
             </FormField>
           </div>
 

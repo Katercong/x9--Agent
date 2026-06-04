@@ -45,6 +45,7 @@ DEFAULT_FILTERS: dict[str, Any] = {
     "sort": "recommended",
     "min_followers": None,
     "max_followers": None,
+    "pause_on_failure": False,
 }
 
 
@@ -1169,6 +1170,14 @@ def _campaign_sent_count(db: Session, campaign: EmailAutoCampaign, since: dateti
     ) or 0)
 
 
+def _campaign_pause_on_failure(campaign: EmailAutoCampaign) -> bool:
+    filters = _json_loads(campaign.filters_json, DEFAULT_FILTERS)
+    value = filters.get("pause_on_failure")
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 @router.post("/jobs/process")
 def process_jobs(body: ProcessJobsIn, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     user = current_user(request)
@@ -1276,8 +1285,13 @@ def _process_one_job(db: Session, job: EmailAutoJob, user: dict[str, Any]) -> di
         job.failure_reason = str(exc)
         quota.status = "cooldown" if "429" in str(exc) or "limit" in str(exc).lower() else quota.status
         quota.cooldown_until = _now() + timedelta(hours=24) if quota.status == "cooldown" else quota.cooldown_until
+        paused = False
+        if _campaign_pause_on_failure(campaign):
+            campaign.status = "paused"
+            paused = True
+            job.failure_reason = f"{job.failure_reason}；计划已因发送失败自动暂停"
         db.commit()
-        return {"job_id": job.id, "status": job.status, "reason": job.failure_reason}
+        return {"job_id": job.id, "status": job.status, "reason": job.failure_reason, "campaign_paused": paused}
 
     email.status = "sent"
     email.sent_at = _now()
