@@ -145,6 +145,8 @@ export interface EmailAutoCampaign {
   name: string;
   status: EmailAutoCampaignStatus;
   schedule_type: 'daily' | 'weekly' | 'monthly' | string;
+  weekdays?: string[];
+  month_days?: number[];
   schedule_label: string;
   time_window: string;
   start_time: string;
@@ -247,6 +249,8 @@ export interface EmailAutoDashboardResponse {
   campaigns: EmailAutoCampaign[];
   mailboxes: EmailAutoMailboxQuota[];
   jobs: EmailAutoJob[];
+  jobs_total?: number;
+  job_status_counts?: Record<string, number>;
 }
 
 export interface EmailAutoCampaignCreate {

@@ -112,8 +112,8 @@ export const endpoints = {
     api.get<GmailReplySyncStatus>(`${LOCAL}/outreach/gmail/sync-status`),
   gmailSyncReplies: (body?: { account_ids?: string[]; limit_per_account?: number }) =>
     api.post<GmailReplySyncStatus>(`${LOCAL}/outreach/gmail/sync-replies`, body || {}),
-  emailAutoDashboard: () =>
-    api.get<EmailAutoDashboardResponse>(`${LOCAL}/email-auto/dashboard`),
+  emailAutoDashboard: (params?: { job_status?: string; job_offset?: number; limit_jobs?: number }) =>
+    api.get<EmailAutoDashboardResponse>(`${LOCAL}/email-auto/dashboard`, params),
   emailAutoSyncMailboxes: () =>
     api.post<{ ok: boolean; items: EmailAutoMailboxQuota[]; total: number }>(`${LOCAL}/email-auto/mailboxes/sync`, {}),
   emailAutoUpdateMailbox: (id: string, body: { enabled?: boolean; daily_quota?: number; status?: string }) =>
@@ -126,6 +126,8 @@ export const endpoints = {
     api.post<EmailAutoHealthCheckResponse>(`${LOCAL}/email-auto/mailboxes/health-check`, body || {}),
   emailAutoCreateCampaign: (body: EmailAutoCampaignCreate) =>
     api.post<{ ok: boolean; item: EmailAutoCampaign; created_jobs: number }>(`${LOCAL}/email-auto/campaigns`, body),
+  emailAutoUpdateCampaign: (id: string, body: EmailAutoCampaignCreate) =>
+    api.patch<{ ok: boolean; item: EmailAutoCampaign; created_jobs: number }>(`${LOCAL}/email-auto/campaigns/${encodeURIComponent(id)}`, body),
   emailAutoCampaignPreview: (body: EmailAutoCampaignCreate) =>
     api.post<{ ok: boolean; item: EmailAutoJob }>(`${LOCAL}/email-auto/campaigns/preview`, body),
   emailAutoCampaignStatus: (id: string, status: 'running' | 'paused' | 'draft') =>

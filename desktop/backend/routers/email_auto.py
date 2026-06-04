@@ -382,7 +382,13 @@ def _job_reason(status: str) -> str:
 
 
 @router.get("/dashboard")
-def dashboard(request: Request, db: Session = Depends(get_db), limit_jobs: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+def dashboard(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit_jobs: int = Query(default=100, ge=1, le=500),
+    job_status: str | None = Query(default=None),
+    job_offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
     current_user(request)
     _sync_mailboxes(db, request)
     department_code = current_department_code(request)
@@ -401,7 +407,25 @@ def dashboard(request: Request, db: Session = Depends(get_db), limit_jobs: int =
 
     campaign_rows = list(db.scalars(select(EmailAutoCampaign).where(*campaign_filters).order_by(EmailAutoCampaign.created_at.desc())).all())
     mailbox_rows = list(db.scalars(select(GmailAccountQuota).where(*quota_filters).order_by(GmailAccountQuota.email.asc())).all())
-    job_rows = list(db.scalars(select(EmailAutoJob).where(*job_filters).order_by(EmailAutoJob.created_at.desc()).limit(limit_jobs)).all())
+    job_status_counts = {
+        str(status): int(count or 0)
+        for status, count in db.execute(
+            select(EmailAutoJob.status, func.count())
+            .where(*job_filters)
+            .group_by(EmailAutoJob.status)
+        ).all()
+    }
+    job_list_filters = list(job_filters)
+    if job_status and job_status != "all":
+        job_list_filters.append(EmailAutoJob.status == job_status)
+    jobs_total = int(db.scalar(select(func.count()).select_from(EmailAutoJob).where(*job_list_filters)) or 0)
+    job_rows = list(db.scalars(
+        select(EmailAutoJob)
+        .where(*job_list_filters)
+        .order_by(EmailAutoJob.created_at.desc())
+        .offset(job_offset)
+        .limit(limit_jobs)
+    ).all())
     mailbox_items = [_serialize_mailbox(db, row) for row in mailbox_rows]
     sent_today = int(db.scalar(
         select(func.count())
@@ -424,6 +448,8 @@ def dashboard(request: Request, db: Session = Depends(get_db), limit_jobs: int =
         "campaigns": [_serialize_campaign(db, row) for row in campaign_rows],
         "mailboxes": mailbox_items,
         "jobs": [_serialize_job(db, row) for row in job_rows],
+        "jobs_total": jobs_total,
+        "job_status_counts": job_status_counts,
     }
 
 
@@ -749,6 +775,7 @@ def create_campaign(body: CampaignIn, request: Request, db: Session = Depends(ge
     hourly_limit = min(int(body.hourly_limit), daily_limit)
     candidate_limit = min(int(body.candidate_limit), daily_limit)
     filters = {**DEFAULT_FILTERS, **(body.filters or {})}
+    interval_min = min(body.interval_min_seconds, body.interval_max_seconds)
     interval_max = max(body.interval_min_seconds, body.interval_max_seconds)
     row = EmailAutoCampaign(
         id=new_id("eac"),
@@ -762,7 +789,7 @@ def create_campaign(body: CampaignIn, request: Request, db: Session = Depends(ge
         end_time=body.end_time,
         daily_limit=daily_limit,
         hourly_limit=hourly_limit,
-        interval_min_seconds=body.interval_min_seconds,
+        interval_min_seconds=interval_min,
         interval_max_seconds=interval_max,
         mailbox_pool=body.mailbox_pool,
         send_mode=body.send_mode,
@@ -770,6 +797,43 @@ def create_campaign(body: CampaignIn, request: Request, db: Session = Depends(ge
         created_by=str(user.get("id") or user.get("identity") or ""),
     )
     db.add(row)
+    db.commit()
+    db.refresh(row)
+    created_jobs = _generate_jobs_for_campaign(db, row, candidate_limit=candidate_limit) if body.generate_jobs else 0
+    return {"ok": True, "item": _serialize_campaign(db, row), "created_jobs": created_jobs}
+
+
+@router.patch("/campaigns/{campaign_id}")
+def update_campaign(campaign_id: str, body: CampaignIn, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    current_user(request)
+    department_code = _dept_for_write(request)
+    _sync_mailboxes(db, request)
+    row = db.get(EmailAutoCampaign, campaign_id)
+    if row is None or not row_in_department(row, department_code):
+        raise HTTPException(status_code=404, detail="campaign not found")
+    capacity = _mailbox_send_capacity(db, department_code)
+    daily_limit = int(body.daily_limit)
+    if capacity["daily_capacity"] > 0:
+        daily_limit = min(daily_limit, capacity["daily_capacity"])
+    hourly_limit = min(int(body.hourly_limit), daily_limit)
+    candidate_limit = min(int(body.candidate_limit), daily_limit)
+    filters = {**DEFAULT_FILTERS, **(body.filters or {})}
+    interval_min = min(body.interval_min_seconds, body.interval_max_seconds)
+    interval_max = max(body.interval_min_seconds, body.interval_max_seconds)
+    row.name = body.name.strip()
+    row.status = body.status
+    row.schedule_type = body.schedule_type
+    row.weekdays_json = _json_dumps(body.weekdays)
+    row.month_days_json = _json_dumps(body.month_days)
+    row.start_time = body.start_time
+    row.end_time = body.end_time
+    row.daily_limit = daily_limit
+    row.hourly_limit = hourly_limit
+    row.interval_min_seconds = interval_min
+    row.interval_max_seconds = interval_max
+    row.mailbox_pool = body.mailbox_pool
+    row.send_mode = body.send_mode
+    row.filters_json = _json_dumps(filters)
     db.commit()
     db.refresh(row)
     created_jobs = _generate_jobs_for_campaign(db, row, candidate_limit=candidate_limit) if body.generate_jobs else 0
@@ -866,6 +930,11 @@ def _generate_jobs_for_campaign(db: Session, campaign: EmailAutoCampaign, *, can
     assets = product_asset_service.list_assets(campaign.department_code)
     created = 0
     now = _now()
+    capacity = _mailbox_send_capacity(db, campaign.department_code)
+    mailbox_count = max(1, int(capacity.get("mailboxes") or 0))
+    interval_min = max(30, int(campaign.interval_min_seconds or 90))
+    interval_max = max(interval_min, int(campaign.interval_max_seconds or interval_min))
+    slot_offsets = [0 for _ in range(mailbox_count)]
     for creator in rows:
         if _creator_already_contacted(db, creator.id):
             continue
@@ -876,7 +945,9 @@ def _generate_jobs_for_campaign(db: Session, campaign: EmailAutoCampaign, *, can
         subject = build_tk_email_subject(ctx)
         plain = generate_strategy_template(ctx)
         body = _email_html(plain, asset)
-        scheduled_at = now + timedelta(seconds=created * int(campaign.interval_min_seconds or 90))
+        slot_index = created % mailbox_count
+        scheduled_at = now + timedelta(seconds=slot_offsets[slot_index])
+        slot_offsets[slot_index] += random.randint(interval_min, interval_max)
         job = EmailAutoJob(
             id=new_id("eaj"),
             department_code=campaign.department_code,

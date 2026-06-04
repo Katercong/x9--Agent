@@ -137,10 +137,10 @@ export function useGmailSyncReplies() {
   });
 }
 
-export function useEmailAutoDashboard() {
+export function useEmailAutoDashboard(params?: Parameters<typeof endpoints.emailAutoDashboard>[0]) {
   return useQuery({
-    queryKey: ['email-auto', 'dashboard'],
-    queryFn: () => endpoints.emailAutoDashboard(),
+    queryKey: ['email-auto', 'dashboard', params],
+    queryFn: () => endpoints.emailAutoDashboard(params),
     refetchInterval: 10_000,
   });
 }
@@ -157,6 +157,14 @@ export function useEmailAutoCreateCampaign() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: Parameters<typeof endpoints.emailAutoCreateCampaign>[0]) => endpoints.emailAutoCreateCampaign(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['email-auto', 'dashboard'] }),
+  });
+}
+
+export function useEmailAutoUpdateCampaign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Parameters<typeof endpoints.emailAutoUpdateCampaign>[1] }) => endpoints.emailAutoUpdateCampaign(id, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['email-auto', 'dashboard'] }),
   });
 }

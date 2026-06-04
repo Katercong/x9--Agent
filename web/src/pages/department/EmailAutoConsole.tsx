@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   CalendarClock,
   CheckCircle2,
@@ -22,6 +22,7 @@ import {
   useEmailAutoCampaignStatus,
   useEmailAutoCreateCampaign,
   useEmailAutoDashboard,
+  useEmailAutoUpdateCampaign,
   useEmailAutoMailboxRemove,
   useEmailAutoMailboxUpdate,
   useEmailAutoSyncMailboxes,
@@ -38,13 +39,22 @@ interface AutoCampaign {
   name: string;
   status: CampaignStatus;
   scheduleType: ScheduleType;
+  weekdays: string[];
+  monthDays: number[];
   scheduleLabel: string;
   timeWindow: string;
+  startTime: string;
+  endTime: string;
   sent: number;
   dailyLimit: number;
   hourlyLimit: number;
+  intervalMinSeconds: number;
+  intervalMaxSeconds: number;
   interval: string;
   mailboxPool: string;
+  mailboxPoolValue: string;
+  sendMode: 'draft' | 'send' | string;
+  filtersRaw: Record<string, unknown>;
   filters: string[];
   action: string;
 }
@@ -118,6 +128,8 @@ const DEFAULT_RECOMMENDATION_FILTERS: RecommendationFilters = {
   min_followers: '',
   max_followers: '',
 };
+
+const JOB_PAGE_SIZE = 10;
 
 const sourceOptions: FilterOption[] = [
   { value: 'all', label: '全部来源' },
@@ -258,33 +270,67 @@ const recommendationProtectionRules = [
 
 export default function EmailAutoConsole() {
   const [selectedStatus, setSelectedStatus] = useState<'all' | JobStatus>('pending');
+  const [jobPage, setJobPage] = useState(0);
   const [showPlanModal, setShowPlanModal] = useState(false);
+  const [editingCampaign, setEditingCampaign] = useState<AutoCampaign | null>(null);
   const [previewJob, setPreviewJob] = useState<AutoJob | null>(null);
   const [editingMailbox, setEditingMailbox] = useState<MailboxQuota | null>(null);
   const [scheduleType, setScheduleType] = useState<ScheduleType>('daily');
   const [selectedWeekdays, setSelectedWeekdays] = useState(['周一', '周二', '周三', '周四', '周五']);
   const [notice, setNotice] = useState('');
-  const dashboardQ = useEmailAutoDashboard();
+  const dashboardQ = useEmailAutoDashboard({
+    job_status: selectedStatus,
+    job_offset: jobPage * JOB_PAGE_SIZE,
+    limit_jobs: JOB_PAGE_SIZE,
+  });
   const syncMailboxes = useEmailAutoSyncMailboxes();
   const createCampaign = useEmailAutoCreateCampaign();
+  const updateCampaign = useEmailAutoUpdateCampaign();
   const campaignStatus = useEmailAutoCampaignStatus();
   const updateMailbox = useEmailAutoMailboxUpdate();
   const removeMailbox = useEmailAutoMailboxRemove();
   const emailAutoActions = useEmailAutoActions();
   const showNotice = (message: string) => setNotice(message);
 
+  useEffect(() => {
+    setJobPage(0);
+  }, [selectedStatus]);
+
+  const openCreatePlan = () => {
+    setEditingCampaign(null);
+    setScheduleType('daily');
+    setSelectedWeekdays(WEEKDAYS.slice(0, 5));
+    setShowPlanModal(true);
+  };
+
+  const openEditPlan = (campaign: AutoCampaign) => {
+    setEditingCampaign(campaign);
+    setScheduleType(campaign.scheduleType);
+    setSelectedWeekdays(campaign.weekdays.length ? campaign.weekdays : WEEKDAYS.slice(0, 5));
+    setShowPlanModal(true);
+  };
+
   const campaigns: AutoCampaign[] = useMemo(() => (dashboardQ.data?.campaigns ?? []).map((item) => ({
     id: item.id,
     name: item.name,
     status: item.status as CampaignStatus,
     scheduleType: item.schedule_type as ScheduleType,
+    weekdays: Array.isArray(item.weekdays) ? item.weekdays : [],
+    monthDays: Array.isArray(item.month_days) ? item.month_days : [],
     scheduleLabel: item.schedule_label,
     timeWindow: item.time_window,
+    startTime: item.start_time,
+    endTime: item.end_time,
     sent: item.sent,
     dailyLimit: item.daily_limit,
     hourlyLimit: item.hourly_limit,
+    intervalMinSeconds: item.interval_min_seconds,
+    intervalMaxSeconds: item.interval_max_seconds,
     interval: item.interval,
     mailboxPool: item.mailbox_pool === 'all' ? '全部已启用绑定邮箱' : item.mailbox_pool,
+    mailboxPoolValue: item.mailbox_pool,
+    sendMode: item.send_mode,
+    filtersRaw: item.filters ?? {},
     filters: filterSummary(item.filters),
     action: item.send_mode === 'send' ? '自动发送并进入邮件跟踪' : '只生成草稿，人工确认后发送',
   })), [dashboardQ.data?.campaigns]);
@@ -314,15 +360,28 @@ export default function EmailAutoConsole() {
   const queueCount = dashboardQ.data?.dashboard.queue_count ?? 0;
   const replyCount = dashboardQ.data?.dashboard.reply_count ?? 0;
   const bounceCount = dashboardQ.data?.dashboard.bounce_count ?? 0;
-  const jobStatusCounts = useMemo(() => jobs.reduce<Record<string, number>>((acc, item) => {
-    acc[item.status] = (acc[item.status] || 0) + 1;
-    return acc;
-  }, {}), [jobs]);
+  const jobStatusCounts = useMemo(() => {
+    if (dashboardQ.data?.job_status_counts) return dashboardQ.data.job_status_counts;
+    return jobs.reduce<Record<string, number>>((acc, item) => {
+      acc[item.status] = (acc[item.status] || 0) + 1;
+      return acc;
+    }, {});
+  }, [dashboardQ.data?.job_status_counts, jobs]);
 
   const filteredJobs = useMemo(
     () => jobs.filter((item) => selectedStatus === 'all' || item.status === selectedStatus),
-    [selectedStatus],
+    [jobs, selectedStatus],
   );
+  const filteredJobTotal = dashboardQ.data?.jobs_total ?? filteredJobs.length;
+  const totalJobPages = Math.max(1, Math.ceil(filteredJobTotal / JOB_PAGE_SIZE));
+  const currentJobPage = Math.min(jobPage, totalJobPages - 1);
+  const jobPageStart = filteredJobTotal > 0 ? currentJobPage * JOB_PAGE_SIZE + 1 : 0;
+  const jobPageEnd = Math.min(filteredJobTotal, (currentJobPage + 1) * JOB_PAGE_SIZE);
+  useEffect(() => {
+    if (jobPage > totalJobPages - 1) {
+      setJobPage(totalJobPages - 1);
+    }
+  }, [jobPage, totalJobPages]);
 
   const campaignColumns: Column<AutoCampaign>[] = [
     {
@@ -376,6 +435,7 @@ export default function EmailAutoConsole() {
       align: 'right',
       cell: (row) => (
         <div className="flex justify-end gap-2">
+          <button className="btn btn-ghost" onClick={() => openEditPlan(row)}><Edit3 size={13} />编辑</button>
           <button
             className="btn btn-ghost"
             disabled={campaignStatus.isPending}
@@ -388,7 +448,7 @@ export default function EmailAutoConsole() {
             className="btn btn-ghost"
             disabled={emailAutoActions.generateJobs.isPending}
             onClick={() => emailAutoActions.generateJobs.mutate({ id: row.id, limit: 200 }, { onSuccess: (res) => showNotice(`已生成 ${res.created_jobs} 个队列任务`) })}
-          ><Edit3 size={13} />补充队列</button>
+          ><Sparkles size={13} />补充队列</button>
         </div>
       ),
     },
@@ -515,7 +575,7 @@ export default function EmailAutoConsole() {
                 disabled={syncMailboxes.isPending}
                 onClick={() => syncMailboxes.mutate(undefined, { onSuccess: (res) => showNotice(`已同步 ${res.total} 个绑定邮箱`) })}
               ><RefreshCw size={14} />同步邮箱</button>
-              <button className="btn btn-primary" onClick={() => setShowPlanModal(true)}><CalendarClock size={14} />新建计划</button>
+              <button className="btn btn-primary" onClick={openCreatePlan}><CalendarClock size={14} />新建计划</button>
             </div>
           </div>
         </div>
@@ -536,7 +596,7 @@ export default function EmailAutoConsole() {
                 <h3 className="text-sm font-semibold text-gray-900">运行计划</h3>
                 <p className="mt-0.5 text-xxs text-muted">支持每天 / 每周指定周几 / 每月指定日期，发送窗口精确到小时分钟。</p>
               </div>
-              <button className="btn btn-primary" onClick={() => setShowPlanModal(true)}><Sparkles size={13} />创建自动发送计划</button>
+              <button className="btn btn-primary" onClick={openCreatePlan}><Sparkles size={13} />创建自动发送计划</button>
             </div>
           </div>
           <DataTable columns={campaignColumns} data={campaigns} rowKey={(row) => row.id} emptyText={dashboardQ.isLoading ? '正在读取自动邮件计划…' : '暂无自动发送计划'} />
@@ -613,32 +673,67 @@ export default function EmailAutoConsole() {
           </div>
         </div>
         <DataTable columns={jobColumns} data={filteredJobs} rowKey={(row) => row.id} emptyText={dashboardQ.isLoading ? '正在读取队列任务…' : '当前筛选下暂无任务'} />
+        <div className="flex flex-col gap-2 border-t border-line px-4 py-3 text-xs text-muted sm:flex-row sm:items-center sm:justify-between">
+          <span>显示 {jobPageStart}-{jobPageEnd} / {filteredJobTotal} 条</span>
+          <div className="flex items-center gap-2">
+            <button
+              className="btn"
+              disabled={dashboardQ.isFetching || currentJobPage <= 0}
+              onClick={() => setJobPage((page) => Math.max(0, page - 1))}
+            >
+              上一页
+            </button>
+            <span className="num text-xxs text-gray-500">{currentJobPage + 1}/{totalJobPages}</span>
+            <button
+              className="btn"
+              disabled={dashboardQ.isFetching || currentJobPage >= totalJobPages - 1}
+              onClick={() => setJobPage((page) => Math.min(totalJobPages - 1, page + 1))}
+            >
+              下一页
+            </button>
+          </div>
+        </div>
         </section>
       </div>
 
       {showPlanModal && (
         <PlanModal
+          campaign={editingCampaign}
           scheduleType={scheduleType}
           selectedWeekdays={selectedWeekdays}
           mailboxes={mailboxes}
           onScheduleTypeChange={setScheduleType}
           onWeekdaysChange={setSelectedWeekdays}
-          onClose={() => setShowPlanModal(false)}
+          onClose={() => {
+            setShowPlanModal(false);
+            setEditingCampaign(null);
+          }}
           onPreview={(payload) => {
             emailAutoActions.previewCampaign.mutate(payload, {
               onSuccess: (res) => setPreviewJob(mapApiJob(res.item)),
               onError: (error) => showNotice(error instanceof Error ? error.message : '没有找到符合筛选条件的达人'),
             });
           }}
-          onCreate={(payload) => {
+          onSubmit={(payload) => {
+            if (editingCampaign) {
+              updateCampaign.mutate({ id: editingCampaign.id, body: payload }, {
+                onSuccess: () => {
+                  setShowPlanModal(false);
+                  setEditingCampaign(null);
+                  showNotice('计划已保存');
+                },
+              });
+              return;
+            }
             createCampaign.mutate(payload, {
               onSuccess: (res) => {
                 setShowPlanModal(false);
+                setEditingCampaign(null);
                 showNotice(`计划已创建，生成 ${res.created_jobs} 个真实队列任务`);
               },
             });
           }}
-          submitting={createCampaign.isPending}
+          submitting={createCampaign.isPending || updateCampaign.isPending}
           previewing={emailAutoActions.previewCampaign.isPending}
         />
       )}
@@ -802,7 +897,44 @@ function shiftChinaTime(value: string, offsetHours: number) {
   return `${day} ${hh}:${mm}`;
 }
 
+function normalizeRecommendationFilters(filters?: Record<string, unknown> | null): RecommendationFilters {
+  const source = filters ?? {};
+  const toText = (key: keyof RecommendationFilters) => String(source[key] ?? DEFAULT_RECOMMENDATION_FILTERS[key] ?? '');
+  const toNumberText = (key: 'min_followers' | 'max_followers') => {
+    const value = source[key];
+    return value === undefined || value === null || value === '' ? '' : String(value);
+  };
+  return {
+    keyword: toText('keyword'),
+    source: toText('source'),
+    priority: toText('priority'),
+    contact: toText('contact'),
+    score: toText('score'),
+    product: toText('product'),
+    collab: toText('collab'),
+    status: toText('status'),
+    review: toText('review'),
+    owner: toText('owner'),
+    date: toText('date'),
+    sort: toText('sort'),
+    min_followers: toNumberText('min_followers'),
+    max_followers: toNumberText('max_followers'),
+  };
+}
+
+function formatDurationCompact(totalSeconds: number) {
+  const seconds = Math.max(0, Math.round(totalSeconds));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const restSeconds = seconds % 60;
+  if (minutes < 60) return restSeconds ? `${minutes} 分 ${restSeconds} 秒` : `${minutes} 分`;
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  return restMinutes ? `${hours} 小时 ${restMinutes} 分` : `${hours} 小时`;
+}
+
 function PlanModal({
+  campaign,
   scheduleType,
   selectedWeekdays,
   mailboxes,
@@ -810,10 +942,11 @@ function PlanModal({
   onWeekdaysChange,
   onClose,
   onPreview,
-  onCreate,
+  onSubmit,
   submitting,
   previewing,
 }: {
+  campaign?: AutoCampaign | null;
   scheduleType: ScheduleType;
   selectedWeekdays: string[];
   mailboxes: MailboxQuota[];
@@ -821,20 +954,22 @@ function PlanModal({
   onWeekdaysChange: (value: string[]) => void;
   onClose: () => void;
   onPreview: (payload: EmailAutoCampaignCreate) => void;
-  onCreate: (payload: EmailAutoCampaignCreate) => void;
+  onSubmit: (payload: EmailAutoCampaignCreate) => void;
   submitting?: boolean;
   previewing?: boolean;
 }) {
-  const [planName, setPlanName] = useState('客户推荐库每日首封');
-  const [startTime, setStartTime] = useState('09:30');
-  const [endTime, setEndTime] = useState('18:00');
-  const [dailyLimit, setDailyLimit] = useState(300);
-  const [hourlyLimit, setHourlyLimit] = useState(40);
-  const [intervalMin, setIntervalMin] = useState(90);
-  const [intervalMax, setIntervalMax] = useState(240);
-  const [sendMode, setSendMode] = useState<'draft' | 'send'>('send');
-  const [candidateLimit, setCandidateLimit] = useState(200);
-  const [filters, setFilters] = useState<RecommendationFilters>(DEFAULT_RECOMMENDATION_FILTERS);
+  const isEditing = Boolean(campaign);
+  const [planName, setPlanName] = useState(campaign?.name ?? '客户推荐库每日首封');
+  const [startTime, setStartTime] = useState(campaign?.startTime ?? '09:30');
+  const [endTime, setEndTime] = useState(campaign?.endTime ?? '18:00');
+  const [dailyLimit, setDailyLimit] = useState(campaign?.dailyLimit ?? 300);
+  const [hourlyLimit, setHourlyLimit] = useState(campaign?.hourlyLimit ?? 40);
+  const [intervalMin, setIntervalMin] = useState(campaign?.intervalMinSeconds ?? 90);
+  const [intervalMax, setIntervalMax] = useState(campaign?.intervalMaxSeconds ?? 240);
+  const [sendMode, setSendMode] = useState<'draft' | 'send'>(campaign?.sendMode === 'draft' ? 'draft' : 'send');
+  const [mailboxPool, setMailboxPool] = useState(campaign?.mailboxPoolValue || 'all');
+  const [candidateLimit, setCandidateLimit] = useState(campaign?.dailyLimit ?? 200);
+  const [filters, setFilters] = useState<RecommendationFilters>(() => normalizeRecommendationFilters(campaign?.filtersRaw));
   const usTimeReference = buildUsTimeReference(startTime, endTime);
   const capacityMailboxes = useMemo(
     () => mailboxes.filter((item) => item.enabled && item.quota > 0 && !['auth_expired', 'bounce_risk', 'cooldown'].includes(item.status)),
@@ -856,6 +991,24 @@ function PlanModal({
   const todayExecutableLimit = Math.min(protectedDailyLimit, mailboxRemainingToday);
   const dailyLimitAdjusted = mailboxDailyCapacity > 0 && dailyLimit > mailboxDailyCapacity;
   const candidateLimitAdjusted = candidateLimit > protectedCandidateLimit;
+  const activeMailboxCount = Math.max(1, usableMailboxes.length || capacityMailboxes.length);
+  const intervalFloor = Math.max(30, Math.min(intervalMin, intervalMax) || 30);
+  const intervalCeiling = Math.max(intervalFloor, Math.max(intervalMin, intervalMax) || intervalFloor);
+  const maxTasksPerMailbox = Math.ceil(protectedCandidateLimit / activeMailboxCount);
+  const intervalSlotsPerMailbox = Math.max(0, maxTasksPerMailbox - 1);
+  const estimatedMinSeconds = intervalSlotsPerMailbox * intervalFloor;
+  const estimatedMaxSeconds = intervalSlotsPerMailbox * intervalCeiling;
+  const estimatedAverageSeconds = intervalSlotsPerMailbox * Math.round((intervalFloor + intervalCeiling) / 2);
+  const estimatedDurationLabel = estimatedMinSeconds === estimatedMaxSeconds
+    ? formatDurationCompact(estimatedAverageSeconds)
+    : `${formatDurationCompact(estimatedMinSeconds)} - ${formatDurationCompact(estimatedMaxSeconds)}`;
+  const dailySlotsPerMailbox = Math.max(0, Math.ceil(protectedDailyLimit / activeMailboxCount) - 1);
+  const estimatedDailyMinSeconds = dailySlotsPerMailbox * intervalFloor;
+  const estimatedDailyMaxSeconds = dailySlotsPerMailbox * intervalCeiling;
+  const estimatedDailyAverageSeconds = dailySlotsPerMailbox * Math.round((intervalFloor + intervalCeiling) / 2);
+  const estimatedDailyDurationLabel = estimatedDailyMinSeconds === estimatedDailyMaxSeconds
+    ? formatDurationCompact(estimatedDailyAverageSeconds)
+    : `${formatDurationCompact(estimatedDailyMinSeconds)} - ${formatDurationCompact(estimatedDailyMaxSeconds)}`;
 
   const toggleWeekday = (day: string) => {
     if (selectedWeekdays.includes(day)) {
@@ -888,20 +1041,20 @@ function PlanModal({
 
   const createPayload = (): EmailAutoCampaignCreate => ({
     name: planName,
-    status: 'running',
+    status: campaign?.status ?? 'running',
     schedule_type: scheduleType,
     weekdays: selectedWeekdays,
-    month_days: [1],
+    month_days: campaign?.monthDays?.length ? campaign.monthDays : [1],
     start_time: startTime,
     end_time: endTime,
     daily_limit: protectedDailyLimit,
     hourly_limit: protectedHourlyLimit,
     interval_min_seconds: Math.min(intervalMin, intervalMax),
     interval_max_seconds: Math.max(intervalMin, intervalMax),
-    mailbox_pool: 'all',
+    mailbox_pool: mailboxPool,
     send_mode: sendMode,
     filters: filterPayload(),
-    generate_jobs: true,
+    generate_jobs: !isEditing,
     candidate_limit: protectedCandidateLimit,
   });
 
@@ -910,8 +1063,8 @@ function PlanModal({
       <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-line bg-white shadow-xl">
         <div className="flex items-start justify-between gap-4 border-b border-line p-4">
           <div>
-            <h3 className="text-base font-bold text-gray-900">新建自动发送计划</h3>
-            <p className="mt-1 text-xs text-muted">计划会写入数据库，并按客户推荐库筛选生成真实队列任务。</p>
+            <h3 className="text-base font-bold text-gray-900">{isEditing ? '编辑自动发送计划' : '新建自动发送计划'}</h3>
+            <p className="mt-1 text-xs text-muted">{isEditing ? '只更新计划配置，不自动补充新队列任务。' : '计划会写入数据库，并按客户推荐库筛选生成真实队列任务。'}</p>
           </div>
           <button className="btn btn-ghost" onClick={onClose}><X size={14} />关闭</button>
         </div>
@@ -922,8 +1075,8 @@ function PlanModal({
               <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={planName} onChange={(event) => setPlanName(event.target.value)} />
             </FormField>
             <FormField label="邮箱池">
-              <select className="w-full rounded-md border border-line px-3 py-2 text-xs" defaultValue="enabled">
-                <option value="enabled">全部已启用绑定邮箱</option>
+              <select className="w-full rounded-md border border-line px-3 py-2 text-xs" value={mailboxPool} onChange={(event) => setMailboxPool(event.target.value)}>
+                <option value="all">全部已启用绑定邮箱</option>
                 <option value="creator">Creator Team 邮箱池</option>
                 <option value="x9">X9 Outreach 邮箱池</option>
               </select>
@@ -1029,9 +1182,12 @@ function PlanModal({
               <QuotaStat label="今日剩余额度" value={`${mailboxRemainingToday} 封`} />
               <QuotaStat label="保存后的日上限" value={`${protectedDailyLimit} 封`} />
               <QuotaStat label="本次生成队列" value={`${protectedCandidateLimit} 条`} />
+              <QuotaStat label="单邮箱最多分摊" value={`${maxTasksPerMailbox} 封`} />
+              <QuotaStat label="本次队列预计耗时" value={estimatedDurationLabel} />
+              <QuotaStat label="日总量预计耗时" value={estimatedDailyDurationLabel} />
             </div>
             <div className="mt-2 text-xxs text-amber-700">
-              每封真实发送前都会重新检查发件邮箱今日已发量；单个邮箱达到额度后会自动换邮箱，没有可用额度时任务停在队列中。
+              单邮箱发送间隔按每个发件邮箱分别计算，系统会用可用邮箱并行分摊队列；每封真实发送前都会重新检查发件邮箱今日已发量，单个邮箱达到额度后会自动换邮箱，没有可用额度时任务停在队列中。
               {dailyLimitAdjusted ? ` 当前每日总量已从 ${dailyLimit} 自动按邮箱池日额度收紧到 ${protectedDailyLimit}。` : ''}
               {candidateLimitAdjusted ? ` 当前队列数已从 ${candidateLimit} 自动按计划日上限和单次生成上限收紧到 ${protectedCandidateLimit}。` : ''}
               {todayExecutableLimit < protectedDailyLimit ? ` 按今日剩余额度，本日最多还能实际发送 ${todayExecutableLimit} 封。` : ''}
@@ -1054,7 +1210,7 @@ function PlanModal({
         <div className="flex justify-end gap-2 border-t border-line p-4">
           <button className="btn" onClick={onClose}>取消</button>
           <button className="btn" disabled={previewing} onClick={() => onPreview(createPayload())}><Eye size={13} />邮件预览</button>
-          <button className="btn btn-primary" disabled={submitting} onClick={() => onCreate(createPayload())}>创建真实计划</button>
+          <button className="btn btn-primary" disabled={submitting} onClick={() => onSubmit(createPayload())}>{isEditing ? '保存计划' : '创建真实计划'}</button>
         </div>
       </div>
     </div>
