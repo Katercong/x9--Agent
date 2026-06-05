@@ -417,7 +417,7 @@ export default function EmailAutoConsole() {
           <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-gray-100">
             <div className="h-full rounded-full bg-brand-500" style={{ width: `${Math.min(100, (row.sent / Math.max(1, row.queueTotal)) * 100)}%` }} />
           </div>
-          <div className="mt-1 text-xxs text-muted">{row.hourlyLimit}/小时 · 计划总量 {row.dailyLimit}</div>
+          <div className="mt-1 text-xxs text-muted">计划总量 {row.dailyLimit} · 自动滚动补队列</div>
         </div>
       ),
     },
@@ -934,33 +934,37 @@ function JobStatusBadge({ status }: { status: JobStatus }) {
 }
 
 function buildUsTimeReference(startTime: string, endTime: string) {
+  const start = parseTimeToMinutes(startTime);
+  const end = parseTimeToMinutes(endTime);
+  const endDayOffset = start !== null && end !== null && end <= start ? 1 : 0;
   return [
     { zone: '美国东部 ET', offsetHours: -12 },
     { zone: '美国中部 CT', offsetHours: -13 },
     { zone: '美国西部 PT', offsetHours: -15 },
   ].map((item) => ({
     zone: item.zone,
-    window: `${shiftChinaTime(startTime, item.offsetHours)} - ${shiftChinaTime(endTime, item.offsetHours)}`,
+    window: `${shiftChinaTime(startTime, item.offsetHours)} - ${shiftChinaTime(endTime, item.offsetHours, endDayOffset)}`,
   }));
 }
 
-function shiftChinaTime(value: string, offsetHours: number) {
+function parseTimeToMinutes(value: string) {
   const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!match) return '时间格式错误';
+  if (!match) return null;
   const hours = Number(match[1]);
   const minutes = Number(match[2]);
-  if (hours > 23 || minutes > 59) return '时间格式错误';
-  let total = hours * 60 + minutes + offsetHours * 60;
-  let day = '当天';
-  if (total < 0) {
-    total += 24 * 60;
-    day = '前一天';
-  } else if (total >= 24 * 60) {
-    total -= 24 * 60;
-    day = '后一天';
-  }
-  const hh = String(Math.floor(total / 60)).padStart(2, '0');
-  const mm = String(total % 60).padStart(2, '0');
+  if (hours > 23 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function shiftChinaTime(value: string, offsetHours: number, dayOffset = 0) {
+  const minutes = parseTimeToMinutes(value);
+  if (minutes === null) return '时间格式错误';
+  const shifted = minutes + dayOffset * 24 * 60 + offsetHours * 60;
+  const dateOffset = Math.floor(shifted / (24 * 60));
+  const minuteOfDay = ((shifted % (24 * 60)) + 24 * 60) % (24 * 60);
+  const day = dateOffset < 0 ? '前一天' : dateOffset > 0 ? '次日' : '当天';
+  const hh = String(Math.floor(minuteOfDay / 60)).padStart(2, '0');
+  const mm = String(minuteOfDay % 60).padStart(2, '0');
   return `${day} ${hh}:${mm}`;
 }
 
@@ -1030,13 +1034,9 @@ function PlanModal({
   const [startTime, setStartTime] = useState(campaign?.startTime ?? '09:30');
   const [endTime, setEndTime] = useState(campaign?.endTime ?? '18:00');
   const [dailyLimit, setDailyLimit] = useState(campaign?.dailyLimit ?? 300);
-  const [hourlyLimit, setHourlyLimit] = useState(campaign?.hourlyLimit ?? 40);
   const [intervalMin, setIntervalMin] = useState(campaign?.intervalMinSeconds ?? 90);
   const [intervalMax, setIntervalMax] = useState(campaign?.intervalMaxSeconds ?? 240);
-  const [sendMode, setSendMode] = useState<'draft' | 'send'>(campaign?.sendMode === 'draft' ? 'draft' : 'send');
   const [mailboxPool, setMailboxPool] = useState(campaign?.mailboxPoolValue || 'all');
-  const [pauseOnFailure, setPauseOnFailure] = useState(Boolean(campaign?.filtersRaw?.pause_on_failure));
-  const [candidateLimit, setCandidateLimit] = useState(campaign?.dailyLimit ?? 200);
   const [filters, setFilters] = useState<RecommendationFilters>(() => normalizeRecommendationFilters(campaign?.filtersRaw));
   const usTimeReference = buildUsTimeReference(startTime, endTime);
   const capacityMailboxes = useMemo(
@@ -1051,25 +1051,11 @@ function PlanModal({
   const mailboxRemainingToday = capacityMailboxes.reduce((sum, item) => sum + Math.max(0, item.remaining || 0), 0);
   const minMailboxQuota = capacityMailboxes.length ? Math.min(...capacityMailboxes.map((item) => Math.max(0, item.quota || 0))) : 0;
   const maxMailboxQuota = capacityMailboxes.length ? Math.max(...capacityMailboxes.map((item) => Math.max(0, item.quota || 0))) : 0;
-  const protectedDailyLimit = mailboxDailyCapacity > 0
-    ? Math.max(1, Math.min(dailyLimit, mailboxDailyCapacity))
-    : Math.max(1, dailyLimit);
-  const protectedHourlyLimit = Math.max(1, Math.min(hourlyLimit, protectedDailyLimit));
-  const protectedCandidateLimit = Math.max(1, Math.min(candidateLimit, protectedDailyLimit, 1000));
-  const todayExecutableLimit = Math.min(protectedDailyLimit, mailboxRemainingToday);
-  const dailyLimitAdjusted = mailboxDailyCapacity > 0 && dailyLimit > mailboxDailyCapacity;
-  const candidateLimitAdjusted = candidateLimit > protectedCandidateLimit;
+  const protectedDailyLimit = Math.max(1, dailyLimit);
   const activeMailboxCount = Math.max(1, usableMailboxes.length || capacityMailboxes.length);
   const intervalFloor = Math.max(30, Math.min(intervalMin, intervalMax) || 30);
   const intervalCeiling = Math.max(intervalFloor, Math.max(intervalMin, intervalMax) || intervalFloor);
-  const maxTasksPerMailbox = Math.ceil(protectedCandidateLimit / activeMailboxCount);
-  const intervalSlotsPerMailbox = Math.max(0, maxTasksPerMailbox - 1);
-  const estimatedMinSeconds = intervalSlotsPerMailbox * intervalFloor;
-  const estimatedMaxSeconds = intervalSlotsPerMailbox * intervalCeiling;
-  const estimatedAverageSeconds = intervalSlotsPerMailbox * Math.round((intervalFloor + intervalCeiling) / 2);
-  const estimatedDurationLabel = estimatedMinSeconds === estimatedMaxSeconds
-    ? formatDurationCompact(estimatedAverageSeconds)
-    : `${formatDurationCompact(estimatedMinSeconds)} - ${formatDurationCompact(estimatedMaxSeconds)}`;
+  const rollingQueueTarget = Math.max(10, Math.min(50, activeMailboxCount * 2));
   const dailySlotsPerMailbox = Math.max(0, Math.ceil(protectedDailyLimit / activeMailboxCount) - 1);
   const estimatedDailyMinSeconds = dailySlotsPerMailbox * intervalFloor;
   const estimatedDailyMaxSeconds = dailySlotsPerMailbox * intervalCeiling;
@@ -1105,7 +1091,7 @@ function PlanModal({
     sort: filters.sort,
     min_followers: filters.min_followers ? Number(filters.min_followers) : null,
     max_followers: filters.max_followers ? Number(filters.max_followers) : null,
-    pause_on_failure: pauseOnFailure,
+    pause_on_failure: true,
   });
 
   const createPayload = (): EmailAutoCampaignCreate => ({
@@ -1117,14 +1103,14 @@ function PlanModal({
     start_time: startTime,
     end_time: endTime,
     daily_limit: protectedDailyLimit,
-    hourly_limit: protectedHourlyLimit,
+    hourly_limit: Math.min(500, protectedDailyLimit),
     interval_min_seconds: Math.min(intervalMin, intervalMax),
     interval_max_seconds: Math.max(intervalMin, intervalMax),
     mailbox_pool: mailboxPool,
-    send_mode: sendMode,
+    send_mode: 'send',
     filters: filterPayload(),
-    generate_jobs: !isEditing,
-    candidate_limit: protectedCandidateLimit,
+    generate_jobs: true,
+    candidate_limit: Math.min(1000, protectedDailyLimit),
   });
 
   return (
@@ -1133,7 +1119,7 @@ function PlanModal({
         <div className="flex items-start justify-between gap-4 border-b border-line p-4">
           <div>
             <h3 className="text-base font-bold text-gray-900">{isEditing ? '编辑自动发送计划' : '新建自动发送计划'}</h3>
-            <p className="mt-1 text-xs text-muted">{isEditing ? '只更新计划配置，不自动补充新队列任务。' : '计划会写入数据库，并按客户推荐库筛选生成真实队列任务。'}</p>
+            <p className="mt-1 text-xs text-muted">按总任务计划自动生成发送队列；系统滚动补队列，不一次性生成全部任务。</p>
           </div>
           <button className="btn btn-ghost" onClick={onClose}><X size={14} />关闭</button>
         </div>
@@ -1215,62 +1201,51 @@ function PlanModal({
             </div>
           </div>
 
-          <div className="mt-4 grid gap-4 lg:grid-cols-4">
-            <FormField label="期望每日总量（全计划）">
-              <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={dailyLimit} onChange={(event) => setDailyLimit(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
-            </FormField>
-            <FormField label="计划每小时上限">
-              <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={hourlyLimit} onChange={(event) => setHourlyLimit(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
-            </FormField>
-            <FormField label="单邮箱发送间隔（秒）">
-              <div className="grid grid-cols-2 gap-2">
-                <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={intervalMin} onChange={(event) => setIntervalMin(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
-                <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={intervalMax} onChange={(event) => setIntervalMax(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
-              </div>
-            </FormField>
-            <FormField label="发送方式">
-              <select className="w-full rounded-md border border-line px-3 py-2 text-xs" value={sendMode} onChange={(event) => setSendMode(event.target.value as 'draft' | 'send')}>
-                <option value="draft">只生成草稿不发送</option>
-                <option value="send">生成并自动发送</option>
-              </select>
-            </FormField>
-          </div>
-
-          <div className="mt-4 grid gap-4 lg:grid-cols-4">
-            <FormField label="本次生成队列数">
-              <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={candidateLimit} onChange={(event) => setCandidateLimit(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
-            </FormField>
-            <FormField label="失败处理">
-              <div className="flex h-9 items-center gap-2 rounded-md border border-line bg-white px-3 text-xs text-gray-800">
+          <div className="mt-4 rounded-md border border-line bg-soft p-4">
+            <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-900"><Settings2 size={15} />计划和发送控制</div>
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_320px]">
+              <FormField label="总任务计划">
                 <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded border-line text-brand-600"
-                  checked={pauseOnFailure}
-                  onChange={(event) => setPauseOnFailure(event.target.checked)}
+                  className="w-full rounded-md border border-line px-3 py-2 text-xs"
+                  value={dailyLimit}
+                  onChange={(event) => setDailyLimit(Number(event.target.value.replace(/[^0-9]/g, '') || 0))}
                 />
-                <span>发送失败立即暂停计划</span>
+                <div className="mt-1 text-xxs text-muted">整个计划累计最多发送 {protectedDailyLimit} 封，不按自然日重置。</div>
+              </FormField>
+              <FormField label="单邮箱发送间隔（秒）">
+                <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+                  <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={intervalMin} onChange={(event) => setIntervalMin(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
+                  <span className="text-xs text-muted">到</span>
+                  <input className="w-full rounded-md border border-line px-3 py-2 text-xs" value={intervalMax} onChange={(event) => setIntervalMax(Number(event.target.value.replace(/[^0-9]/g, '') || 0))} />
+                </div>
+                <div className="mt-1 text-xxs text-muted">每个发件邮箱独立计时，多邮箱并行分摊。</div>
+              </FormField>
+              <div className="rounded-md border border-blue-100 bg-blue-50 p-3 text-xs text-blue-700">
+                <div className="font-semibold text-blue-800">系统固定规则</div>
+                <div className="mt-2 space-y-1.5">
+                  <CheckLine>生成并自动发送</CheckLine>
+                  <CheckLine>按时间窗口滚动补队列</CheckLine>
+                  <CheckLine>不一次性生成全部队列</CheckLine>
+                  <CheckLine>发送失败立即暂停计划</CheckLine>
+                </div>
               </div>
-            </FormField>
+            </div>
           </div>
 
           <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-            <div className="font-semibold text-amber-900">额度保护规则：实际发送量 = min(期望每日总量、邮箱池日额度、本次队列数)</div>
+            <div className="font-semibold text-amber-900">自动计算预览</div>
             <div className="mt-2 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
               <QuotaStat label="可用/计入额度邮箱" value={`${usableMailboxes.length}/${capacityMailboxes.length} 个`} />
               <QuotaStat label="单邮箱日额度" value={capacityMailboxes.length ? `${minMailboxQuota}-${maxMailboxQuota} 封` : '无'} />
-              <QuotaStat label="邮箱池日额度" value={`${mailboxDailyCapacity} 封`} />
-              <QuotaStat label="24小时剩余额度" value={`${mailboxRemainingToday} 封`} />
-              <QuotaStat label="保存后的日上限" value={`${protectedDailyLimit} 封`} />
-              <QuotaStat label="本次生成队列" value={`${protectedCandidateLimit} 条`} />
-              <QuotaStat label="单邮箱最多分摊" value={`${maxTasksPerMailbox} 封`} />
-              <QuotaStat label="本次队列预计耗时" value={estimatedDurationLabel} />
-              <QuotaStat label="日总量预计耗时" value={estimatedDailyDurationLabel} />
+              <QuotaStat label="邮箱池24小时额度" value={`${mailboxDailyCapacity} 封`} />
+              <QuotaStat label="当前剩余额度" value={`${mailboxRemainingToday} 封`} />
+              <QuotaStat label="计划总任务" value={`${protectedDailyLimit} 封`} />
+              <QuotaStat label="滚动队列维护" value={`${rollingQueueTarget} 条`} />
+              <QuotaStat label="单邮箱约分摊" value={`${Math.ceil(protectedDailyLimit / activeMailboxCount)} 封`} />
+              <QuotaStat label="预计完成时间" value={estimatedDailyDurationLabel} />
             </div>
             <div className="mt-2 text-xxs text-amber-700">
-              单邮箱发送间隔按每个发件邮箱分别计算，系统会用可用邮箱并行分摊队列；每封真实发送前都会重新检查发件邮箱近24小时已发量，单个邮箱达到额度后会自动换邮箱，没有可用额度时任务停在队列中。
-              {dailyLimitAdjusted ? ` 当前每日总量已从 ${dailyLimit} 自动按邮箱池日额度收紧到 ${protectedDailyLimit}。` : ''}
-              {candidateLimitAdjusted ? ` 当前队列数已从 ${candidateLimit} 自动按计划日上限和单次生成上限收紧到 ${protectedCandidateLimit}。` : ''}
-              {todayExecutableLimit < protectedDailyLimit ? ` 按近24小时剩余额度，当前最多还能实际发送 ${todayExecutableLimit} 封。` : ''}
+              系统只维护当前窗口需要的待发队列，发送成功后继续自动补充，直到计划总任务完成。每封真实发送前都会重新检查发件邮箱近24小时已发量；单个邮箱达到额度后自动换邮箱，没有可用额度时任务留在队列等待下次调度。
             </div>
           </div>
 
