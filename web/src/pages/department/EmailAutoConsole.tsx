@@ -561,8 +561,8 @@ export default function EmailAutoConsole() {
       key: 'preview',
       header: '操作',
       align: 'right',
-      width: '138px',
-      className: 'w-[138px] whitespace-nowrap align-middle',
+      width: '188px',
+      className: 'w-[188px] whitespace-nowrap align-middle',
       cell: (row) => (
         <div className="flex justify-end gap-1.5">
           <button className="btn btn-ghost px-2" onClick={() => setPreviewJob(row)} title="邮件预览"><Eye size={13} />预览</button>
@@ -570,7 +570,16 @@ export default function EmailAutoConsole() {
             <button className="btn btn-ghost px-2" onClick={() => emailAutoActions.retryJob.mutate(row.id, { onSuccess: () => showNotice('任务已重新进入待发送队列') })}>重试</button>
           ) : null}
           {row.status === 'pending' || row.status === 'failed' ? (
-            <button className="btn btn-ghost px-2" onClick={() => emailAutoActions.skipJob.mutate(row.id, { onSuccess: () => showNotice('任务已跳过') })}>跳过</button>
+            <button
+              className="btn btn-ghost px-2 text-red-600 hover:border-red-200 hover:bg-red-50"
+              disabled={emailAutoActions.cancelJob.isPending}
+              onClick={() => {
+                if (!window.confirm('确认取消这个队列任务？取消后不会自动发送，可通过重试重新进入队列。')) return;
+                emailAutoActions.cancelJob.mutate(row.id, { onSuccess: () => showNotice('任务已取消') });
+              }}
+            >
+              <Trash2 size={13} />取消任务
+            </button>
           ) : null}
         </div>
       ),
@@ -681,7 +690,7 @@ export default function EmailAutoConsole() {
                 ['sent', `已发送 ${jobStatusCounts.sent || 0}`],
                 ['draft_created', `已生成草稿 ${jobStatusCounts.draft_created || 0}`],
                 ['failed', `失败 ${jobStatusCounts.failed || 0}`],
-                ['skipped', `已跳过 ${jobStatusCounts.skipped || 0}`],
+                ['skipped', `已取消 ${jobStatusCounts.skipped || 0}`],
               ].map(([key, label]) => (
                 <button
                   key={key}
@@ -902,7 +911,7 @@ function JobStatusBadge({ status }: { status: JobStatus }) {
     sent: { tone: 'good', label: '已发送' },
     draft_created: { tone: 'info', label: '已生成草稿' },
     failed: { tone: 'bad', label: '失败' },
-    skipped: { tone: 'muted', label: '已跳过' },
+    skipped: { tone: 'muted', label: '已取消' },
   };
   const meta = map[status];
   return <Pill tone={meta.tone}>{meta.label}</Pill>;

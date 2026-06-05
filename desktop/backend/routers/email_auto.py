@@ -636,7 +636,7 @@ def _job_reason(status: str) -> str:
         "sent": "已进入邮件跟踪",
         "draft_created": "已生成草稿",
         "failed": "发送失败",
-        "skipped": "已跳过",
+        "skipped": "已取消",
     }.get(status, status)
 
 
@@ -1687,12 +1687,23 @@ def retry_failed_jobs(request: Request, db: Session = Depends(get_db)) -> dict[s
 
 @router.post("/jobs/{job_id}/skip")
 def skip_job(job_id: str, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _skip_or_cancel_job(job_id, request, db, reason="手动跳过")
+
+
+@router.post("/jobs/{job_id}/cancel")
+def cancel_job(job_id: str, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _skip_or_cancel_job(job_id, request, db, reason="手动取消")
+
+
+def _skip_or_cancel_job(job_id: str, request: Request, db: Session, *, reason: str) -> dict[str, Any]:
     row = db.get(EmailAutoJob, job_id)
     if row is None or not row_in_department(row, current_department_code(request)):
         raise HTTPException(status_code=404, detail="job not found")
+    if row.status == "skipped":
+        return {"ok": True, "item": _serialize_job(db, row)}
     if row.status not in {"pending", "failed"}:
-        raise HTTPException(status_code=400, detail="only pending or failed jobs can be skipped")
+        raise HTTPException(status_code=400, detail="only pending or failed jobs can be cancelled")
     row.status = "skipped"
-    row.failure_reason = "手动跳过"
+    row.failure_reason = reason
     db.commit()
     return {"ok": True, "item": _serialize_job(db, row)}

@@ -486,3 +486,61 @@ def test_update_campaign_daily_limit_auto_backfills_queue(client, monkeypatch):
             .where(EmailAutoJob.campaign_id == campaign_id)
         )
     assert total == 3
+
+
+def test_cancel_job_marks_pending_job_skipped(client):
+    marker = uuid.uuid4().hex
+    campaign_id = f"eac_cancel_{marker}"
+    creator_id = f"creator_cancel_{marker}"
+    job_id = f"job_cancel_{marker}"
+    now = datetime(2026, 6, 4, 10, 0, 0)
+
+    with SessionLocal() as db:
+        db.add(EmailAutoCampaign(
+            id=campaign_id,
+            department_code="cross_border",
+            name=f"Cancel Test {marker}",
+            status="running",
+            start_time="09:30",
+            end_time="18:00",
+            daily_limit=1,
+            hourly_limit=1,
+            interval_min_seconds=30,
+            interval_max_seconds=30,
+            filters_json=email_auto._json_dumps(email_auto.DEFAULT_FILTERS),
+        ))
+        db.add(Creator(
+            id=creator_id,
+            platform="cancel_test",
+            department_code="cross_border",
+            handle=f"cancel_{marker}",
+            email=f"cancel-{marker}@example.com",
+            has_email=1,
+            recommendation_score=90,
+            review_required=0,
+            recommended_at=now,
+            collected_at=now,
+        ))
+        db.add(EmailAutoJob(
+            id=job_id,
+            department_code="cross_border",
+            campaign_id=campaign_id,
+            creator_id=creator_id,
+            recipient_email=f"cancel-{marker}@example.com",
+            subject="cancel",
+            body="cancel",
+            status="pending",
+            scheduled_at=now,
+        ))
+        db.commit()
+
+    response = client.post(f"/api/local/email-auto/jobs/{job_id}/cancel")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["item"]["status"] == "skipped"
+    assert body["item"]["reason"] == "手动取消"
+    with SessionLocal() as db:
+        row = db.get(EmailAutoJob, job_id)
+    assert row.status == "skipped"
+    assert row.failure_reason == "手动取消"

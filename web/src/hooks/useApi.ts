@@ -205,6 +205,7 @@ export function useEmailAutoActions() {
     retryJob: useMutation({ mutationFn: (id: string) => endpoints.emailAutoRetryJob(id), onSuccess: invalidate }),
     retryFailed: useMutation({ mutationFn: () => endpoints.emailAutoRetryFailed(), onSuccess: invalidate }),
     skipJob: useMutation({ mutationFn: (id: string) => endpoints.emailAutoSkipJob(id), onSuccess: invalidate }),
+    cancelJob: useMutation({ mutationFn: (id: string) => endpoints.emailAutoCancelJob(id), onSuccess: invalidate }),
   };
 }
 

@@ -144,6 +144,8 @@ export const endpoints = {
     api.post<{ ok: boolean; updated: number }>(`${LOCAL}/email-auto/jobs/retry-failed`, {}),
   emailAutoSkipJob: (id: string) =>
     api.post<{ ok: boolean; item: EmailAutoJob }>(`${LOCAL}/email-auto/jobs/${encodeURIComponent(id)}/skip`, {}),
+  emailAutoCancelJob: (id: string) =>
+    api.post<{ ok: boolean; item: EmailAutoJob }>(`${LOCAL}/email-auto/jobs/${encodeURIComponent(id)}/cancel`, {}),
   analyticsMe: (days = 30) =>
     api.get<AnalyticsSummary>(`${LOCAL}/analytics/me`, { days }),
   analyticsDepartment: (params?: { department_code?: string; days?: number }) =>
