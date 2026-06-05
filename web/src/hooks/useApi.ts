@@ -172,7 +172,7 @@ export function useEmailAutoUpdateCampaign() {
 export function useEmailAutoCampaignStatus() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, status }: { id: string; status: 'running' | 'paused' | 'draft' }) => endpoints.emailAutoCampaignStatus(id, status),
+    mutationFn: ({ id, status }: { id: string; status: Parameters<typeof endpoints.emailAutoCampaignStatus>[1] }) => endpoints.emailAutoCampaignStatus(id, status),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['email-auto', 'dashboard'] }),
   });
 }

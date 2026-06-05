@@ -488,6 +488,85 @@ def test_update_campaign_daily_limit_auto_backfills_queue(client, monkeypatch):
     assert total == 3
 
 
+def test_cancel_campaign_skips_pending_jobs_and_keeps_sent_history(client):
+    marker = uuid.uuid4().hex
+    campaign_id = f"eac_cancel_campaign_{marker}"
+    pending_id = f"job_cancel_campaign_pending_{marker}"
+    sent_id = f"job_cancel_campaign_sent_{marker}"
+    creator_pending_id = f"creator_cancel_campaign_pending_{marker}"
+    creator_sent_id = f"creator_cancel_campaign_sent_{marker}"
+    now = datetime(2026, 6, 4, 10, 0, 0)
+
+    with SessionLocal() as db:
+        db.add(EmailAutoCampaign(
+            id=campaign_id,
+            department_code="cross_border",
+            name=f"Cancel Campaign {marker}",
+            status="running",
+            start_time="09:30",
+            end_time="18:00",
+            daily_limit=2,
+            hourly_limit=2,
+            interval_min_seconds=30,
+            interval_max_seconds=30,
+            filters_json=email_auto._json_dumps(email_auto.DEFAULT_FILTERS),
+        ))
+        for creator_id, handle in [(creator_pending_id, "pending"), (creator_sent_id, "sent")]:
+            db.add(Creator(
+                id=creator_id,
+                platform="cancel_campaign_test",
+                department_code="cross_border",
+                handle=f"cancel_campaign_{handle}_{marker}",
+                email=f"cancel-campaign-{handle}-{marker}@example.com",
+                has_email=1,
+                recommendation_score=90,
+                review_required=0,
+                recommended_at=now,
+                collected_at=now,
+            ))
+        db.add_all([
+            EmailAutoJob(
+                id=pending_id,
+                department_code="cross_border",
+                campaign_id=campaign_id,
+                creator_id=creator_pending_id,
+                recipient_email=f"cancel-campaign-pending-{marker}@example.com",
+                subject="pending",
+                body="pending",
+                status="pending",
+                scheduled_at=now,
+            ),
+            EmailAutoJob(
+                id=sent_id,
+                department_code="cross_border",
+                campaign_id=campaign_id,
+                creator_id=creator_sent_id,
+                recipient_email=f"cancel-campaign-sent-{marker}@example.com",
+                subject="sent",
+                body="sent",
+                status="sent",
+                scheduled_at=now,
+                sent_at=now,
+            ),
+        ])
+        db.commit()
+
+    response = client.patch(f"/api/local/email-auto/campaigns/{campaign_id}/status", json={"status": "cancelled"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["item"]["status"] == "cancelled"
+    assert body["skipped_jobs"] == 1
+    with SessionLocal() as db:
+        campaign = db.get(EmailAutoCampaign, campaign_id)
+        pending = db.get(EmailAutoJob, pending_id)
+        sent = db.get(EmailAutoJob, sent_id)
+    assert campaign.status == "cancelled"
+    assert pending.status == "skipped"
+    assert pending.failure_reason == "计划已取消"
+    assert sent.status == "sent"
+
+
 def test_cancel_job_marks_pending_job_skipped(client):
     marker = uuid.uuid4().hex
     campaign_id = f"eac_cancel_{marker}"

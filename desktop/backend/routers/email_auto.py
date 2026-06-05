@@ -53,7 +53,7 @@ ACTIVE_JOB_STATUSES = ["pending", "sending", "sent", "draft_created"]
 
 class CampaignIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    status: str = Field(default="paused", pattern="^(running|paused|draft)$")
+    status: str = Field(default="paused", pattern="^(running|paused|draft|cancelled)$")
     schedule_type: str = Field(default="daily", pattern="^(daily|weekly|monthly)$")
     weekdays: list[str] = Field(default_factory=list)
     month_days: list[int] = Field(default_factory=list)
@@ -71,7 +71,7 @@ class CampaignIn(BaseModel):
 
 
 class CampaignStatusIn(BaseModel):
-    status: str = Field(pattern="^(running|paused|draft)$")
+    status: str = Field(pattern="^(running|paused|draft|cancelled)$")
 
 
 class MailboxQuotaPatch(BaseModel):
@@ -1154,9 +1154,21 @@ def update_campaign_status(campaign_id: str, body: CampaignStatusIn, request: Re
     if row is None or not row_in_department(row, current_department_code(request)):
         raise HTTPException(status_code=404, detail="campaign not found")
     row.status = body.status
+    skipped_jobs = 0
+    if body.status == "cancelled":
+        now = _now()
+        pending_jobs = list(db.scalars(
+            select(EmailAutoJob)
+            .where(EmailAutoJob.campaign_id == campaign_id, EmailAutoJob.status == "pending")
+        ).all())
+        for job in pending_jobs:
+            job.status = "skipped"
+            job.failure_reason = "计划已取消"
+            job.updated_at = now
+        skipped_jobs = len(pending_jobs)
     db.commit()
     db.refresh(row)
-    return {"ok": True, "item": _serialize_campaign(db, row)}
+    return {"ok": True, "item": _serialize_campaign(db, row), "skipped_jobs": skipped_jobs}
 
 
 @router.post("/campaigns/pause-all")
@@ -1166,6 +1178,7 @@ def pause_all_campaigns(request: Request, db: Session = Depends(get_db)) -> dict
     where = department_where(EmailAutoCampaign, department_code)
     if where is not None:
         filters.append(where)
+    filters.append(EmailAutoCampaign.status != "cancelled")
     rows = list(db.scalars(select(EmailAutoCampaign).where(*filters)).all())
     for row in rows:
         row.status = "paused"
@@ -1178,6 +1191,8 @@ def generate_jobs(campaign_id: str, request: Request, db: Session = Depends(get_
     row = db.get(EmailAutoCampaign, campaign_id)
     if row is None or not row_in_department(row, current_department_code(request)):
         raise HTTPException(status_code=404, detail="campaign not found")
+    if row.status == "cancelled":
+        raise HTTPException(status_code=400, detail="campaign has been cancelled")
     result = _maintain_campaign_queue(db, row, now=_now())
     created = result["created"]
     stats = _campaign_generation_stats(db, row)
