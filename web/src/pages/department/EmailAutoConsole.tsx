@@ -438,7 +438,7 @@ export default function EmailAutoConsole() {
       cell: (row) => (
         <div className="flex justify-end gap-2">
           <button className="btn btn-ghost" onClick={() => openEditPlan(row)}><Edit3 size={13} />编辑</button>
-          {row.status !== 'cancelled' && row.status !== 'deleted' && (
+          {row.status !== 'deleted' && (
             <>
               <button
                 className="btn btn-ghost"
@@ -902,7 +902,7 @@ function Metric({ label, value, sub, tone }: { label: string; value: string | nu
 function StatusBadge({ status }: { status: CampaignStatus }) {
   if (status === 'running') return <Pill tone="good">运行中</Pill>;
   if (status === 'paused') return <Pill tone="warn">已暂停</Pill>;
-  if (status === 'cancelled') return <Pill tone="muted">已取消</Pill>;
+  if (status === 'cancelled') return <Pill tone="warn">已暂停</Pill>;
   if (status === 'deleted') return <Pill tone="muted">已删除</Pill>;
   return <Pill tone="muted">草稿</Pill>;
 }
