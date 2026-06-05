@@ -49,6 +49,7 @@ DEFAULT_FILTERS: dict[str, Any] = {
 }
 
 ACTIVE_JOB_STATUSES = ["pending", "sending", "sent", "draft_created"]
+DELETED_CAMPAIGN_STATUS = "deleted"
 
 
 class CampaignIn(BaseModel):
@@ -507,6 +508,7 @@ def maintain_email_auto_campaign_queues(
     where = department_where(EmailAutoCampaign, department_code)
     if where is not None:
         filters.append(where)
+    filters.append(EmailAutoCampaign.status != DELETED_CAMPAIGN_STATUS)
     campaigns = list(db.scalars(select(EmailAutoCampaign).where(*filters)).all())
     summary = {"campaigns": len(campaigns), "created": 0, "trimmed": 0, "cleared": 0}
     for campaign in campaigns:
@@ -664,6 +666,13 @@ def dashboard(
         job_filters.append(where_job)
     if where_quota is not None:
         quota_filters.append(where_quota)
+    campaign_filters.append(EmailAutoCampaign.status != DELETED_CAMPAIGN_STATUS)
+    visible_job_filters = list(job_filters)
+    visible_job_filters.append(
+        ~EmailAutoJob.campaign_id.in_(
+            select(EmailAutoCampaign.id).where(EmailAutoCampaign.status == DELETED_CAMPAIGN_STATUS)
+        )
+    )
 
     campaign_rows = list(db.scalars(select(EmailAutoCampaign).where(*campaign_filters).order_by(EmailAutoCampaign.created_at.desc())).all())
     mailbox_rows = list(db.scalars(select(GmailAccountQuota).where(*quota_filters).order_by(GmailAccountQuota.email.asc())).all())
@@ -671,11 +680,11 @@ def dashboard(
         str(status): int(count or 0)
         for status, count in db.execute(
             select(EmailAutoJob.status, func.count())
-            .where(*job_filters)
+            .where(*visible_job_filters)
             .group_by(EmailAutoJob.status)
         ).all()
     }
-    job_list_filters = list(job_filters)
+    job_list_filters = list(visible_job_filters)
     if job_status and job_status != "all":
         job_list_filters.append(EmailAutoJob.status == job_status)
     jobs_total = int(db.scalar(select(func.count()).select_from(EmailAutoJob).where(*job_list_filters)) or 0)
@@ -692,7 +701,7 @@ def dashboard(
         .select_from(EmailAutoJob)
         .where(*job_filters, EmailAutoJob.status.in_(["sent", "draft_created"]), EmailAutoJob.updated_at >= _quota_window_start())
     ) or 0)
-    queue_count = int(db.scalar(select(func.count()).select_from(EmailAutoJob).where(*job_filters, EmailAutoJob.status == "pending")) or 0)
+    queue_count = int(db.scalar(select(func.count()).select_from(EmailAutoJob).where(*visible_job_filters, EmailAutoJob.status == "pending")) or 0)
     return {
         "ok": True,
         "dashboard": {
@@ -1171,6 +1180,29 @@ def update_campaign_status(campaign_id: str, body: CampaignStatusIn, request: Re
     return {"ok": True, "item": _serialize_campaign(db, row), "skipped_jobs": skipped_jobs}
 
 
+@router.delete("/campaigns/{campaign_id}")
+def delete_campaign(campaign_id: str, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    row = db.get(EmailAutoCampaign, campaign_id)
+    if row is None or not row_in_department(row, current_department_code(request)):
+        raise HTTPException(status_code=404, detail="campaign not found")
+    if row.status == DELETED_CAMPAIGN_STATUS:
+        return {"ok": True, "removed": False, "id": campaign_id, "skipped_jobs": 0}
+
+    now = _now()
+    pending_jobs = list(db.scalars(
+        select(EmailAutoJob)
+        .where(EmailAutoJob.campaign_id == campaign_id, EmailAutoJob.status == "pending")
+    ).all())
+    for job in pending_jobs:
+        job.status = "skipped"
+        job.failure_reason = "计划已删除"
+        job.updated_at = now
+    row.status = DELETED_CAMPAIGN_STATUS
+    row.updated_at = now
+    db.commit()
+    return {"ok": True, "removed": True, "id": campaign_id, "skipped_jobs": len(pending_jobs)}
+
+
 @router.post("/campaigns/pause-all")
 def pause_all_campaigns(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     department_code = current_department_code(request)
@@ -1179,6 +1211,7 @@ def pause_all_campaigns(request: Request, db: Session = Depends(get_db)) -> dict
     if where is not None:
         filters.append(where)
     filters.append(EmailAutoCampaign.status != "cancelled")
+    filters.append(EmailAutoCampaign.status != DELETED_CAMPAIGN_STATUS)
     rows = list(db.scalars(select(EmailAutoCampaign).where(*filters)).all())
     for row in rows:
         row.status = "paused"

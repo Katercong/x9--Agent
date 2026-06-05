@@ -125,7 +125,7 @@ export interface ProductAsset {
   updated_at?: string;
 }
 
-export type EmailAutoCampaignStatus = 'running' | 'paused' | 'draft' | 'cancelled';
+export type EmailAutoCampaignStatus = 'running' | 'paused' | 'draft' | 'cancelled' | 'deleted';
 export type EmailAutoJobStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped' | 'draft_created';
 export type EmailAutoMailboxStatus = 'normal' | 'cooldown' | 'limit' | 'auth_expired' | 'bounce_risk';
 

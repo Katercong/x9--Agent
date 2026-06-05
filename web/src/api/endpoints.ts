@@ -130,8 +130,10 @@ export const endpoints = {
     api.patch<{ ok: boolean; item: EmailAutoCampaign; created_jobs: number; reason?: string }>(`${LOCAL}/email-auto/campaigns/${encodeURIComponent(id)}`, body),
   emailAutoCampaignPreview: (body: EmailAutoCampaignCreate) =>
     api.post<{ ok: boolean; item: EmailAutoJob }>(`${LOCAL}/email-auto/campaigns/preview`, body),
-  emailAutoCampaignStatus: (id: string, status: EmailAutoCampaign['status']) =>
+  emailAutoCampaignStatus: (id: string, status: Exclude<EmailAutoCampaign['status'], 'deleted'>) =>
     api.patch<{ ok: boolean; item: EmailAutoCampaign; skipped_jobs?: number }>(`${LOCAL}/email-auto/campaigns/${encodeURIComponent(id)}/status`, { status }),
+  emailAutoDeleteCampaign: (id: string) =>
+    api.del<{ ok: boolean; removed: boolean; id: string; skipped_jobs: number }>(`${LOCAL}/email-auto/campaigns/${encodeURIComponent(id)}`),
   emailAutoPauseAll: () =>
     api.post<{ ok: boolean; updated: number }>(`${LOCAL}/email-auto/campaigns/pause-all`, {}),
   emailAutoGenerateJobs: (id: string, limit?: number) =>

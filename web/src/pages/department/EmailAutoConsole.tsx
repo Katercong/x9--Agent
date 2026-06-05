@@ -29,7 +29,7 @@ import {
 } from '@/hooks/useApi';
 import type { EmailAutoCampaignCreate, EmailAutoHealthCheckResponse, EmailAutoJob } from '@/api/types';
 
-type CampaignStatus = 'running' | 'paused' | 'draft' | 'cancelled';
+type CampaignStatus = 'running' | 'paused' | 'draft' | 'cancelled' | 'deleted';
 type MailboxStatus = 'normal' | 'cooldown' | 'limit' | 'auth_expired' | 'bounce_risk';
 type JobStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped' | 'draft_created';
 type ScheduleType = 'daily' | 'weekly' | 'monthly';
@@ -438,7 +438,7 @@ export default function EmailAutoConsole() {
       cell: (row) => (
         <div className="flex justify-end gap-2">
           <button className="btn btn-ghost" onClick={() => openEditPlan(row)}><Edit3 size={13} />编辑</button>
-          {row.status !== 'cancelled' && (
+          {row.status !== 'cancelled' && row.status !== 'deleted' && (
             <>
               <button
                 className="btn btn-ghost"
@@ -453,19 +453,18 @@ export default function EmailAutoConsole() {
                 disabled={emailAutoActions.generateJobs.isPending}
                 onClick={() => emailAutoActions.generateJobs.mutate({ id: row.id, limit: row.dailyLimit }, { onSuccess: (res) => showNotice(res.reason || `已生成 ${res.created_jobs} 个队列任务`) })}
               ><Sparkles size={13} />补充队列</button>
-              <button
-                className="btn btn-ghost text-red-600 hover:border-red-200 hover:bg-red-50"
-                disabled={campaignStatus.isPending}
-                onClick={() => {
-                  if (!window.confirm(`确定取消自动发送计划「${row.name}」吗？取消后未发送队列会标记为已取消，不会继续自动发送。`)) return;
-                  campaignStatus.mutate(
-                    { id: row.id, status: 'cancelled' },
-                    { onSuccess: (res) => showNotice(`计划已取消${typeof res.skipped_jobs === 'number' ? `，已取消 ${res.skipped_jobs} 个待发送任务` : ''}`) },
-                  );
-                }}
-              ><Trash2 size={13} />取消</button>
             </>
           )}
+          <button
+            className="btn btn-ghost text-red-600 hover:border-red-200 hover:bg-red-50"
+            disabled={emailAutoActions.deleteCampaign.isPending}
+            onClick={() => {
+              if (!window.confirm(`确定删除自动发送计划「${row.name}」吗？删除后计划会从列表移除，未发送队列不会继续自动发送。`)) return;
+              emailAutoActions.deleteCampaign.mutate(row.id, {
+                onSuccess: (res) => showNotice(`计划已删除${res.skipped_jobs ? `，已清理 ${res.skipped_jobs} 个待发送任务` : ''}`),
+              });
+            }}
+          ><Trash2 size={13} />删除</button>
         </div>
       ),
     },
@@ -904,6 +903,7 @@ function StatusBadge({ status }: { status: CampaignStatus }) {
   if (status === 'running') return <Pill tone="good">运行中</Pill>;
   if (status === 'paused') return <Pill tone="warn">已暂停</Pill>;
   if (status === 'cancelled') return <Pill tone="muted">已取消</Pill>;
+  if (status === 'deleted') return <Pill tone="muted">已删除</Pill>;
   return <Pill tone="muted">草稿</Pill>;
 }
 
