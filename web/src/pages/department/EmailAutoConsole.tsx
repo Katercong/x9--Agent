@@ -474,7 +474,7 @@ export default function EmailAutoConsole() {
     },
     {
       key: 'quota',
-      header: '今日额度',
+      header: '24小时额度',
       cell: (row) => (
         <div className="min-w-[130px]">
           <div className="num font-semibold text-gray-900">{row.autoSent}/{row.quota}</div>
@@ -624,7 +624,7 @@ export default function EmailAutoConsole() {
           </div>
         </div>
         <div className="grid border-t border-line sm:grid-cols-2 xl:grid-cols-6">
-          <Metric label="今日已发" value={`${totalSent}/${totalTarget}`} sub="按配置额度，不打满 Gmail 官方上限" tone="blue" />
+          <Metric label="近24小时已发" value={`${totalSent}/${totalTarget}`} sub="按配置额度，不打满 Gmail 官方上限" tone="blue" />
           <Metric label="可用邮箱" value={`${availableMailboxes}/${mailboxes.length}`} sub="自动读取已绑定邮箱" tone="green" />
           <Metric label="队列" value={queueCount.toLocaleString('zh-CN')} sub="待发送任务" tone="cyan" />
           <Metric label="回复" value={replyCount} sub="今日同步回复" tone="green" />
@@ -1243,7 +1243,7 @@ function PlanModal({
               <QuotaStat label="可用/计入额度邮箱" value={`${usableMailboxes.length}/${capacityMailboxes.length} 个`} />
               <QuotaStat label="单邮箱日额度" value={capacityMailboxes.length ? `${minMailboxQuota}-${maxMailboxQuota} 封` : '无'} />
               <QuotaStat label="邮箱池日额度" value={`${mailboxDailyCapacity} 封`} />
-              <QuotaStat label="今日剩余额度" value={`${mailboxRemainingToday} 封`} />
+              <QuotaStat label="24小时剩余额度" value={`${mailboxRemainingToday} 封`} />
               <QuotaStat label="保存后的日上限" value={`${protectedDailyLimit} 封`} />
               <QuotaStat label="本次生成队列" value={`${protectedCandidateLimit} 条`} />
               <QuotaStat label="单邮箱最多分摊" value={`${maxTasksPerMailbox} 封`} />
@@ -1251,10 +1251,10 @@ function PlanModal({
               <QuotaStat label="日总量预计耗时" value={estimatedDailyDurationLabel} />
             </div>
             <div className="mt-2 text-xxs text-amber-700">
-              单邮箱发送间隔按每个发件邮箱分别计算，系统会用可用邮箱并行分摊队列；每封真实发送前都会重新检查发件邮箱今日已发量，单个邮箱达到额度后会自动换邮箱，没有可用额度时任务停在队列中。
+              单邮箱发送间隔按每个发件邮箱分别计算，系统会用可用邮箱并行分摊队列；每封真实发送前都会重新检查发件邮箱近24小时已发量，单个邮箱达到额度后会自动换邮箱，没有可用额度时任务停在队列中。
               {dailyLimitAdjusted ? ` 当前每日总量已从 ${dailyLimit} 自动按邮箱池日额度收紧到 ${protectedDailyLimit}。` : ''}
               {candidateLimitAdjusted ? ` 当前队列数已从 ${candidateLimit} 自动按计划日上限和单次生成上限收紧到 ${protectedCandidateLimit}。` : ''}
-              {todayExecutableLimit < protectedDailyLimit ? ` 按今日剩余额度，本日最多还能实际发送 ${todayExecutableLimit} 封。` : ''}
+              {todayExecutableLimit < protectedDailyLimit ? ` 按近24小时剩余额度，当前最多还能实际发送 ${todayExecutableLimit} 封。` : ''}
             </div>
           </div>
 

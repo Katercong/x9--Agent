@@ -593,7 +593,7 @@ def _next_send_label(row: GmailAccountQuota, auto_sent: int) -> str:
     if row.status == "auth_expired":
         return "需重新授权"
     if auto_sent >= int(row.daily_quota or 0):
-        return "今日达限"
+        return "24小时达限"
     if row.cooldown_until and row.cooldown_until > _now():
         return row.cooldown_until.strftime("%m-%d %H:%M")
     if row.last_sent_at:
@@ -690,7 +690,7 @@ def dashboard(
     sent_today = int(db.scalar(
         select(func.count())
         .select_from(EmailAutoJob)
-        .where(*job_filters, EmailAutoJob.status.in_(["sent", "draft_created"]), EmailAutoJob.updated_at >= _today_start())
+        .where(*job_filters, EmailAutoJob.status.in_(["sent", "draft_created"]), EmailAutoJob.updated_at >= _quota_window_start())
     ) or 0)
     queue_count = int(db.scalar(select(func.count()).select_from(EmailAutoJob).where(*job_filters, EmailAutoJob.status == "pending")) or 0)
     return {
@@ -1518,8 +1518,8 @@ def _process_one_job(db: Session, job: EmailAutoJob, user: dict[str, Any]) -> di
         job.failure_reason = "不在计划发送窗口"
         db.commit()
         return {"job_id": job.id, "status": job.status, "reason": job.failure_reason}
-    if _campaign_sent_count(db, campaign, _today_start()) >= int(campaign.daily_limit or 0):
-        job.failure_reason = "计划今日发送量已达上限"
+    if _campaign_sent_count(db, campaign, _quota_window_start()) >= int(campaign.daily_limit or 0):
+        job.failure_reason = "计划近24小时发送量已达上限"
         db.commit()
         return {"job_id": job.id, "status": job.status, "reason": job.failure_reason}
     hour_start = now.replace(minute=0, second=0, microsecond=0)

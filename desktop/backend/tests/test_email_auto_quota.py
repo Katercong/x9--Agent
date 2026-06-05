@@ -544,3 +544,138 @@ def test_cancel_job_marks_pending_job_skipped(client):
         row = db.get(EmailAutoJob, job_id)
     assert row.status == "skipped"
     assert row.failure_reason == "手动取消"
+
+
+def test_dashboard_sent_stat_uses_rolling_24_hour_window(client, monkeypatch):
+    marker = uuid.uuid4().hex
+    campaign_id = f"eac_dashboard_{marker}"
+    creator_id = f"creator_dashboard_{marker}"
+    now = datetime(2026, 6, 4, 12, 0, 0)
+    monkeypatch.setattr(email_auto, "_now", lambda: now)
+
+    before = client.get("/api/local/email-auto/dashboard").json()["dashboard"]["today_sent"]
+    with SessionLocal() as db:
+        db.add(EmailAutoCampaign(
+            id=campaign_id,
+            department_code="cross_border",
+            name=f"Dashboard Window {marker}",
+            status="paused",
+            start_time="09:30",
+            end_time="18:00",
+            daily_limit=10,
+            hourly_limit=10,
+            interval_min_seconds=30,
+            interval_max_seconds=30,
+            filters_json=email_auto._json_dumps(email_auto.DEFAULT_FILTERS),
+        ))
+        db.add(Creator(
+            id=creator_id,
+            platform="dashboard_window_test",
+            department_code="cross_border",
+            handle=f"dashboard_window_{marker}",
+            email=f"dashboard-window-{marker}@example.com",
+            has_email=1,
+            recommendation_score=90,
+            review_required=0,
+            recommended_at=now,
+            collected_at=now,
+        ))
+        db.add_all([
+            EmailAutoJob(
+                id=f"recent_dashboard_job_{marker}",
+                department_code="cross_border",
+                campaign_id=campaign_id,
+                creator_id=creator_id,
+                recipient_email=f"recent-dashboard-{marker}@example.com",
+                subject="recent",
+                body="recent",
+                status="sent",
+                scheduled_at=now - timedelta(hours=23, minutes=59),
+                updated_at=now - timedelta(hours=23, minutes=59),
+            ),
+            EmailAutoJob(
+                id=f"old_dashboard_job_{marker}",
+                department_code="cross_border",
+                campaign_id=campaign_id,
+                creator_id=creator_id,
+                recipient_email=f"old-dashboard-{marker}@example.com",
+                subject="old",
+                body="old",
+                status="draft_created",
+                scheduled_at=now - timedelta(hours=24, minutes=1),
+                updated_at=now - timedelta(hours=24, minutes=1),
+            ),
+        ])
+        db.commit()
+
+    after = client.get("/api/local/email-auto/dashboard").json()["dashboard"]["today_sent"]
+
+    assert after == before + 1
+
+
+def test_campaign_daily_limit_uses_rolling_24_hour_window(monkeypatch):
+    marker = uuid.uuid4().hex
+    campaign_id = f"eac_daily_window_{marker}"
+    creator_id = f"creator_daily_window_{marker}"
+    now = datetime(2026, 6, 4, 10, 0, 0)
+    monkeypatch.setattr(email_auto, "_now", lambda: now)
+
+    with SessionLocal() as db:
+        campaign = EmailAutoCampaign(
+            id=campaign_id,
+            department_code="cross_border",
+            name=f"Daily Window {marker}",
+            status="running",
+            start_time="09:30",
+            end_time="18:00",
+            daily_limit=1,
+            hourly_limit=10,
+            interval_min_seconds=30,
+            interval_max_seconds=30,
+            filters_json=email_auto._json_dumps(email_auto.DEFAULT_FILTERS),
+        )
+        creator = Creator(
+            id=creator_id,
+            platform="daily_window_test",
+            department_code="cross_border",
+            handle=f"daily_window_{marker}",
+            email=f"daily-window-{marker}@example.com",
+            has_email=1,
+            recommendation_score=90,
+            review_required=0,
+            recommended_at=now,
+            collected_at=now,
+        )
+        pending = EmailAutoJob(
+            id=f"pending_daily_window_{marker}",
+            department_code="cross_border",
+            campaign_id=campaign_id,
+            creator_id=creator_id,
+            recipient_email=f"pending-daily-window-{marker}@example.com",
+            subject="pending",
+            body="pending",
+            status="pending",
+            scheduled_at=now,
+        )
+        db.add_all([
+            campaign,
+            creator,
+            EmailAutoJob(
+                id=f"recent_daily_window_{marker}",
+                department_code="cross_border",
+                campaign_id=campaign_id,
+                creator_id=creator_id,
+                recipient_email=f"recent-daily-window-{marker}@example.com",
+                subject="recent",
+                body="recent",
+                status="sent",
+                scheduled_at=now - timedelta(hours=23, minutes=59),
+                updated_at=now - timedelta(hours=23, minutes=59),
+            ),
+            pending,
+        ])
+        db.commit()
+
+        result = email_auto._process_one_job(db, pending, {"id": "test"})
+
+    assert result["reason"] == "计划近24小时发送量已达上限"
