@@ -111,6 +111,47 @@ def test_unified_dashboard_kpis_and_state_projection(client):
     assert after["pending_reply"] == after["pending_followup"]
 
 
+def test_unified_dashboard_contacted_uses_rolling_24_hour_window(client):
+    before = _summary(client)
+    marker = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    now = datetime.now()
+
+    with SessionLocal() as session:
+        recent_creator = _creator(marker, "recent_contacted")
+        old_creator = _creator(marker, "old_contacted")
+        session.add_all([recent_creator, old_creator])
+        session.flush()
+        session.add_all([
+            OutreachEmail(
+                id=f"outreach_recent_24h_{marker}",
+                department_code="cross_border",
+                creator_id=recent_creator.id,
+                to_email=recent_creator.email,
+                from_email="sender@example.com",
+                subject="recent",
+                body="recent",
+                status="sent",
+                sent_at=now - timedelta(hours=23, minutes=59),
+            ),
+            OutreachEmail(
+                id=f"outreach_old_24h_{marker}",
+                department_code="cross_border",
+                creator_id=old_creator.id,
+                to_email=old_creator.email,
+                from_email="sender@example.com",
+                subject="old",
+                body="old",
+                status="sent",
+                sent_at=now - timedelta(hours=24, minutes=1),
+            ),
+        ])
+        session.commit()
+
+    after = _summary(client)
+
+    assert after["today_contacted"] == before["today_contacted"] + 1
+
+
 def test_today_duplicate_creators_counts_repeat_sources(client):
     before = _summary(client)
     marker = datetime.now().strftime("%Y%m%d%H%M%S%f")

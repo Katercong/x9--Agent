@@ -136,7 +136,7 @@ export default function Overview() {
   const overviewKpis = [
     { label: '总发现', value: unifiedSummary?.total_discovered ?? 0, icon: Users, bg: '#e0e7ff', fg: '#4f46e5' },
     { label: '总采集', value: unifiedSummary?.total_collected ?? 0, icon: UserCheck, bg: '#dcfce7', fg: '#16a34a' },
-    { label: '今日建联', value: unifiedSummary?.today_contacted ?? 0, icon: ShoppingCart, bg: '#d1fae5', fg: '#16a34a' },
+    { label: '近24小时建联', value: unifiedSummary?.today_contacted ?? 0, icon: ShoppingCart, bg: '#d1fae5', fg: '#16a34a' },
     { label: '今日采集', value: unifiedSummary?.today_collected ?? 0, icon: Wallet, bg: '#cffafe', fg: '#0891b2' },
     { label: '今日重复达人', value: unifiedSummary?.today_duplicate_creators ?? 0, icon: UserPlus, bg: '#fee2e2', fg: '#dc2626' },
     { label: '总达人推荐', value: unifiedSummary?.total_recommended ?? 0, icon: TrendingUp, bg: '#fed7aa', fg: '#ea580c' },

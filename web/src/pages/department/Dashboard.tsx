@@ -101,7 +101,7 @@ export default function Dashboard() {
   const topRow = [
     { label: '总发现', value: summary.total_discovered, subLabel: '当前达人主队列总量', delta: null as number | null },
     { label: '总采集', value: summary.total_collected, subLabel: '去除队列标记后的采集量', delta: null },
-    { label: '今日建联', value: summary.today_contacted ?? 0, subLabel: '今天新发起建联', delta: null },
+    { label: '近24小时建联', value: summary.today_contacted ?? 0, subLabel: '最近24小时新发起建联', delta: null },
     { label: '今日采集', value: summary.today_collected, subLabel: '今天新增有效采集', delta: null },
     { label: '今日重复达人', value: summary.today_duplicate_creators, subLabel: '今天重复出现的达人', delta: null },
     { label: '总达人推荐', value: summary.total_recommended, delta: null },

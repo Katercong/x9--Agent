@@ -178,6 +178,8 @@ def build_unified_dashboard(
 ) -> dict[str, Any]:
     dept = normalize_department_code(department_code, default=None) if department_code else None
     now = datetime.utcnow()
+    contact_window_end = datetime.now()
+    contact_window_start = contact_window_end - timedelta(hours=24)
     local_today = datetime.now().date()
     today_start = datetime.combine(local_today, datetime.min.time())
     tomorrow_start = today_start + timedelta(days=1)
@@ -204,7 +206,7 @@ def build_unified_dashboard(
     total_collected = _raw_observation_count(db, dept, exclude_queue=True)
     total_discovered = _total_discovered_count(db, dept)
     today_discovered = _raw_observation_count(db, dept, start=today_start, end=tomorrow_start)
-    today_contacted = _today_contacted_count(db, dept, creator_ids, start=today_start, end=tomorrow_start)
+    today_contacted = _today_contacted_count(db, dept, creator_ids, start=contact_window_start, end=contact_window_end)
     today_collected = _raw_observation_count(db, dept, start=today_start, end=tomorrow_start, exclude_queue=True)
     today_duplicate_creators = _today_duplicate_creator_count(db, dept, local_today)
     bd_history_contacted = _bd_history_contacted_count(db, dept)
@@ -342,16 +344,19 @@ def _today_contacted_count(
 
     contacted_creator_ids: set[str] = set()
 
-    email_date = "DATE(COALESCE(NULLIF(CAST(sent_at AS TEXT), ''), NULLIF(CAST(created_at AS TEXT), '')))"
+    start_text = _timestamp_text(start)
+    end_text = _timestamp_text(end)
+
+    email_time = "COALESCE(NULLIF(CAST(sent_at AS TEXT), ''), NULLIF(CAST(created_at AS TEXT), ''))"
     email_clauses = [
         "status = :email_status",
-        f"{email_date} >= :start_date",
-        f"{email_date} < :end_date",
+        f"{email_time} >= :start_time",
+        f"{email_time} < :end_time",
     ]
     params: dict[str, Any] = {
         "email_status": "sent",
-        "start_date": start.date().isoformat(),
-        "end_date": end.date().isoformat(),
+        "start_time": start_text,
+        "end_time": end_text,
     }
     if department_code:
         params["department_code"] = department_code
@@ -367,19 +372,19 @@ def _today_contacted_count(
     )
 
     event_params: dict[str, Any] = {
-        "start_date": start.date().isoformat(),
-        "end_date": end.date().isoformat(),
+        "start_time": start_text,
+        "end_time": end_text,
     }
     event_placeholders = []
     for index, event_type in enumerate(sorted(CONTACT_EVENT_TYPES)):
         key = f"event_type_{index}"
         event_params[key] = event_type
         event_placeholders.append(f":{key}")
-    event_date = "DATE(NULLIF(CAST(event_at AS TEXT), ''))"
+    event_time = "NULLIF(CAST(event_at AS TEXT), '')"
     event_clauses = [
         f"event_type IN ({', '.join(event_placeholders)})",
-        f"{event_date} >= :start_date",
-        f"{event_date} < :end_date",
+        f"{event_time} >= :start_time",
+        f"{event_time} < :end_time",
     ]
     if department_code:
         event_params["department_code"] = department_code
@@ -395,6 +400,10 @@ def _today_contacted_count(
     )
 
     return len(contacted_creator_ids)
+
+
+def _timestamp_text(value: datetime) -> str:
+    return value.strftime("%Y-%m-%d %H:%M:%S.%f")
 
 
 def _raw_observation_count(
