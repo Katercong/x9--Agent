@@ -39,6 +39,19 @@
       <section class="controls" aria-label="Manual search page workflow controls">
         <p class="hint full" data-zh="先手动在 YouTube 搜索并停留在结果页，然后采集每个视频博主和评论用户 About 页的公开邮箱。" data-en="Search YouTube manually first, keep the results page active, then collect public creator and commenter About-page emails.">先手动在 YouTube 搜索并停留在结果页，然后采集每个视频博主和评论用户 About 页的公开邮箱。</p>
 
+        <div class="target-options full" aria-label="Collection targets">
+          <div class="target-title" data-zh="选择采集对象" data-en="Collection Targets">选择采集对象</div>
+          <label class="target-option">
+            <input id="collectCreatorsInput" type="checkbox" checked>
+            <span data-zh="视频博主" data-en="Video creators">视频博主</span>
+          </label>
+          <label class="target-option">
+            <input id="collectCommentersInput" type="checkbox">
+            <span data-zh="评论用户" data-en="Comment users">评论用户</span>
+          </label>
+          <div id="targetHint" class="target-hint" data-zh="默认只采集视频博主；勾选评论用户后会同时采集博主和评论用户。" data-en="Creator-only is the default. Selecting comment users also collects creators.">默认只采集视频博主；勾选评论用户后会同时采集博主和评论用户。</div>
+        </div>
+
         <label>
           <span data-zh="最多视频/Shorts 数" data-en="Max videos/Shorts">最多视频/Shorts 数</span>
           <input id="maxVideosInput" type="number" min="1" max="100" step="1" value="5">

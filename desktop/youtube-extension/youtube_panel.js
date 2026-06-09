@@ -40,6 +40,7 @@ const EXPORT_COLUMNS = [
 
 let currentState = null;
 let pollTimer = null;
+let targetControlsDirty = false;
 
 document.addEventListener("DOMContentLoaded", () => {
   bind();
@@ -65,6 +66,9 @@ function bind() {
   document.getElementById("exportJsonBtn")?.addEventListener("click", () => exportRows("json"));
   document.getElementById("exportManualReviewCsvBtn")?.addEventListener("click", () => exportRows("csv", { manualReviewOnly: true }));
   document.getElementById("exportManualReviewJsonBtn")?.addEventListener("click", () => exportRows("json", { manualReviewOnly: true }));
+  document.getElementById("collectCreatorsInput")?.addEventListener("change", onTargetChanged);
+  document.getElementById("collectCommentersInput")?.addEventListener("change", onTargetChanged);
+  syncCollectionTargetControls(readSettings(), { updateFromSettings: true });
 }
 
 async function onBindActor() {
@@ -84,7 +88,12 @@ async function onOpenLogin() {
 
 async function onStart() {
   const settings = readSettings();
-  paint({ ...(currentState || {}), status: "running", message: "Starting from current search page..." });
+  const validationError = validateCollectionTargets(settings);
+  if (validationError) {
+    paint({ ...(currentState || {}), status: "error", message: validationError, settings });
+    return;
+  }
+  paint({ ...(currentState || {}), status: "running", message: "Starting from current search page...", settings });
   const response = await send(MSG.START_SEARCH, { settings });
   if (!response?.ok) {
     paint(response?.state || { status: "error", message: response?.error || "Start failed." });
@@ -95,7 +104,12 @@ async function onStart() {
 
 async function onContinue() {
   const settings = readSettings();
-  paint({ ...(currentState || {}), status: "running", message: "Continuing from previous results..." });
+  const validationError = validateCollectionTargets(settings);
+  if (validationError) {
+    paint({ ...(currentState || {}), status: "error", message: validationError, settings });
+    return;
+  }
+  paint({ ...(currentState || {}), status: "running", message: "Continuing from previous results...", settings });
   const response = await send(MSG.CONTINUE_SEARCH, { settings });
   if (!response?.ok) {
     paint(response?.state || { status: "error", message: response?.error || "Continue failed." });
@@ -140,7 +154,11 @@ async function refresh() {
 }
 
 function readSettings() {
+  const collectCommenters = Boolean(document.getElementById("collectCommentersInput")?.checked);
+  const collectCreators = collectCommenters || Boolean(document.getElementById("collectCreatorsInput")?.checked);
   return {
+    collectCreators,
+    collectCommenters,
     maxVideos: readNumber("maxVideosInput", 1, 100, 5),
     searchScrollRounds: readNumber("searchScrollRoundsInput", 0, 30, 10),
     maxCommentsPerVideo: readNumber("maxCommentsPerVideoInput", 1, 200, 50),
@@ -165,6 +183,7 @@ function paint(state) {
   const status = currentState.status || "idle";
   const settings = currentState.settings || {};
   window.X9YoutubeI18n?.apply?.();
+  syncCollectionTargetControls(settings, { updateFromSettings: !targetControlsDirty || status === "running" || status === "stopping" });
   paintActorIdentity(currentState.actor_identity || {});
   applyActionButtonState(status, currentState.actor_identity || {});
   setText("statusText", messageText(currentState.message || "Ready."));
@@ -202,12 +221,60 @@ function paintActorIdentity(identity) {
 function applyActionButtonState(status, identity) {
   const blocked = identity.blocked !== false;
   const busy = status === "running" || status === "stopping";
-  setDisabled("startBtn", blocked || busy);
-  setDisabled("continueBtn", blocked || busy);
+  const noTargets = !hasSelectedCollectionTarget();
+  setDisabled("startBtn", blocked || busy || noTargets);
+  setDisabled("continueBtn", blocked || busy || noTargets);
   setDisabled("nextManualReviewBtn", blocked || busy);
   setDisabled("collectCurrentPageEmailBtn", blocked || busy);
   setDisabled("stopBtn", status !== "running" && status !== "stopping");
   setDisabled("actorBindBtn", busy || identity.code === "binding");
+}
+
+function onTargetChanged() {
+  targetControlsDirty = true;
+  syncCollectionTargetControls(readSettings(), { updateFromSettings: true });
+  applyActionButtonState(currentState?.status || "idle", currentState?.actor_identity || {});
+}
+
+function syncCollectionTargetControls(settings = {}, options = {}) {
+  const creatorInput = document.getElementById("collectCreatorsInput");
+  const commenterInput = document.getElementById("collectCommentersInput");
+  const targetHint = document.getElementById("targetHint");
+  if (!creatorInput || !commenterInput) return;
+
+  if (options.updateFromSettings) {
+    const collectCommenters = settings.collectCommenters === true;
+    const collectCreators = collectCommenters ? true : settings.collectCreators !== false;
+    commenterInput.checked = collectCommenters;
+    creatorInput.checked = collectCreators;
+  }
+
+  if (commenterInput.checked) {
+    creatorInput.checked = true;
+    creatorInput.disabled = true;
+  } else {
+    creatorInput.disabled = false;
+  }
+
+  const collectCommenters = commenterInput.checked;
+  setDisabled("maxCommentsPerVideoInput", !collectCommenters);
+  setDisabled("maxCommenterProfilesPerVideoInput", !collectCommenters);
+
+  const hasTarget = hasSelectedCollectionTarget();
+  if (targetHint) {
+    targetHint.dataset.state = hasTarget ? "" : "error";
+    targetHint.textContent = hasTarget
+      ? localizedDatasetText(targetHint)
+      : messageText("Select at least one collection target.");
+  }
+}
+
+function hasSelectedCollectionTarget() {
+  return Boolean(document.getElementById("collectCreatorsInput")?.checked || document.getElementById("collectCommentersInput")?.checked);
+}
+
+function validateCollectionTargets(settings) {
+  return settings.collectCreators || settings.collectCommenters ? "" : "Select at least one collection target.";
 }
 
 function actorDisplayName(actor) {
@@ -394,6 +461,11 @@ function statusLabel(status) {
 function setText(id, value) {
   const el = document.getElementById(id);
   if (el) el.textContent = value;
+}
+
+function localizedDatasetText(el) {
+  const lang = document.documentElement.getAttribute("lang") === "en" ? "en" : "zh";
+  return el.getAttribute(lang === "en" ? "data-en" : "data-zh") || el.textContent || "";
 }
 
 function setDisabled(id, disabled) {

@@ -129,6 +129,16 @@ async function startCurrentSearchPageRun(rawSettings, options = {}) {
     ...rawSettings,
     keyword: extractSearchKeyword(activeTab.url || "") || rawSettings.keyword || ""
   });
+  if (!settings.collectCreators && !settings.collectCommenters) {
+    const state = {
+      ...(await getState()),
+      status: "error",
+      message: "Select at least one collection target.",
+      settings
+    };
+    await setState(state);
+    return { ok: false, error: "no_collection_targets_selected", state };
+  }
   const continueRun = Boolean(options.continueRun);
   const storedRows = getStoredRows(previousState);
   const storedVideos = getStoredVideos(previousState);
@@ -256,6 +266,9 @@ async function startCurrentSearchPageRun(rawSettings, options = {}) {
       const videoCard = videos[index];
       workerSession = createWorkerSession(activeTab);
       try {
+        const shouldCollectCommenters = Boolean(settings.collectCommenters);
+        const maxCommentsForRun = shouldCollectCommenters ? settings.maxCommentsPerVideo : 0;
+        const maxCommenterProfilesForRun = shouldCollectCommenters ? settings.maxCommenterProfilesPerVideo : 0;
         await patchState({ message: `Opening video in active tab ${index + 1}/${videos.length}: ${videoCard.video_title || videoCard.video_id}` });
         const workerTab = await openWorkerTab(workerSession, videoCard.video_url);
         await patchState({ worker_tab_id: workerTab.id });
@@ -267,8 +280,8 @@ async function startCurrentSearchPageRun(rawSettings, options = {}) {
           type: MSG.CONTENT_COLLECT,
           settings: {
             ...settings,
-            maxComments: settings.maxCommentsPerVideo,
-            maxCommenterProfiles: settings.maxCommenterProfilesPerVideo,
+            maxComments: maxCommentsForRun,
+            maxCommenterProfiles: maxCommenterProfilesForRun,
             scrollRounds: settings.scrollRounds
           }
         });
@@ -280,8 +293,10 @@ async function startCurrentSearchPageRun(rawSettings, options = {}) {
         const videoResult = videoResponse.result || {};
         const video = videoResult.video || videoCard;
         const creatorChannelUrl = videoResult.channel?.channel_url || videoCard.creator_channel_url || "";
-        const videoComments = Array.isArray(videoResult.comments) ? videoResult.comments : [];
-        const commenterComments = uniqueCommenterChannels(videoComments).slice(0, settings.maxCommenterProfilesPerVideo);
+        const videoComments = shouldCollectCommenters && Array.isArray(videoResult.comments) ? videoResult.comments : [];
+        const commenterComments = shouldCollectCommenters
+          ? uniqueCommenterChannels(videoComments).slice(0, settings.maxCommenterProfilesPerVideo)
+          : [];
         commentsCount += videoComments.length;
         videosOut.push({
           ...videoCard,
@@ -324,32 +339,36 @@ async function startCurrentSearchPageRun(rawSettings, options = {}) {
         );
         await sleep(settings.betweenProfilesMs);
 
-        await addLog("comments_collected", `${video.video_url || videoCard.video_url} | comments=${videoComments.length} commenters=${commenterComments.length}`);
-        for (const comment of commenterComments) {
-          if (stopRequested) break;
-          const commenterChannelUrl = X9YoutubeUtils.normalizeChannelUrl(comment.author_channel_url || "");
-          if (!commenterChannelUrl || collectedCommenterKeys.has(commenterChannelUrl)) continue;
-          await patchState({ message: `Checking commenter About: ${comment.author_name || commenterChannelUrl}` });
-          const commenterProfile = await collectCommenterAboutProfile(commenterProfileCache, commenterChannelUrl, activeTab.id, settings, workerSession);
-          profilePages += commenterProfile.from_cache ? 0 : (commenterProfile.profile_pages_checked || 0);
-          const rowResult = await appendCollectedRow(buildCommenterRow(settings, video, creatorChannelUrl, { ...comment, author_channel_url: commenterChannelUrl }, commenterProfile), {
-            rows,
-            videosOut,
-            knownEmails,
-            settings,
-            sourceSearchUrl: currentSourceSearchUrl,
-            buildPatch: () => {
-              const manualReviewRows = buildManualReviewRows(rows);
-              return {
-                rows,
-                manual_review_rows: manualReviewRows,
-                videos: videosOut,
-                counts: makeCounts(videosOut.length, commentsCount, profilePages, rows, manualReviewRows)
-              };
-            }
-          });
-          if (rowResult.added || rowResult.skipped_duplicate) collectedCommenterKeys.add(commenterChannelUrl);
-          await sleep(settings.betweenProfilesMs);
+        if (shouldCollectCommenters) {
+          await addLog("comments_collected", `${video.video_url || videoCard.video_url} | comments=${videoComments.length} commenters=${commenterComments.length}`);
+          for (const comment of commenterComments) {
+            if (stopRequested) break;
+            const commenterChannelUrl = X9YoutubeUtils.normalizeChannelUrl(comment.author_channel_url || "");
+            if (!commenterChannelUrl || collectedCommenterKeys.has(commenterChannelUrl)) continue;
+            await patchState({ message: `Checking commenter About: ${comment.author_name || commenterChannelUrl}` });
+            const commenterProfile = await collectCommenterAboutProfile(commenterProfileCache, commenterChannelUrl, activeTab.id, settings, workerSession);
+            profilePages += commenterProfile.from_cache ? 0 : (commenterProfile.profile_pages_checked || 0);
+            const rowResult = await appendCollectedRow(buildCommenterRow(settings, video, creatorChannelUrl, { ...comment, author_channel_url: commenterChannelUrl }, commenterProfile), {
+              rows,
+              videosOut,
+              knownEmails,
+              settings,
+              sourceSearchUrl: currentSourceSearchUrl,
+              buildPatch: () => {
+                const manualReviewRows = buildManualReviewRows(rows);
+                return {
+                  rows,
+                  manual_review_rows: manualReviewRows,
+                  videos: videosOut,
+                  counts: makeCounts(videosOut.length, commentsCount, profilePages, rows, manualReviewRows)
+                };
+              }
+            });
+            if (rowResult.added || rowResult.skipped_duplicate) collectedCommenterKeys.add(commenterChannelUrl);
+            await sleep(settings.betweenProfilesMs);
+          }
+        } else {
+          await addLog("comments_skipped", `${video.video_url || videoCard.video_url} | commenter collection disabled`);
         }
       } finally {
         await closeWorkerSession(workerSession, activeTab.id);
@@ -2260,8 +2279,12 @@ function defaultState() {
 }
 
 function normalizeSettings(settings) {
+  const collectCommenters = parseBoolean(settings.collectCommenters, false);
+  const collectCreators = collectCommenters ? true : parseBoolean(settings.collectCreators, true);
   return {
     keyword: String(settings.keyword || "").trim(),
+    collectCreators,
+    collectCommenters,
     maxVideos: clampNumber(settings.maxVideos, 1, 100, 5),
     maxCommentsPerVideo: clampNumber(settings.maxCommentsPerVideo ?? settings.maxComments, 1, 200, 50),
     maxCommenterProfilesPerVideo: clampNumber(settings.maxCommenterProfilesPerVideo ?? settings.maxCommenterProfiles, 0, 200, 50),
@@ -2271,6 +2294,12 @@ function normalizeSettings(settings) {
     profileSettleMs: clampNumber(settings.profileSettleMs, 500, 6000, 1800),
     betweenProfilesMs: clampNumber(settings.betweenProfilesMs, 0, 5000, 350)
   };
+}
+
+function parseBoolean(value, fallback) {
+  if (value === true || value === "true" || value === 1 || value === "1") return true;
+  if (value === false || value === "false" || value === 0 || value === "0") return false;
+  return fallback;
 }
 
 function isYoutubeSearchResultsUrl(url) {

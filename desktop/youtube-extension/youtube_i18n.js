@@ -7,8 +7,12 @@
       en: "Ready."
     },
     "Starting from current search page...": {
-      zh: "\u6b63\u5728\u4ece\u5f53\u524d\u641c\u7d22\u7ed3\u679c\u9875\u5f00\u59cb\u91c7\u96c6\u535a\u4e3b\u548c\u8bc4\u8bba\u7528\u6237\u90ae\u7bb1...",
-      en: "Starting creator and commenter email run from current search page..."
+      zh: "\u6b63\u5728\u4ece\u5f53\u524d\u641c\u7d22\u7ed3\u679c\u9875\u5f00\u59cb\u91c7\u96c6\u90ae\u7bb1...",
+      en: "Starting email run from current search page..."
+    },
+    "Select at least one collection target.": {
+      zh: "\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u4e2a\u91c7\u96c6\u5bf9\u8c61\u3002",
+      en: "Select at least one collection target."
     },
     "Continuing from previous results...": {
       zh: "\u6b63\u5728\u4ece\u4e0a\u6b21\u7ed3\u679c\u7ee7\u7eed\u91c7\u96c6...",
@@ -107,12 +111,12 @@
       en: "No manual review rows to export."
     },
     "Open a YouTube search results page, then start.": {
-      zh: "\u5148\u6253\u5f00 YouTube \u641c\u7d22\u7ed3\u679c\u9875\uff0c\u518d\u91c7\u96c6\u535a\u4e3b\u548c\u8bc4\u8bba\u7528\u6237\u90ae\u7bb1\u3002",
-      en: "Open a YouTube search results page, then collect creator and commenter emails."
+      zh: "\u5148\u6253\u5f00 YouTube \u641c\u7d22\u7ed3\u679c\u9875\uff0c\u518d\u6309\u9009\u5b9a\u5bf9\u8c61\u91c7\u96c6\u516c\u5f00\u90ae\u7bb1\u3002",
+      en: "Open a YouTube search results page, then collect public emails for the selected targets."
     },
     "Collecting from current YouTube search results page...": {
-      zh: "\u6b63\u5728\u4ece\u5f53\u524d YouTube \u641c\u7d22\u7ed3\u679c\u9875\u91c7\u96c6\u535a\u4e3b\u548c\u8bc4\u8bba\u7528\u6237\u90ae\u7bb1...",
-      en: "Collecting creator and commenter emails from current YouTube search results page..."
+      zh: "\u6b63\u5728\u4ece\u5f53\u524d YouTube \u641c\u7d22\u7ed3\u679c\u9875\u91c7\u96c6\u516c\u5f00\u90ae\u7bb1...",
+      en: "Collecting public emails from current YouTube search results page..."
     },
     "Manual search page collection complete.": {
       zh: "\u5f53\u524d\u641c\u7d22\u9875\u90ae\u7bb1\u91c7\u96c6\u5b8c\u6210\u3002",
