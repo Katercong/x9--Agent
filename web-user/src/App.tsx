@@ -7,6 +7,7 @@ import Collection from './pages/Collection';
 import CollectShop from './pages/CollectShop';
 import CollectLeads from './pages/CollectLeads';
 import CollectImport from './pages/CollectImport';
+import CustomerCollection from './pages/CustomerCollection';
 import Recommendations from './pages/Recommendations';
 import ForeignTradeRecommendations from './pages/ForeignTradeRecommendations';
 import ForeignTradeSocialUserDetail from './pages/ForeignTradeSocialUserDetail';
@@ -56,6 +57,7 @@ export default function App() {
         <Route path="/collect-shop" element={<CollectShop />} />
         <Route path="/collect-leads" element={<CollectLeads />} />
         <Route path="/collect-import" element={<CollectImport />} />
+        <Route path="/customer-collection" element={<CustomerCollection />} />
         <Route path="/hotkw" element={<HotKeywords />} />
         <Route path="/collect-jobs" element={<CollectJobs />} />
         <Route path="/collect-social" element={<CollectSocial />} />

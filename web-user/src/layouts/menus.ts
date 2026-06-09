@@ -1,7 +1,7 @@
 import {
   Home, BarChart3, Telescope, Sparkles,
   ArrowDownToLine, TrendingUp, Bot, Users, Store, Radar, FileSpreadsheet, MailCheck,
-  Briefcase, Heart, Wand2,
+  Briefcase, Heart, Wand2, Youtube,
   type LucideIcon,
 } from 'lucide-react';
 import type { Language } from '@/lib/i18n';
@@ -82,6 +82,7 @@ function buildPortalMenu(language: Language): MenuEntry[] {
       ],
     },
     { key: 'recommendations', label: t.recommendations, to: '/recommendations', icon: Sparkles },
+    { key: 'customer-collection', label: language === 'en' ? 'Customer Collection' : '客户采集', to: '/customer-collection', icon: Youtube },
     { key: 'emails', label: t.emails, to: '/emails', icon: MailCheck },
     { key: 'export', label: t.export, to: '/export', icon: ArrowDownToLine },
     { key: 'hotkw', label: t.hotkw, to: '/hotkw', icon: TrendingUp },
@@ -166,6 +167,11 @@ const pageMetaByLanguage: Record<Language, Record<string, PageMeta>> = {
 export const pageMeta: Record<string, PageMeta> = pageMetaByLanguage.zh;
 
 export function getPageMeta(pathname: string, language: Language): PageMeta {
+  if (pathname === '/customer-collection') {
+    return language === 'en'
+      ? { title: 'Customer Collection', subtitle: 'Local YouTube collection, cleaned leads, and manual review dashboard' }
+      : { title: '客户采集', subtitle: 'YouTube 本地采集、清洗入库与人工审查看板' };
+  }
   if (pathname.startsWith('/recommendations/')) {
     return language === 'en'
       ? { title: 'Creator Detail', subtitle: 'Recommendation evidence, review signals, and email outreach' }

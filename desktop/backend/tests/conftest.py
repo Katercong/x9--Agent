@@ -10,7 +10,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 TMP = tempfile.NamedTemporaryFile(delete=False, suffix=".db").name
+TMP_YOUTUBE = tempfile.NamedTemporaryFile(delete=False, suffix=".youtube.db").name
 os.environ["LOCAL_DB_URL"] = f"sqlite:///{TMP}"
+os.environ["YOUTUBE_DB_URL"] = f"sqlite:///{TMP_YOUTUBE}"
 os.environ["X9_ADMIN_EMAILS"] = "test-admin@example.com"
 
 import pytest  # noqa: E402
@@ -20,15 +22,21 @@ from x9_creator_desktop_system.backend.database import SessionLocal  # noqa: E40
 from x9_creator_desktop_system.backend.main import app  # noqa: E402
 from x9_creator_desktop_system.backend.models.gmail_account import GmailAccount  # noqa: E402
 from x9_creator_desktop_system.backend.services import auth_service  # noqa: E402
+from x9_creator_desktop_system.backend.youtube_database import init_youtube_db  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _bootstrap():
     init_db()
+    init_youtube_db()
     yield
     try:
         os.unlink(TMP)
+    except OSError:
+        pass
+    try:
+        os.unlink(TMP_YOUTUBE)
     except OSError:
         pass
 

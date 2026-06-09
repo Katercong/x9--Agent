@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>X9 YouTube 博主和评论用户邮箱采集</title>
+    <link rel="stylesheet" href="youtube_panel.css">
+  </head>
+  <body>
+    <main class="panel">
+      <div class="top-bar">
+        <button id="langToggle" class="lang-toggle" type="button" title="Switch to English" aria-label="Switch to English">EN</button>
+      </div>
+
+      <header class="header">
+        <div>
+          <h1 data-zh="X9 YouTube 博主和评论用户邮箱采集" data-en="X9 YouTube Creator and Commenter Email Collector">X9 YouTube 博主和评论用户邮箱采集</h1>
+          <p id="statusText">准备就绪。</p>
+        </div>
+        <span class="status-pill" id="statusPill" data-state="idle">空闲</span>
+      </header>
+
+      <section class="identity-card" id="actorNotice" data-state="checking" aria-label="Plugin account binding">
+        <div class="identity-head">
+          <div>
+            <div class="identity-title" data-zh="插件绑定账号" data-en="Plugin account">插件绑定账号</div>
+            <div class="identity-name" id="actorName">未绑定</div>
+          </div>
+          <span class="identity-pill" id="actorStatusPill">检查中</span>
+        </div>
+        <div class="identity-meta" id="actorMeta"></div>
+        <div class="identity-message" id="actorMessage">正在检查本地后台账号。</div>
+        <div class="identity-actions">
+          <button class="identity-action primary" id="actorBindBtn" type="button" data-zh="绑定当前登录账号" data-en="Bind current account">绑定当前登录账号</button>
+          <button class="identity-action" id="actorLoginBtn" type="button" data-zh="打开登录页" data-en="Open login page">打开登录页</button>
+        </div>
+      </section>
+
+      <section class="controls" aria-label="Manual search page workflow controls">
+        <p class="hint full" data-zh="先手动在 YouTube 搜索并停留在结果页，然后采集每个视频博主和评论用户 About 页的公开邮箱。" data-en="Search YouTube manually first, keep the results page active, then collect public creator and commenter About-page emails.">先手动在 YouTube 搜索并停留在结果页，然后采集每个视频博主和评论用户 About 页的公开邮箱。</p>
+
+        <label>
+          <span data-zh="最多视频/Shorts 数" data-en="Max videos/Shorts">最多视频/Shorts 数</span>
+          <input id="maxVideosInput" type="number" min="1" max="100" step="1" value="5">
+        </label>
+
+        <label>
+          <span data-zh="搜索页滚动轮次" data-en="Search scroll rounds">搜索页滚动轮次</span>
+          <input id="searchScrollRoundsInput" type="number" min="0" max="30" step="1" value="10">
+        </label>
+
+        <label>
+          <span data-zh="每个视频评论数" data-en="Comments/video">每个视频评论数</span>
+          <input id="maxCommentsPerVideoInput" type="number" min="1" max="200" step="1" value="50">
+        </label>
+
+        <label>
+          <span data-zh="每个视频评论用户主页数" data-en="Commenter profiles/video">每个视频评论用户主页数</span>
+          <input id="maxCommenterProfilesPerVideoInput" type="number" min="0" max="200" step="1" value="50">
+        </label>
+
+        <div class="button-row full">
+          <button id="startBtn" class="primary" type="button" data-zh="开始采集邮箱" data-en="Start Email Run">开始采集邮箱</button>
+          <button id="continueBtn" type="button" data-zh="继续采集" data-en="Continue Run">继续采集</button>
+          <button id="stopBtn" type="button" data-zh="停止" data-en="Stop">停止</button>
+          <button id="clearBtn" type="button" data-zh="清空" data-en="Clear">清空</button>
+          <div class="manual-review-label full" data-zh="人工审核：" data-en="Manual Review:">人工审核：</div>
+          <button id="nextManualReviewBtn" class="primary full" type="button" data-zh="下一个人工审核" data-en="Next Manual Review">下一个人工审核</button>
+          <button id="collectCurrentPageEmailBtn" class="primary full" type="button" data-zh="采集本页邮箱" data-en="Collect Current Page Email">采集本页邮箱</button>
+        </div>
+      </section>
+
+      <section class="metrics" aria-label="Collection summary">
+        <div><strong id="videoCount">0</strong><span data-zh="视频" data-en="Videos">视频</span></div>
+        <div><strong id="commentCount">0</strong><span data-zh="评论" data-en="Comments">评论</span></div>
+        <div><strong id="profileCount">0</strong><span data-zh="主页" data-en="Profiles">主页</span></div>
+        <div><strong id="rowCount">0</strong><span data-zh="行" data-en="Rows">行</span></div>
+        <div><strong id="manualReviewCount">0</strong><span data-zh="人工审查" data-en="Review">人工审查</span></div>
+        <div><strong id="emailCount">0</strong><span data-zh="邮箱" data-en="Emails">邮箱</span></div>
+      </section>
+
+      <section class="upload-status" aria-label="Import status">
+        <strong data-zh="入库状态" data-en="Import status">入库状态</strong>
+        <span id="uploadStatusText">未上传</span>
+      </section>
+
+      <section class="exports" aria-label="Export controls">
+        <button id="exportCsvBtn" type="button" data-zh="导出 CSV" data-en="Export CSV">导出 CSV</button>
+        <button id="exportJsonBtn" type="button" data-zh="导出 JSON" data-en="Export JSON">导出 JSON</button>
+        <button id="exportManualReviewCsvBtn" type="button" data-zh="导出人工审查 CSV" data-en="Export Review CSV">导出人工审查 CSV</button>
+        <button id="exportManualReviewJsonBtn" type="button" data-zh="导出人工审查 JSON" data-en="Export Review JSON">导出人工审查 JSON</button>
+      </section>
+
+      <section class="preview" aria-label="Preview rows">
+        <div class="preview-head">
+          <h2 data-zh="预览" data-en="Preview">预览</h2>
+          <span id="videoMeta"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th data-zh="来源" data-en="Source">来源</th>
+                <th data-zh="视频" data-en="Video">视频</th>
+                <th data-zh="频道" data-en="Channel">频道</th>
+                <th data-zh="邮箱 / 审查" data-en="Email / Review">邮箱 / 审查</th>
+              </tr>
+            </thead>
+            <tbody id="rowsBody">
+              <tr><td colspan="4" class="empty">暂无数据。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="youtube_i18n.js"></script>
+    <script src="youtube_review_queue.js"></script>
+    <script src="youtube_panel.js"></script>
+  </body>
+</html>

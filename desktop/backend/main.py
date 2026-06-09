@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import UI_DIR, settings
 from .database import SessionLocal, init_db
 from .models.request_log import RequestLog
+from .youtube_database import init_youtube_db
 from .utils import (
     collector_queue_scheduler,
     email_auto_scheduler,
@@ -52,6 +53,7 @@ from .routers import (
     shared,
     v2 as v2_router,
     xhs_leads,
+    youtube_import,
 )
 from .services import auth_service
 from .services.departments import SLUG_TO_CODE
@@ -81,6 +83,7 @@ app.include_router(dashboard.router)
 app.include_router(foreign_trade.router)
 app.include_router(company_leads.router)
 app.include_router(xhs_leads.router)
+app.include_router(youtube_import.router)
 app.include_router(extension_ingest_compat.router)
 app.include_router(post_process.process_router)
 app.include_router(process.router)
@@ -102,6 +105,7 @@ app.include_router(v2_router.router)
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+    init_youtube_db()
     # Daily background prune of request_logs (was inline on every request,
     # which serialized writes behind a DELETE under load).
     log_scheduler.start_log_cleanup()

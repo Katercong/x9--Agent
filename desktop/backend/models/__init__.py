@@ -37,6 +37,7 @@ from .social_lead import (
 from .system_log import SystemLog
 from .tag_definition import TagDefinition
 from .talent_lead import TalentLead
+from .youtube_lead import YoutubeImportRun, YoutubeLead, YoutubeLeadSource, YoutubeRawRow
 
 __all__ = [
     "Creator",
@@ -80,4 +81,8 @@ __all__ = [
     "ReviewTask",
     "SystemLog",
     "TagDefinition",
+    "YoutubeImportRun",
+    "YoutubeLead",
+    "YoutubeLeadSource",
+    "YoutubeRawRow",
 ]

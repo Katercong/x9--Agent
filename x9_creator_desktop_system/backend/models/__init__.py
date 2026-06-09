@@ -19,6 +19,7 @@ from .request_log import RequestLog
 from .review_task import ReviewTask
 from .system_log import SystemLog
 from .tag_definition import TagDefinition
+from .youtube_lead import YoutubeImportRun, YoutubeLead, YoutubeLeadSource, YoutubeRawRow
 
 __all__ = [
     "Creator",
@@ -42,4 +43,8 @@ __all__ = [
     "ReviewTask",
     "SystemLog",
     "TagDefinition",
+    "YoutubeImportRun",
+    "YoutubeLead",
+    "YoutubeLeadSource",
+    "YoutubeRawRow",
 ]

@@ -10,6 +10,7 @@ import Settings from './Settings';
 import CollectShop from './CollectShop';
 import CollectLeads from './CollectLeads';
 import CollectImport from './CollectImport';
+import CollectYoutube from './CollectYoutube';
 // 外贸部专属页面
 import ForeignTradeDashboard from './ForeignTradeDashboard';
 import CollectJobs from './CollectJobs';
@@ -37,6 +38,7 @@ export const departmentRoutes = (
     <Route path="/d/collect-shop" element={<CollectShop />} />
     <Route path="/d/collect-leads" element={<CollectLeads />} />
     <Route path="/d/collect-import" element={<CollectImport />} />
+    <Route path="/d/collect-youtube" element={<CollectYoutube />} />
     <Route path="/d/creators" element={<Creators />} />
     <Route path="/d/leads" element={<Leads />} />
     <Route path="/d/samples" element={<Samples />} />

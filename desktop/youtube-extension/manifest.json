@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "X9 YouTube Contact Preview",
+  "version": "0.2.3",
+  "description": "Experimental YouTube page collector for public video, channel, and loaded comment contact preview data.",
+  "permissions": [
+    "activeTab",
+    "downloads",
+    "scripting",
+    "sidePanel",
+    "storage",
+    "tabs",
+    "unlimitedStorage"
+  ],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://m.youtube.com/*",
+    "https://youtube.com/*",
+    "https://youtu.be/*",
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*"
+  ],
+  "action": {
+    "default_title": "X9 YouTube Contact Preview"
+  },
+  "side_panel": {
+    "default_path": "youtube_panel.html"
+  },
+  "background": {
+    "service_worker": "youtube_runner.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*",
+        "https://youtube.com/*"
+      ],
+      "js": [
+        "contact_detector.js",
+        "youtube_utils.js",
+        "youtube_content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

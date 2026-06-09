@@ -1,7 +1,6 @@
 import {
   LayoutDashboard,
   Users,
-  Search,
   Mail,
   Package,
   Video,
@@ -28,6 +27,7 @@ import {
   FileSpreadsheet,
   Briefcase,
   Heart,
+  Youtube,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -60,7 +60,8 @@ export const departmentMenu: MenuEntry[] = [
     ],
   },
   { key: 'd-creators', label: '达人管理', to: '/d/creators', icon: Users },
-  { key: 'd-leads', label: '线索管理', to: '/d/leads', icon: Search },
+  { key: 'd-leads', label: '客户推荐', to: '/d/leads', icon: Sparkles },
+  { key: 'd-customer-collect', label: '客户采集', to: '/d/collect-youtube', icon: Youtube },
   { key: 'd-emails', label: '邮件跟踪', to: '/d/emails', icon: Mail },
   { key: 'd-samples', label: '样品管理', to: '/d/samples', icon: Package },
   { key: 'd-videos', label: '视频管理', to: '/d/videos', icon: Video },
@@ -128,8 +129,9 @@ export const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/d/collect-shop': { title: '采集 · TikTok Shop', subtitle: 'affiliate-us 全自动采集 · 列表→详情漏斗与运行状态' },
   '/d/collect-leads': { title: '采集 · X9 线索', subtitle: 'www.tiktok.com 卡片流 · 联系方式覆盖与趋势' },
   '/d/collect-import': { title: '采集 · 表格导入', subtitle: 'CSV / XLSX 批量导入 · 国家 / Tier / 质量分布' },
+  '/d/collect-youtube': { title: '客户采集 · YouTube', subtitle: '本地插件采集、邮箱清洗、人工审查与入库明细' },
   '/d/creators': { title: '达人管理', subtitle: '管辖范围内达人的全生命周期管理' },
-  '/d/leads': { title: '线索管理', subtitle: '从爬虫池筛选高质量达人候选' },
+  '/d/leads': { title: '客户推荐', subtitle: '从爬虫池筛选高质量达人候选' },
   '/d/emails': { title: '达人邮件跟踪', subtitle: '按达人建联邮箱归档、同步回复并锁定原发件邮箱' },
   '/d/samples': { title: '样品管理', subtitle: '寄样物流、签收跟踪与异常预警' },
   '/d/videos': { title: '视频管理', subtitle: '在投视频实时表现监控' },
