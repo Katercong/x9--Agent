@@ -43,6 +43,7 @@ from .routers import (
     export as export_router,
     extension,
     extension_ingest_compat,
+    followup_agent,
     foreign_trade,
     imports,
     outreach,
@@ -80,6 +81,7 @@ app.include_router(db_router.router)
 app.include_router(extension.router)
 app.include_router(collector.router)
 app.include_router(dashboard.router)
+app.include_router(followup_agent.router)
 app.include_router(foreign_trade.router)
 app.include_router(company_leads.router)
 app.include_router(xhs_leads.router)
