@@ -1,5 +1,6 @@
 from .app_session import AppSession
 from .app_user import AppUser
+from .agent_followup_run import AgentFollowupRun
 from .bd_monthly_stat import BdMonthlyStat
 from .creator import Creator
 from .creator_recommendation import CreatorRecommendation
@@ -23,6 +24,7 @@ from .youtube_lead import YoutubeImportRun, YoutubeLead, YoutubeLeadSource, Yout
 
 __all__ = [
     "Creator",
+    "AgentFollowupRun",
     "AppSession",
     "AppUser",
     "BdMonthlyStat",

@@ -109,6 +109,7 @@ def _ensure_schema_columns() -> None:
         "email_auto_jobs",
         "gmail_account_quotas",
         "followup_tasks",
+        "agent_followup_runs",
         "outreach_templates",
         "extension_sessions",
         "extension_commands",
@@ -254,6 +255,34 @@ def _ensure_schema_columns() -> None:
             "ON followup_tasks (creator_id, status)"
         ))
 
+        _ensure_column(conn, "agent_followup_runs", "creator_id", "VARCHAR(120)")
+        _ensure_column(conn, "agent_followup_runs", "department_code", "VARCHAR(40)")
+        _ensure_column(conn, "agent_followup_runs", "inbound_message_id", "VARCHAR(120)")
+        _ensure_column(conn, "agent_followup_runs", "reply_category", "VARCHAR(40)")
+        _ensure_column(conn, "agent_followup_runs", "suggested_status", "VARCHAR(80)")
+        _ensure_column(conn, "agent_followup_runs", "llm_status", "VARCHAR(40)")
+        _ensure_column(conn, "agent_followup_runs", "context_json", "TEXT")
+        _ensure_column(conn, "agent_followup_runs", "output_json", "TEXT")
+        _ensure_column(conn, "agent_followup_runs", "validation_error", "TEXT")
+        _ensure_column(conn, "agent_followup_runs", "created_by", "VARCHAR(120)")
+        _ensure_column(conn, "agent_followup_runs", "created_at", "TIMESTAMP")
+        _ensure_column(conn, "agent_followup_runs", "updated_at", "TIMESTAMP")
+        _ensure_index(conn, "ix_agent_followup_runs_creator_id", "agent_followup_runs", "creator_id")
+        _ensure_index(conn, "ix_agent_followup_runs_inbound_message_id", "agent_followup_runs", "inbound_message_id")
+        _ensure_index(conn, "ix_agent_followup_runs_reply_category", "agent_followup_runs", "reply_category")
+        _ensure_index(conn, "ix_agent_followup_runs_suggested_status", "agent_followup_runs", "suggested_status")
+        _ensure_index(conn, "ix_agent_followup_runs_llm_status", "agent_followup_runs", "llm_status")
+        _ensure_index(conn, "ix_agent_followup_runs_created_by", "agent_followup_runs", "created_by")
+        _ensure_index(conn, "ix_agent_followup_runs_created_at", "agent_followup_runs", "created_at")
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_agent_followup_runs_creator_message "
+            "ON agent_followup_runs (creator_id, inbound_message_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_agent_followup_runs_department_created "
+            "ON agent_followup_runs (department_code, created_at)"
+        ))
+
         _ensure_column(conn, "gmail_sync_state", "last_history_id", "VARCHAR(120)")
         _ensure_column(conn, "gmail_sync_state", "last_sync_at", "TIMESTAMP")
         _ensure_column(conn, "gmail_sync_state", "next_sync_at", "TIMESTAMP")
@@ -323,6 +352,7 @@ def _ensure_schema_columns() -> None:
         _set_nulls_typed(conn, "app_users", "failed_login_count", 0)
         _set_nulls(conn, "followup_tasks", "status", "open")
         _set_nulls_typed(conn, "followup_tasks", "priority", 50)
+        _set_nulls(conn, "agent_followup_runs", "llm_status", "not_configured")
         _set_nulls(conn, "gmail_sync_state", "status", "idle")
         _set_nulls_typed(conn, "gmail_sync_state", "interval_minutes", 10)
         conn.execute(text("UPDATE gmail_sync_state SET interval_minutes = 10 WHERE interval_minutes IS NULL OR interval_minutes <> 10"))

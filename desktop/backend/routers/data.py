@@ -17,6 +17,7 @@ from sqlalchemy import func, inspect, or_, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..models.agent_followup_run import AgentFollowupRun
 from ..models.app_user import AppUser
 from ..models.creator import Creator
 from ..models.creator_recommendation import CreatorRecommendation
@@ -37,6 +38,7 @@ router = APIRouter(prefix="/api/local/data", tags=["data"])
 # Admin-SPA resource name -> x9db model. audit_log maps to system_logs so the
 # /a/audit page reads the desktop log table.
 RESOURCE_MODELS: dict[str, Any] = {
+    "agent_followup_runs": AgentFollowupRun,
     "creators": Creator,
     "outreach": OutreachEmail,
     "outreach_emails": OutreachEmail,
