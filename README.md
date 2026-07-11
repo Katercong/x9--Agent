@@ -25,6 +25,16 @@
 - `followup_tasks`：人工跟进待办表。
 - `agent_followup_runs`：Agent 每次运行的上下文、输出、LLM 状态和校验结果留痕表。
 
+`inbound_replies.processing_status` 表示回复处理进度：
+
+- `new`：已入库和分类，尚未完成 Agent 建议处理。
+- `ignored`：规则判定为退信或无效地址，不进入建议生成。
+- `need_ai_review`：分类或建议置信度不足，需要人工复核。
+- `suggestion_ready`：建议已生成并通过当前 MVP 的置信度门槛。
+
+回复意图另存于 `reply_category`，规则置信度、命中原因和分类时间分别记录在
+`classification_confidence`、`classification_reason` 和 `classified_at`。
+
 ## 本地运行
 
 ```powershell
@@ -40,6 +50,14 @@ uvicorn app.main:app --reload
 sqlite:///./data/replychat_agent.sqlite
 ```
 
+当前 MVP 尚未引入数据库迁移。若本地已经运行过旧版本，升级模型字段后请先重建可丢弃的开发库：
+
+```powershell
+Remove-Item -LiteralPath .\data\replychat_agent.sqlite -ErrorAction SilentlyContinue
+```
+
+下次启动服务时会按最新模型自动建表。请勿对需要保留数据的数据库执行该命令。
+
 可以通过 `DATABASE_URL` 切换数据库。MVP 代码保持 SQLAlchemy 兼容，后续可迁移 PostgreSQL。
 
 ## 常用接口
@@ -48,6 +66,7 @@ sqlite:///./data/replychat_agent.sqlite
 POST /api/followup-agent/creators
 POST /api/followup-agent/simulate-reply
 POST /api/followup-agent/runs
+GET  /api/followup-agent/replies/{reply_id}
 GET  /api/followup-agent/runs/{run_id}
 GET  /api/followup-agent/runs?creator_id=&inbound_reply_id=&limit=
 GET  /health

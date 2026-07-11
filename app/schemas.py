@@ -15,6 +15,21 @@ REPLY_CATEGORIES = {
 SUGGESTED_STATUSES = {"pending_followup", "pending_reply", "communicating", "dropped"}
 
 
+class ReplyClassification(BaseModel):
+    """规则层分类结果：与回复处理状态分开保存，便于解释和审计。"""
+
+    reply_category: str
+    confidence: float = Field(ge=0, le=1)
+    reason: str = Field(min_length=1)
+
+    @field_validator("reply_category")
+    @classmethod
+    def validate_reply_category(cls, value: str) -> str:
+        if value not in REPLY_CATEGORIES:
+            raise ValueError(f"unknown reply_category: {value}")
+        return value
+
+
 class CreatorIn(BaseModel):
     id: str
     department_code: str = "cross_border"

@@ -18,7 +18,7 @@ from .models import (
     InboundReply,
     OutreachEmail,
 )
-from .schemas import AgentSuggestion, REPLY_CATEGORIES
+from .schemas import AgentSuggestion, REPLY_CATEGORIES, ReplyClassification
 
 
 def new_id(prefix: str) -> str:
@@ -85,15 +85,35 @@ KEYWORDS = {
     ),
 }
 
+CLASSIFICATION_CONFIDENCE = {
+    "interested": 0.78,
+    "need_more_info": 0.82,
+    "negotiation": 0.76,
+    "not_interested": 0.84,
+    "bounce_or_invalid": 0.88,
+    "unclear": 0.52,
+}
+
 
 def classify_reply(text: str | None) -> str:
+    return classify_reply_result(text).reply_category
+
+
+def classify_reply_result(text: str | None) -> ReplyClassification:
+    """返回可直接落库的规则分类、置信度和命中原因。"""
+
     normalized = " ".join(str(text or "").strip().lower().split())
     if not normalized:
-        return "unclear"
+        return ReplyClassification(reply_category="unclear", confidence=0.52, reason="no_rule_match")
     for category in ("bounce_or_invalid", "not_interested", "negotiation", "need_more_info", "interested"):
-        if _contains_any(normalized, KEYWORDS[category]):
-            return category
-    return "unclear"
+        keyword = _find_keyword(normalized, KEYWORDS[category])
+        if keyword is not None:
+            return ReplyClassification(
+                reply_category=category,
+                confidence=CLASSIFICATION_CONFIDENCE[category],
+                reason=f"matched_keyword:{keyword}",
+            )
+    return ReplyClassification(reply_category="unclear", confidence=0.52, reason="no_rule_match")
 
 
 def build_followup_context(db: Session, inbound_reply_id: str) -> dict[str, Any]:
@@ -129,7 +149,7 @@ def build_followup_context(db: Session, inbound_reply_id: str) -> dict[str, Any]
         ).all()
     )
     return {
-        "reply_category": classify_reply("\n".join([reply.subject or "", reply.body])),
+        "reply_category": reply.reply_category or classify_reply("\n".join([reply.subject or "", reply.body])),
         "creator": _creator_snapshot(creator),
         "inbound_reply": _reply_snapshot(reply),
         "recent_outreach_emails": [_email_snapshot(row) for row in recent_emails],
@@ -241,15 +261,15 @@ def _suggested_reply(category: str) -> str:
     }[category]
 
 
-def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+def _find_keyword(text: str, keywords: tuple[str, ...]) -> str | None:
     for keyword in keywords:
         if keyword.isascii():
             if re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", text):
-                return True
+                return keyword
             continue
         if keyword in text:
-            return True
-    return False
+            return keyword
+    return None
 
 
 def _iso(value: Any) -> str | None:

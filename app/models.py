@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -45,6 +45,12 @@ class InboundReply(Base):
     body_format: Mapped[str] = mapped_column(String(10), default="plain")
     message_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 处理状态表示流程进度，规则分类表示达人意图，两者分开便于后续扩展状态机。
+    processing_status: Mapped[str] = mapped_column(String(40), default="new", index=True)
+    reply_category: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    classification_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    classification_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    classified_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
     updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

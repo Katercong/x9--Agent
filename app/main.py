@@ -13,6 +13,7 @@ from .models import AgentFollowupRun, Creator, InboundReply
 from .schemas import CreatorIn, RunAgentIn, SimulateReplyIn
 from .services import (
     build_followup_context,
+    classify_reply_result,
     ensure_pending_followup,
     generate_followup_suggestion,
     new_id,
@@ -66,11 +67,20 @@ def simulate_reply(body: SimulateReplyIn, db: Session = Depends(get_db)) -> dict
     )
     db.add(reply)
     db.flush()
-    ensure_pending_followup(db, creator, reply)
+    classification = classify_reply_result("\n".join([reply.subject or "", reply.body]))
+    reply.reply_category = classification.reply_category
+    reply.classification_confidence = classification.confidence
+    reply.classification_reason = classification.reason
+    reply.classified_at = datetime.utcnow()
+
     run_payload = None
-    if body.run_agent:
-        run = _create_run(db, reply.id)
-        run_payload = _run_to_dict(run)
+    if classification.reply_category == "bounce_or_invalid":
+        reply.processing_status = "ignored"
+    else:
+        ensure_pending_followup(db, creator, reply)
+        if body.run_agent:
+            run = _create_run(db, reply.id)
+            run_payload = _run_to_dict(run)
     db.commit()
     return {"ok": True, "reply": _reply_to_dict(reply), "run": run_payload}
 
@@ -80,6 +90,14 @@ def run_agent(body: RunAgentIn, db: Session = Depends(get_db)) -> dict[str, Any]
     run = _create_run(db, body.inbound_reply_id)
     db.commit()
     return {"ok": True, "run": _run_to_dict(run)}
+
+
+@app.get("/api/followup-agent/replies/{reply_id}")
+def get_reply(reply_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    reply = db.get(InboundReply, reply_id)
+    if reply is None:
+        raise HTTPException(status_code=404, detail="inbound reply not found")
+    return {"ok": True, "reply": _reply_to_dict(reply)}
 
 
 @app.get("/api/followup-agent/runs/{run_id}")
@@ -119,7 +137,13 @@ def list_runs(
 def _create_run(db: Session, inbound_reply_id: str) -> AgentFollowupRun:
     context = build_followup_context(db, inbound_reply_id)
     suggestion, llm_status = generate_followup_suggestion(context)
-    return persist_followup_run(db, context=context, suggestion=suggestion, llm_status=llm_status)
+    run = persist_followup_run(db, context=context, suggestion=suggestion, llm_status=llm_status)
+    reply = db.get(InboundReply, inbound_reply_id)
+    if reply is not None and reply.processing_status != "ignored":
+        rule_confidence = reply.classification_confidence or 0.0
+        reply.processing_status = "need_ai_review" if min(rule_confidence, suggestion.confidence) < 0.70 else "suggestion_ready"
+        db.flush()
+    return run
 
 
 def _creator_to_dict(row: Creator) -> dict[str, Any]:
@@ -127,7 +151,23 @@ def _creator_to_dict(row: Creator) -> dict[str, Any]:
 
 
 def _reply_to_dict(row: InboundReply) -> dict[str, Any]:
-    return {"id": row.id, "creator_id": row.creator_id, "direction": row.direction, "subject": row.subject}
+    return {
+        "id": row.id,
+        "creator_id": row.creator_id,
+        "direction": row.direction,
+        "from_email": row.from_email,
+        "to_email": row.to_email,
+        "subject": row.subject,
+        "body": row.body,
+        "body_format": row.body_format,
+        "message_at": row.message_at.isoformat() if row.message_at else None,
+        "processing_status": row.processing_status,
+        "reply_category": row.reply_category,
+        "classification_confidence": row.classification_confidence,
+        "classification_reason": row.classification_reason,
+        "classified_at": row.classified_at.isoformat() if row.classified_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
 
 
 def _run_to_dict(row: AgentFollowupRun) -> dict[str, Any]:
