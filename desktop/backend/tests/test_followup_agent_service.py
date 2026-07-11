@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,6 +9,7 @@ from desktop.backend.database.connection import SessionLocal, init_db
 from desktop.backend.models.creator import Creator
 from desktop.backend.models.creator_email_message import CreatorEmailMessage
 from desktop.backend.models.creator_outreach_event import CreatorOutreachEvent
+from desktop.backend.models.agent_followup_run import AgentFollowupRun
 from desktop.backend.models.followup_task import FollowupTask
 from desktop.backend.models.outreach_email import OutreachEmail
 
@@ -141,6 +143,95 @@ def test_build_followup_context_collects_creator_message_history_events_and_task
         assert context["open_followup_tasks"][0]["status"] == "open"
 
         _cleanup_context_rows(session, creator_id, inbound_id, sent_id, event_id, task_id)
+        session.commit()
+
+
+def test_generate_followup_suggestion_uses_validated_fallback_when_llm_not_configured(monkeypatch):
+    """模块 4：没有 OpenAI key 时也要产出可校验的确定性建议。"""
+    from desktop.backend.services import followup_agent
+
+    monkeypatch.setattr(followup_agent, "settings", SimpleNamespace(openai_api_key=""))
+    context = {
+        "reply_category": "need_more_info",
+        "creator": {"display_name": "Reply Agent Test"},
+        "inbound_message": {"body": "Can you send more campaign details?"},
+        "recent_outreach_emails": [],
+        "recent_events": [],
+        "open_followup_tasks": [],
+    }
+
+    suggestion, llm_status = followup_agent.generate_followup_suggestion(context)
+
+    assert llm_status == "not_configured"
+    assert suggestion.reply_category == "need_more_info"
+    assert suggestion.suggested_status == "pending_followup"
+    assert suggestion.next_action == "send_campaign_details"
+    assert 0 <= suggestion.confidence <= 1
+    assert suggestion.suggested_reply
+
+
+def test_agent_suggestion_rejects_invalid_category_and_confidence():
+    """模块 4：Pydantic schema 要挡住不受控的模型输出。"""
+    from pydantic import ValidationError
+
+    from desktop.backend.services.followup_agent import AgentSuggestion
+
+    with pytest.raises(ValidationError):
+        AgentSuggestion(
+            reply_category="random",
+            suggested_reply="Thanks.",
+            next_action="reply",
+            suggested_status="pending_followup",
+            confidence=1.5,
+            warnings=[],
+            reasoning_summary="Invalid category should fail.",
+        )
+
+
+def test_persist_followup_run_saves_context_output_and_validation_state(monkeypatch):
+    """模块 4：每次 agent 建议都要写入 agent_followup_runs 留痕表。"""
+    from desktop.backend.services import followup_agent
+
+    run_id = "afr_module4_persist"
+    inbound_id = "cem_module4_persist"
+    creator_id = "creator_module4_persist"
+    monkeypatch.setattr(followup_agent, "settings", SimpleNamespace(openai_api_key=""))
+
+    with SessionLocal() as session:
+        session.query(AgentFollowupRun).filter_by(id=run_id).delete()
+        context = {
+            "reply_category": "interested",
+            "creator": {"id": creator_id, "display_name": "Module 4 Creator"},
+            "inbound_message": {"id": inbound_id, "body": "Yes, sounds interesting."},
+            "recent_outreach_emails": [],
+            "recent_events": [],
+            "open_followup_tasks": [],
+        }
+        suggestion, llm_status = followup_agent.generate_followup_suggestion(context)
+
+        saved = followup_agent.persist_followup_run(
+            session,
+            context=context,
+            suggestion=suggestion,
+            llm_status=llm_status,
+            created_by="module4_test",
+            run_id=run_id,
+        )
+        session.commit()
+
+        row = session.get(AgentFollowupRun, saved.id)
+        assert row is not None
+        assert row.id == run_id
+        assert row.creator_id == creator_id
+        assert row.inbound_message_id == inbound_id
+        assert row.reply_category == "interested"
+        assert row.suggested_status == "pending_followup"
+        assert row.llm_status == "not_configured"
+        assert row.validation_error is None
+        assert "Module 4 Creator" in (row.context_json or "")
+        assert "suggested_reply" in (row.output_json or "")
+
+        session.delete(row)
         session.commit()
 
 

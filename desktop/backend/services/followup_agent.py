@@ -1,18 +1,40 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import date, datetime
 from typing import Any
 
 from fastapi import HTTPException
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..config import settings
+from ..models.agent_followup_run import AgentFollowupRun
 from ..models.creator import Creator
 from ..models.creator_email_message import CreatorEmailMessage
 from ..models.creator_outreach_event import CreatorOutreachEvent
 from ..models.followup_task import FollowupTask
 from ..models.outreach_email import OutreachEmail
+from ..utils.id_utils import new_id
+
+
+REPLY_CATEGORIES = {
+    "interested",
+    "need_more_info",
+    "negotiation",
+    "not_interested",
+    "bounce_or_invalid",
+    "unclear",
+}
+
+SUGGESTED_STATUSES = {
+    "pending_followup",
+    "pending_reply",
+    "communicating",
+    "dropped",
+}
 
 
 BOUNCE_KEYWORDS = (
@@ -84,6 +106,32 @@ INTERESTED_KEYWORDS = (
 )
 
 
+class AgentSuggestion(BaseModel):
+    """LLM 或 fallback 必须产出的结构化建议。"""
+
+    reply_category: str
+    suggested_reply: str = Field(min_length=1)
+    next_action: str = Field(min_length=1)
+    suggested_status: str
+    confidence: float = Field(ge=0, le=1)
+    warnings: list[str] = Field(default_factory=list)
+    reasoning_summary: str = Field(min_length=1)
+
+    @field_validator("reply_category")
+    @classmethod
+    def _validate_reply_category(cls, value: str) -> str:
+        if value not in REPLY_CATEGORIES:
+            raise ValueError(f"unknown reply_category: {value}")
+        return value
+
+    @field_validator("suggested_status")
+    @classmethod
+    def _validate_suggested_status(cls, value: str) -> str:
+        if value not in SUGGESTED_STATUSES:
+            raise ValueError(f"unknown suggested_status: {value}")
+        return value
+
+
 def classify_reply(text: str | None) -> str:
     """用确定性规则给达人回复做第一层分类，作为后续 LLM 的稳定先验。"""
 
@@ -153,6 +201,122 @@ def build_followup_context(db: Session, inbound_message_id: str) -> dict[str, An
         "recent_events": [_event_snapshot(row) for row in recent_events],
         "open_followup_tasks": [_task_snapshot(row) for row in open_tasks],
     }
+
+
+def generate_followup_suggestion(context: dict[str, Any]) -> tuple[AgentSuggestion, str]:
+    """生成后续人工跟进建议；MVP 先保证无 key 时有稳定 fallback。"""
+
+    category = str(context.get("reply_category") or "unclear")
+    if category not in REPLY_CATEGORIES:
+        category = "unclear"
+
+    # 后续接入 LLM 时仍复用 AgentSuggestion 做最终边界校验。
+    if not settings.openai_api_key:
+        return _fallback_suggestion(category), "not_configured"
+    return _fallback_suggestion(category), "fallback"
+
+
+def persist_followup_run(
+    db: Session,
+    *,
+    context: dict[str, Any],
+    suggestion: AgentSuggestion | dict[str, Any] | None,
+    llm_status: str,
+    created_by: str | None = None,
+    run_id: str | None = None,
+    validation_error: str | None = None,
+) -> AgentFollowupRun:
+    """把 agent 运行输入和输出写入留痕表，方便后续复盘。"""
+
+    inbound_message = context.get("inbound_message") or {}
+    creator = context.get("creator") or {}
+    output_payload: dict[str, Any] | None = None
+    suggested_status: str | None = None
+    reply_category = str(context.get("reply_category") or "") or None
+
+    if isinstance(suggestion, AgentSuggestion):
+        output_payload = _model_to_dict(suggestion)
+        reply_category = suggestion.reply_category
+        suggested_status = suggestion.suggested_status
+    elif isinstance(suggestion, dict):
+        validated = AgentSuggestion(**suggestion)
+        output_payload = _model_to_dict(validated)
+        reply_category = validated.reply_category
+        suggested_status = validated.suggested_status
+
+    row = AgentFollowupRun(
+        id=run_id or new_id("afr"),
+        department_code=str(creator.get("department_code") or inbound_message.get("department_code") or "cross_border"),
+        creator_id=str(creator.get("id") or inbound_message.get("creator_id") or ""),
+        inbound_message_id=inbound_message.get("id"),
+        reply_category=reply_category,
+        suggested_status=suggested_status,
+        llm_status=llm_status,
+        context_json=json.dumps(context, ensure_ascii=False, default=str),
+        output_json=json.dumps(output_payload, ensure_ascii=False, default=str) if output_payload is not None else None,
+        validation_error=validation_error,
+        created_by=created_by,
+    )
+    db.add(row)
+    return row
+
+
+def _fallback_suggestion(category: str) -> AgentSuggestion:
+    templates: dict[str, dict[str, Any]] = {
+        "interested": {
+            "suggested_reply": "Thanks for your interest. I will send the collaboration details, product info, and next steps for your review.",
+            "next_action": "send_campaign_details",
+            "suggested_status": "pending_followup",
+            "confidence": 0.78,
+            "warnings": [],
+            "reasoning_summary": "The creator expressed positive collaboration intent.",
+        },
+        "need_more_info": {
+            "suggested_reply": "Thanks for getting back to us. I will share the campaign details, product information, timeline, and expected deliverables here.",
+            "next_action": "send_campaign_details",
+            "suggested_status": "pending_followup",
+            "confidence": 0.82,
+            "warnings": [],
+            "reasoning_summary": "The creator asked for more information before deciding.",
+        },
+        "negotiation": {
+            "suggested_reply": "Thanks for your reply. I will confirm the budget, sample arrangement, commission, and deliverable requirements before we move forward.",
+            "next_action": "clarify_terms",
+            "suggested_status": "pending_followup",
+            "confidence": 0.76,
+            "warnings": ["Check pricing and commission terms before promising anything."],
+            "reasoning_summary": "The creator is discussing commercial terms or sample conditions.",
+        },
+        "not_interested": {
+            "suggested_reply": "Thanks for letting us know. We appreciate your time and will avoid further follow-up on this collaboration.",
+            "next_action": "acknowledge_and_close",
+            "suggested_status": "dropped",
+            "confidence": 0.84,
+            "warnings": ["Do not continue outreach unless the creator reopens the conversation."],
+            "reasoning_summary": "The creator clearly declined the collaboration.",
+        },
+        "bounce_or_invalid": {
+            "suggested_reply": "This looks like a delivery failure. Please verify the creator email or find another contact channel before continuing.",
+            "next_action": "verify_contact_method",
+            "suggested_status": "pending_followup",
+            "confidence": 0.88,
+            "warnings": ["Do not send another email until the address is verified."],
+            "reasoning_summary": "The message indicates an invalid mailbox or failed delivery.",
+        },
+        "unclear": {
+            "suggested_reply": "Thanks for your reply. Could you share whether you are interested in the collaboration and if you need any specific details from us?",
+            "next_action": "ask_clarifying_question",
+            "suggested_status": "pending_followup",
+            "confidence": 0.52,
+            "warnings": ["Intent is unclear; keep the reply short and ask one direct question."],
+            "reasoning_summary": "The reply does not provide enough signal to classify intent confidently.",
+        },
+    }
+    return AgentSuggestion(reply_category=category, **templates[category])
+
+
+def _model_to_dict(model: AgentSuggestion) -> dict[str, Any]:
+    return model.model_dump() if hasattr(model, "model_dump") else model.dict()
 
 
 def _normalize_text(text: str | None) -> str:
