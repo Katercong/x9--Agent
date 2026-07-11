@@ -35,6 +35,11 @@
 回复意图另存于 `reply_category`，规则置信度、命中原因和分类时间分别记录在
 `classification_confidence`、`classification_reason` 和 `classified_at`。
 
+`POST /api/followup-agent/simulate-reply` 对同一封模拟回复是幂等的。它使用部门、达人、
+收发邮箱、主题和正文联合判断重复；首次响应 `duplicate=false`，重复请求返回已有回复和
+已有 run，且不会重复创建事件或待办。若首次请求未运行 Agent，后续相同请求带
+`run_agent=true` 时会补跑一次。已标记为 `ignored` 的回复不能通过 `/runs` 再次运行。
+
 ## 本地运行
 
 ```powershell

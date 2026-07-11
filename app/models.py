@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -33,14 +33,26 @@ class InboundReply(Base):
     """入站回复表：独立 MVP 中承接原项目 creator_email_messages 的 inbound 角色。"""
 
     __tablename__ = "inbound_replies"
+    __table_args__ = (
+        UniqueConstraint(
+            "department_code",
+            "creator_id",
+            "direction",
+            "from_email",
+            "to_email",
+            "subject",
+            "body",
+            name="uq_inbound_replies_message_content",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(120), primary_key=True)
     department_code: Mapped[str] = mapped_column(String(40), default="cross_border", index=True)
     creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id", ondelete="CASCADE"), index=True)
     direction: Mapped[str] = mapped_column(String(20), default="inbound", index=True)
-    from_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
-    to_email: Mapped[str | None] = mapped_column(String(1000), nullable=True)
-    subject: Mapped[str | None] = mapped_column(Text, nullable=True)
+    from_email: Mapped[str] = mapped_column(String(320), default="")
+    to_email: Mapped[str] = mapped_column(String(1000), default="")
+    subject: Mapped[str] = mapped_column(Text, default="")
     body: Mapped[str] = mapped_column(Text)
     body_format: Mapped[str] = mapped_column(String(10), default="plain")
     message_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)

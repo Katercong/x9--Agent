@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .database import get_db, init_db
@@ -52,21 +53,32 @@ def simulate_reply(body: SimulateReplyIn, db: Session = Depends(get_db)) -> dict
     creator = db.get(Creator, body.creator_id)
     if creator is None:
         raise HTTPException(status_code=404, detail="creator not found")
+    message_fields = _normalized_message_fields(creator, body)
+    existing_reply = _find_duplicate_reply(db, **message_fields)
+    if existing_reply is not None:
+        run_payload = _get_or_create_existing_run(db, existing_reply, body.run_agent)
+        db.commit()
+        return {"ok": True, "duplicate": True, "reply": _reply_to_dict(existing_reply), "run": run_payload}
+
     reply = InboundReply(
         id=new_id("ir"),
-        department_code=creator.department_code,
-        creator_id=creator.id,
-        direction="inbound",
-        from_email=body.from_email or creator.email,
-        to_email=body.to_email,
-        subject=body.subject,
-        body=body.body,
+        **message_fields,
         body_format=body.body_format,
         message_at=datetime.utcnow(),
         metadata_json=json.dumps({"source": "simulate_reply"}, ensure_ascii=False),
     )
     db.add(reply)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # 业务预查后仍可能有并发请求先一步写入，回滚后返回已存在的同一回复。
+        db.rollback()
+        existing_reply = _find_duplicate_reply(db, **message_fields)
+        if existing_reply is None:
+            raise
+        run_payload = _get_or_create_existing_run(db, existing_reply, body.run_agent)
+        db.commit()
+        return {"ok": True, "duplicate": True, "reply": _reply_to_dict(existing_reply), "run": run_payload}
     classification = classify_reply_result("\n".join([reply.subject or "", reply.body]))
     reply.reply_category = classification.reply_category
     reply.classification_confidence = classification.confidence
@@ -82,11 +94,14 @@ def simulate_reply(body: SimulateReplyIn, db: Session = Depends(get_db)) -> dict
             run = _create_run(db, reply.id)
             run_payload = _run_to_dict(run)
     db.commit()
-    return {"ok": True, "reply": _reply_to_dict(reply), "run": run_payload}
+    return {"ok": True, "duplicate": False, "reply": _reply_to_dict(reply), "run": run_payload}
 
 
 @app.post("/api/followup-agent/runs")
 def run_agent(body: RunAgentIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+    reply = db.get(InboundReply, body.inbound_reply_id)
+    if reply is not None and reply.processing_status == "ignored":
+        raise HTTPException(status_code=409, detail="ignored reply cannot run agent")
     run = _create_run(db, body.inbound_reply_id)
     db.commit()
     return {"ok": True, "run": _run_to_dict(run)}
@@ -144,6 +159,38 @@ def _create_run(db: Session, inbound_reply_id: str) -> AgentFollowupRun:
         reply.processing_status = "need_ai_review" if min(rule_confidence, suggestion.confidence) < 0.70 else "suggestion_ready"
         db.flush()
     return run
+
+
+def _normalized_message_fields(creator: Creator, body: SimulateReplyIn) -> dict[str, str]:
+    """统一可选邮件字段的空值，确保联合唯一约束不会被 NULL 绕过。"""
+
+    return {
+        "department_code": creator.department_code,
+        "creator_id": creator.id,
+        "direction": "inbound",
+        "from_email": body.from_email if body.from_email is not None else (creator.email or ""),
+        "to_email": body.to_email or "",
+        "subject": body.subject or "",
+        "body": body.body,
+    }
+
+
+def _find_duplicate_reply(db: Session, **message_fields: str) -> InboundReply | None:
+    return db.scalars(select(InboundReply).filter_by(**message_fields)).first()
+
+
+def _get_or_create_existing_run(db: Session, reply: InboundReply, run_agent: bool) -> dict[str, Any] | None:
+    if not run_agent or reply.processing_status == "ignored":
+        return None
+    run = db.scalars(
+        select(AgentFollowupRun)
+        .where(AgentFollowupRun.inbound_reply_id == reply.id)
+        .order_by(AgentFollowupRun.created_at.desc())
+        .limit(1)
+    ).first()
+    if run is None:
+        run = _create_run(db, reply.id)
+    return _run_to_dict(run)
 
 
 def _creator_to_dict(row: Creator) -> dict[str, Any]:

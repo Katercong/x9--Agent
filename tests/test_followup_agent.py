@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import datetime
 
 os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.NamedTemporaryFile(delete=False, suffix='.db').name}"
 
+import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import func, select  # noqa: E402
+from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 from app.database import SessionLocal, init_db  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import AgentFollowupRun, Creator, CreatorOutreachEvent, FollowupTask  # noqa: E402
+from app.models import AgentFollowupRun, Creator, CreatorOutreachEvent, FollowupTask, InboundReply  # noqa: E402
 from app import services  # noqa: E402
 from app.services import classify_reply  # noqa: E402
 
@@ -162,6 +165,122 @@ def test_get_reply_returns_404_for_unknown_id():
     response = client.get("/api/followup-agent/replies/missing_reply")
     assert response.status_code == 404
     assert response.json()["detail"] == "inbound reply not found"
+
+
+def test_duplicate_reply_is_idempotent_and_does_not_repeat_side_effects():
+    init_db()
+    client = TestClient(app)
+    creator_id = "creator_duplicate"
+    _create_creator(client, creator_id)
+    request_body = {
+        "creator_id": creator_id,
+        "from_email": "duplicate@example.com",
+        "to_email": "bd@example.com",
+        "subject": "Re: Campaign",
+        "body": "Sounds interesting.",
+        "run_agent": True,
+    }
+
+    first = client.post("/api/followup-agent/simulate-reply", json=request_body)
+    second = client.post("/api/followup-agent/simulate-reply", json=request_body)
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["duplicate"] is False
+    assert second.json()["duplicate"] is True
+    assert second.json()["reply"]["id"] == first.json()["reply"]["id"]
+    assert second.json()["run"]["id"] == first.json()["run"]["id"]
+
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(InboundReply).where(InboundReply.creator_id == creator_id)) == 1
+        assert db.scalar(
+            select(func.count()).select_from(CreatorOutreachEvent).where(CreatorOutreachEvent.creator_id == creator_id)
+        ) == 1
+        assert db.scalar(select(func.count()).select_from(FollowupTask).where(FollowupTask.creator_id == creator_id)) == 1
+        assert db.scalar(
+            select(func.count()).select_from(AgentFollowupRun).where(AgentFollowupRun.creator_id == creator_id)
+        ) == 1
+
+
+def test_changed_subject_creates_a_distinct_reply():
+    init_db()
+    client = TestClient(app)
+    creator_id = "creator_distinct"
+    _create_creator(client, creator_id)
+    base = {"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": False}
+
+    first = client.post("/api/followup-agent/simulate-reply", json={**base, "subject": "Re: Campaign A"})
+    second = client.post("/api/followup-agent/simulate-reply", json={**base, "subject": "Re: Campaign B"})
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["duplicate"] is False
+    assert second.json()["duplicate"] is False
+    assert first.json()["reply"]["id"] != second.json()["reply"]["id"]
+
+
+def test_duplicate_reply_can_be_run_later_without_creating_a_second_reply():
+    init_db()
+    client = TestClient(app)
+    creator_id = "creator_duplicate_later_run"
+    _create_creator(client, creator_id)
+    request_body = {"creator_id": creator_id, "subject": "Re: Campaign", "body": "Sounds interesting."}
+
+    first = client.post("/api/followup-agent/simulate-reply", json={**request_body, "run_agent": False})
+    second = client.post("/api/followup-agent/simulate-reply", json={**request_body, "run_agent": True})
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["duplicate"] is False
+    assert first.json()["run"] is None
+    assert second.json()["duplicate"] is True
+    assert second.json()["reply"]["id"] == first.json()["reply"]["id"]
+    assert second.json()["run"] is not None
+
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(InboundReply).where(InboundReply.creator_id == creator_id)) == 1
+        assert db.scalar(
+            select(func.count()).select_from(AgentFollowupRun).where(AgentFollowupRun.creator_id == creator_id)
+        ) == 1
+
+
+def test_database_unique_constraint_rejects_duplicate_reply_when_business_check_is_bypassed():
+    init_db()
+    client = TestClient(app)
+    creator_id = "creator_database_unique"
+    _create_creator(client, creator_id)
+    values = {
+        "department_code": "cross_border",
+        "creator_id": creator_id,
+        "direction": "inbound",
+        "from_email": "",
+        "to_email": "",
+        "subject": "",
+        "body": "Same body",
+        "body_format": "plain",
+        "message_at": datetime.utcnow(),
+    }
+
+    with SessionLocal() as db:
+        db.add(InboundReply(id="ir_unique_first", **values))
+        db.commit()
+        db.add(InboundReply(id="ir_unique_second", **values))
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+
+def test_running_an_ignored_reply_returns_conflict():
+    init_db()
+    client = TestClient(app)
+    creator_id = "creator_ignored_run"
+    _create_creator(client, creator_id)
+    reply = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Delivery failed, invalid address.", "run_agent": False},
+    )
+    assert reply.status_code == 200, reply.text
+
+    response = client.post("/api/followup-agent/runs", json={"inbound_reply_id": reply.json()["reply"]["id"]})
+    assert response.status_code == 409
+    assert response.json()["detail"] == "ignored reply cannot run agent"
 
 
 def _create_creator(client: TestClient, creator_id: str) -> None:
