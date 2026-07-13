@@ -20,6 +20,7 @@ from .models import (
     OutreachEmail,
     Product,
 )
+from .prompts import PromptPackage, build_prompt_package
 from .schemas import AgentSuggestion, REPLY_CATEGORIES, ReplyClassification
 
 
@@ -216,6 +217,7 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
     """集中处理建议生成、失败留痕、上下文警告和最终状态更新。"""
 
     context = build_followup_context(db, inbound_reply_id)
+    prompt_package = build_prompt_package(context)
     raw_output, llm_status = generate_raw_followup_output(context)
     try:
         suggestion = parse_followup_suggestion(raw_output)
@@ -226,6 +228,7 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
             raw_output=raw_output,
             llm_status="invalid_json",
             validation_error=str(exc),
+            prompt_package=prompt_package,
         )
     except ValidationError as exc:
         return _persist_failed_run(
@@ -234,13 +237,20 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
             raw_output=raw_output,
             llm_status="validation_failed",
             validation_error=str(exc),
+            prompt_package=prompt_package,
         )
 
     context_warnings = _context_warnings(context)
     if context_warnings:
         warnings = list(dict.fromkeys([*suggestion.warnings, *context_warnings]))
         suggestion = suggestion.model_copy(update={"warnings": warnings})
-    run = persist_followup_run(db, context=context, suggestion=suggestion, llm_status=llm_status)
+    run = persist_followup_run(
+        db,
+        context=context,
+        suggestion=suggestion,
+        llm_status=llm_status,
+        prompt_package=prompt_package,
+    )
     _update_reply_processing_status(
         db,
         inbound_reply_id,
@@ -258,6 +268,7 @@ def persist_followup_run(
     llm_status: str,
     raw_output: str | None = None,
     validation_error: str | None = None,
+    prompt_package: PromptPackage | None = None,
     created_by: str | None = None,
 ) -> AgentFollowupRun:
     creator = context.get("creator") or {}
@@ -277,6 +288,8 @@ def persist_followup_run(
             default=str,
         ),
         validation_error=validation_error,
+        prompt_version=prompt_package.prompt_version if prompt_package else None,
+        rendered_prompt=prompt_package.rendered_prompt if prompt_package else None,
         created_by=created_by,
     )
     db.add(row)
@@ -291,6 +304,7 @@ def _persist_failed_run(
     raw_output: str,
     llm_status: str,
     validation_error: str,
+    prompt_package: PromptPackage,
 ) -> AgentFollowupRun:
     run = persist_followup_run(
         db,
@@ -299,6 +313,7 @@ def _persist_failed_run(
         llm_status=llm_status,
         raw_output=raw_output,
         validation_error=validation_error,
+        prompt_package=prompt_package,
     )
     reply = context.get("inbound_reply") or {}
     _update_reply_processing_status(db, str(reply.get("id") or ""), suggestion=None, requires_manual_review=True)
@@ -536,3 +551,4 @@ def _event_snapshot(row: CreatorOutreachEvent) -> dict[str, Any]:
 
 def _task_snapshot(row: FollowupTask) -> dict[str, Any]:
     return {"id": row.id, "task_type": row.task_type, "status": row.status, "reason": row.reason, "due_at": _iso(row.due_at)}
+

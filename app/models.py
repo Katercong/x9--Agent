@@ -160,6 +160,8 @@ class AgentFollowupRun(Base):
     context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     output_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     validation_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    rendered_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
     updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

@@ -364,6 +364,8 @@ def _run_to_dict(row: AgentFollowupRun) -> dict[str, Any]:
         "context": _load_json(row.context_json),
         "output": _load_json(row.output_json),
         "validation_error": row.validation_error,
+        "prompt_version": row.prompt_version,
+        "rendered_prompt": row.rendered_prompt,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 

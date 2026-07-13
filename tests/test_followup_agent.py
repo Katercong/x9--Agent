@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from datetime import datetime
+import importlib
 import json
 
 os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.NamedTemporaryFile(delete=False, suffix='.db').name}"
@@ -339,6 +340,81 @@ def test_product_put_and_patch_return_404_for_missing_product():
     )
     assert put_response.status_code == 404
     assert patch_response.status_code == 404
+
+
+def test_prompt_package_masks_contact_data_detects_chinese_and_respects_budget():
+    prompts = importlib.import_module("app.prompts")
+    context = {
+        "reply_category": "interested",
+        "product": {
+            "name": "Baby Care Starter",
+            "summary": "A product page is https://product.example.com/private.",
+            "selling_points": ["gentle formula"],
+            "target_audience": "Parents",
+            "collaboration_requirements": "One video.",
+            "forbidden_claims": ["No cure claims"],
+            "notes": None,
+        },
+        "creator": {
+            "handle": "creator_handle",
+            "display_name": "Creator Name",
+            "email": "creator@example.com",
+            "profile_url": "https://social.example.com/creator",
+            "bio": "Parent creator",
+            "followers_count": 5000,
+            "recommendation_reason": "Audience fit",
+            "recommended_product_type": "baby care",
+            "recommended_collab_type": "affiliate",
+        },
+        "inbound_reply": {
+            "subject": "合作咨询",
+            "body": "我有兴趣，请联系 hidden@example.com，详情见 https://private.example.com。" + "甲" * 13000,
+        },
+        "recent_inbound_replies": [{"body": "Earlier reply from history@example.com"}],
+        "recent_outreach_emails": [{"subject": "Campaign", "body": "Visit https://outreach.example.com"}],
+        "recent_events": [{"event_type": "pending_followup", "note": "Previous event"}],
+        "open_followup_tasks": [{"task_type": "reply_followup_1", "reason": "Follow up"}],
+    }
+
+    package = prompts.build_prompt_package(context)
+    assert package.prompt_version == "reply_followup_v1"
+    assert package.reply_language == "zh"
+    assert len(package.rendered_prompt) <= 12000
+    assert "[内容已省略]" in package.rendered_prompt
+    assert "hidden@example.com" not in package.rendered_prompt
+    assert "creator@example.com" not in package.rendered_prompt
+    assert "https://private.example.com" not in package.rendered_prompt
+    assert "https://social.example.com/creator" not in package.rendered_prompt
+    assert "我有兴趣" in package.rendered_prompt
+
+
+def test_agent_run_persists_redacted_prompt_package():
+    client = TestClient(app)
+    creator_id = "creator_prompt_audit"
+    _create_creator(
+        client,
+        creator_id,
+        profile_url="https://social.example.com/private-profile",
+        email="creator-audit@example.com",
+    )
+
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={
+            "creator_id": creator_id,
+            "from_email": "inbound-audit@example.com",
+            "body": "Sounds interesting. Contact hidden-audit@example.com at https://private.example.com.",
+            "run_agent": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    run = response.json()["run"]
+    assert run["prompt_version"] == "reply_followup_v1"
+    assert run["rendered_prompt"]
+    assert "inbound-audit@example.com" not in run["rendered_prompt"]
+    assert "creator-audit@example.com" not in run["rendered_prompt"]
+    assert "https://private.example.com" not in run["rendered_prompt"]
+    assert "https://social.example.com/private-profile" not in run["rendered_prompt"]
 
 
 def test_post_creator_returns_conflict_when_creator_already_exists():
