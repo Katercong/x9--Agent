@@ -70,7 +70,7 @@ def test_simulate_reply_runs_agent_and_persists_run():
             "recommended_product_type": "baby care",
         },
     )
-    assert creator.status_code == 200, creator.text
+    assert creator.status_code == 201, creator.text
 
     reply = client.post(
         "/api/followup-agent/simulate-reply",
@@ -225,6 +225,102 @@ def test_explicit_opt_out_marks_do_not_contact_pending_confirmation():
         assert db.scalar(
             select(func.count()).select_from(FollowupTask).where(FollowupTask.creator_id == creator_id)
         ) == 0
+
+
+def test_post_creator_returns_conflict_when_creator_already_exists():
+    client = TestClient(app)
+    creator_id = "creator_duplicate_create"
+    _create_creator(client, creator_id)
+
+    response = client.post(
+        "/api/followup-agent/creators",
+        json={"id": creator_id, "handle": "another_handle"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "creator already exists"
+
+
+def test_put_creator_replaces_full_profile_and_can_clear_nullable_fields():
+    client = TestClient(app)
+    creator_id = "creator_put_replace"
+    _create_creator(
+        client,
+        creator_id,
+        display_name="Original Name",
+        bio="Original bio",
+        profile_url="https://example.com/original",
+    )
+
+    response = client.put(
+        f"/api/followup-agent/creators/{creator_id}",
+        json=_creator_replace_payload(
+            handle="replaced_handle",
+            display_name=None,
+            profile_url=None,
+            bio=None,
+            email="replaced@example.com",
+            recommendation_reason="Replaced profile.",
+        ),
+    )
+    assert response.status_code == 200, response.text
+
+    with SessionLocal() as db:
+        creator = db.get(Creator, creator_id)
+        assert creator is not None
+        assert creator.handle == "replaced_handle"
+        assert creator.display_name is None
+        assert creator.profile_url is None
+        assert creator.bio is None
+        assert creator.email == "replaced@example.com"
+        assert creator.recommendation_reason == "Replaced profile."
+
+
+def test_patch_creator_preserves_omitted_fields_and_clears_explicit_null():
+    client = TestClient(app)
+    creator_id = "creator_patch_profile"
+    _create_creator(
+        client,
+        creator_id,
+        display_name="Original Name",
+        bio="Original bio",
+        profile_url="https://example.com/original",
+        email="original@example.com",
+    )
+
+    first_patch = client.patch(
+        f"/api/followup-agent/creators/{creator_id}",
+        json={"display_name": "Patched Name"},
+    )
+    assert first_patch.status_code == 200, first_patch.text
+    second_patch = client.patch(
+        f"/api/followup-agent/creators/{creator_id}",
+        json={"bio": None},
+    )
+    assert second_patch.status_code == 200, second_patch.text
+
+    with SessionLocal() as db:
+        creator = db.get(Creator, creator_id)
+        assert creator is not None
+        assert creator.display_name == "Patched Name"
+        assert creator.bio is None
+        assert creator.profile_url == "https://example.com/original"
+        assert creator.email == "original@example.com"
+
+
+def test_put_and_patch_return_404_for_missing_creator():
+    client = TestClient(app)
+    creator_id = "creator_missing_update"
+
+    put_response = client.put(
+        f"/api/followup-agent/creators/{creator_id}",
+        json=_creator_replace_payload(handle="missing_handle"),
+    )
+    patch_response = client.patch(
+        f"/api/followup-agent/creators/{creator_id}",
+        json={"display_name": "Missing"},
+    )
+    assert put_response.status_code == 404
+    assert patch_response.status_code == 404
 
 
 def test_get_reply_returns_404_for_unknown_id():
@@ -467,15 +563,37 @@ def _create_creator(
     creator_id: str,
     recommendation_reason: str | None = "Audience matches the campaign.",
     recommended_product_type: str | None = "baby care",
+    **overrides: object,
 ) -> None:
+    payload = {
+        "id": creator_id,
+        "handle": creator_id,
+        "email": f"{creator_id}@example.com",
+        "recommendation_reason": recommendation_reason,
+        "recommended_product_type": recommended_product_type,
+    }
+    payload.update(overrides)
     response = client.post(
         "/api/followup-agent/creators",
-        json={
-            "id": creator_id,
-            "handle": creator_id,
-            "email": f"{creator_id}@example.com",
-            "recommendation_reason": recommendation_reason,
-            "recommended_product_type": recommended_product_type,
-        },
+        json=payload,
     )
-    assert response.status_code == 200, response.text
+    assert response.status_code == 201, response.text
+
+
+def _creator_replace_payload(**overrides: object) -> dict[str, object | None]:
+    payload: dict[str, object | None] = {
+        "department_code": "cross_border",
+        "platform": "tiktok",
+        "handle": "replacement_handle",
+        "display_name": "Replacement Name",
+        "profile_url": "https://example.com/replacement",
+        "bio": "Replacement bio",
+        "email": "replacement@example.com",
+        "followers_count": 1000,
+        "owner_bd": "bd_1",
+        "recommendation_reason": "Replacement reason.",
+        "recommended_product_type": "baby care",
+        "recommended_collab_type": "affiliate",
+    }
+    payload.update(overrides)
+    return payload

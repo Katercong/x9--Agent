@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from .database import get_db, init_db
 from .models import AgentFollowupRun, Creator, InboundReply
-from .schemas import CreatorIn, RunAgentIn, SimulateReplyIn
+from .schemas import CreatorCreateIn, CreatorPatchIn, CreatorReplaceIn, RunAgentIn, SimulateReplyIn
 from .services import (
     classify_reply_result,
     ensure_pending_followup,
@@ -34,13 +34,46 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "x9-replychat-agent"}
 
 
-@app.post("/api/followup-agent/creators")
-def upsert_creator(body: CreatorIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+@app.post("/api/followup-agent/creators", status_code=201)
+def create_creator(body: CreatorCreateIn, db: Session = Depends(get_db)) -> dict[str, Any]:
     creator = db.get(Creator, body.id)
+    if creator is not None:
+        raise HTTPException(status_code=409, detail="creator already exists")
+    values = body.model_dump()
+    creator = Creator(**values)
+    db.add(creator)
+    db.commit()
+    db.refresh(creator)
+    return {"ok": True, "creator": _creator_to_dict(creator)}
+
+
+@app.put("/api/followup-agent/creators/{creator_id}")
+def replace_creator(
+    creator_id: str,
+    body: CreatorReplaceIn,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    creator = db.get(Creator, creator_id)
     if creator is None:
-        creator = Creator(id=body.id, handle=body.handle)
-        db.add(creator)
+        raise HTTPException(status_code=404, detail="creator not found")
     for key, value in body.model_dump().items():
+        setattr(creator, key, value)
+    db.commit()
+    db.refresh(creator)
+    return {"ok": True, "creator": _creator_to_dict(creator)}
+
+
+@app.patch("/api/followup-agent/creators/{creator_id}")
+def patch_creator(
+    creator_id: str,
+    body: CreatorPatchIn,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    creator = db.get(Creator, creator_id)
+    if creator is None:
+        raise HTTPException(status_code=404, detail="creator not found")
+    # exclude_unset 能区分“字段未提供”和“调用方显式传 null”。
+    for key, value in body.model_dump(exclude_unset=True).items():
         setattr(creator, key, value)
     db.commit()
     db.refresh(creator)

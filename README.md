@@ -83,6 +83,8 @@ Remove-Item -LiteralPath .\data\replychat_agent.sqlite -ErrorAction SilentlyCont
 
 ```text
 POST /api/followup-agent/creators
+PUT  /api/followup-agent/creators/{creator_id}
+PATCH /api/followup-agent/creators/{creator_id}
 POST /api/followup-agent/simulate-reply
 POST /api/followup-agent/runs
 GET  /api/followup-agent/replies/{reply_id}
@@ -90,6 +92,12 @@ GET  /api/followup-agent/runs/{run_id}
 GET  /api/followup-agent/runs?creator_id=&inbound_reply_id=&limit=
 GET  /health
 ```
+
+达人档案接口语义：`POST /creators` 只创建，成功返回 `201`，重复 ID 返回 `409`；
+`PUT /creators/{creator_id}` 需要提交完整档案并替换可编辑字段；
+`PATCH /creators/{creator_id}` 只更新请求中显式提供的字段，未提供字段保持不变。
+在 PATCH 中显式传入 `null` 会清空对应可空档案字段。PUT/PATCH 对不存在的达人返回 `404`。
+达人当前跟进状态和 DNC 状态由回复流程维护，不接受档案接口直接修改。
 
 ## 测试
 

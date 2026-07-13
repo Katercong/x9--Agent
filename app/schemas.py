@@ -30,12 +30,15 @@ class ReplyClassification(BaseModel):
         return value
 
 
-class CreatorIn(BaseModel):
+class CreatorCreateIn(BaseModel):
+    """创建达人时使用的字段；更新需显式使用 PUT 或 PATCH。"""
+
     id: str
     department_code: str = "cross_border"
     platform: str = "tiktok"
     handle: str
     display_name: str | None = None
+    profile_url: str | None = None
     email: str | None = None
     bio: str | None = None
     followers_count: int | None = None
@@ -43,6 +46,40 @@ class CreatorIn(BaseModel):
     recommended_product_type: str | None = None
     recommended_collab_type: str | None = None
     owner_bd: str | None = None
+
+
+class CreatorReplaceIn(BaseModel):
+    """PUT 全量档案：所有档案字段必须显式提交。"""
+
+    department_code: str
+    platform: str
+    handle: str
+    display_name: str | None
+    profile_url: str | None
+    email: str | None
+    bio: str | None
+    followers_count: int | None
+    owner_bd: str | None
+    recommendation_reason: str | None
+    recommended_product_type: str | None
+    recommended_collab_type: str | None
+
+
+class CreatorPatchIn(BaseModel):
+    """PATCH 局部档案：仅写入调用方实际传入的字段。"""
+
+    department_code: str | None = None
+    platform: str | None = None
+    handle: str | None = None
+    display_name: str | None = None
+    profile_url: str | None = None
+    email: str | None = None
+    bio: str | None = None
+    followers_count: int | None = None
+    owner_bd: str | None = None
+    recommendation_reason: str | None = None
+    recommended_product_type: str | None = None
+    recommended_collab_type: str | None = None
 
 
 class SimulateReplyIn(BaseModel):
