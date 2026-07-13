@@ -169,6 +169,64 @@ def test_bounce_reply_is_ignored_without_followup_side_effects():
         ) == 0
 
 
+def test_not_interested_drops_creator_and_cancels_existing_reply_followup_task():
+    client = TestClient(app)
+    creator_id = "creator_declined"
+    _create_creator(client, creator_id)
+
+    first_reply = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": False},
+    )
+    assert first_reply.status_code == 200, first_reply.text
+
+    rejection = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Thanks, but not interested.", "run_agent": True},
+    )
+    assert rejection.status_code == 200, rejection.text
+    assert rejection.json()["run"]["suggested_status"] == "dropped"
+
+    with SessionLocal() as db:
+        creator = db.get(Creator, creator_id)
+        assert creator is not None
+        assert creator.current_status == "dropped"
+        assert creator.do_not_contact_status == "none"
+        tasks = list(db.scalars(select(FollowupTask).where(FollowupTask.creator_id == creator_id)).all())
+        assert len(tasks) == 1
+        assert tasks[0].status == "cancelled"
+        assert "declined" in (tasks[0].reason or "")
+        event_types = list(
+            db.scalars(
+                select(CreatorOutreachEvent.event_type).where(CreatorOutreachEvent.creator_id == creator_id)
+            ).all()
+        )
+        assert event_types.count("creator_declined") == 1
+
+
+def test_explicit_opt_out_marks_do_not_contact_pending_confirmation():
+    client = TestClient(app)
+    creator_id = "creator_opt_out"
+    _create_creator(client, creator_id)
+
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Please unsubscribe and remove me.", "run_agent": False},
+    )
+    assert response.status_code == 200, response.text
+
+    with SessionLocal() as db:
+        creator = db.get(Creator, creator_id)
+        assert creator is not None
+        assert creator.current_status == "dropped"
+        assert creator.do_not_contact_status == "pending_confirmation"
+        assert creator.do_not_contact_reason == "explicit_opt_out"
+        assert creator.do_not_contact_requested_at is not None
+        assert db.scalar(
+            select(func.count()).select_from(FollowupTask).where(FollowupTask.creator_id == creator_id)
+        ) == 0
+
+
 def test_get_reply_returns_404_for_unknown_id():
     init_db()
     client = TestClient(app)

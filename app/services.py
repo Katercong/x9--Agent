@@ -86,6 +86,14 @@ KEYWORDS = {
     ),
 }
 
+EXPLICIT_OPT_OUT_KEYWORDS = (
+    "unsubscribe",
+    "remove me",
+    "退订",
+    "不要再联系",
+    "移除我",
+)
+
 CLASSIFICATION_CONFIDENCE = {
     "interested": 0.78,
     "need_more_info": 0.82,
@@ -345,6 +353,49 @@ def ensure_pending_followup(db: Session, creator: Creator, reply: InboundReply) 
                 due_at=datetime.utcnow(),
             )
         )
+    db.flush()
+
+
+def handle_creator_declined(db: Session, creator: Creator, reply: InboundReply) -> None:
+    """处理明确拒绝：终止回复跟进，并为明确退订保留人工确认入口。"""
+
+    normalized_reply = "\n".join([reply.subject or "", reply.body]).lower()
+    explicit_opt_out = _find_keyword(normalized_reply, EXPLICIT_OPT_OUT_KEYWORDS) is not None
+    creator.current_status = "dropped"
+    if explicit_opt_out:
+        creator.do_not_contact_status = "pending_confirmation"
+        creator.do_not_contact_reason = "explicit_opt_out"
+        creator.do_not_contact_requested_at = datetime.utcnow()
+
+    open_tasks = list(
+        db.scalars(
+            select(FollowupTask)
+            .where(FollowupTask.creator_id == creator.id)
+            .where(FollowupTask.task_type == "reply_followup_1")
+            .where(FollowupTask.status.in_(("open", "pending")))
+        ).all()
+    )
+    for task in open_tasks:
+        task.status = "cancelled"
+        task.reason = f"{task.reason or ''} Cancelled: creator declined collaboration.".strip()
+
+    db.add(
+        CreatorOutreachEvent(
+            id=new_id("oev"),
+            department_code=creator.department_code,
+            creator_id=creator.id,
+            event_type="creator_declined",
+            note="Creator declined the collaboration.",
+            metadata_json=json.dumps(
+                {
+                    "inbound_reply_id": reply.id,
+                    "do_not_contact_status": creator.do_not_contact_status,
+                },
+                ensure_ascii=False,
+            ),
+            event_at=datetime.utcnow(),
+        )
+    )
     db.flush()
 
 

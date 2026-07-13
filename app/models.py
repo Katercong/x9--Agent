@@ -21,6 +21,10 @@ class Creator(Base):
     email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
     followers_count: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     current_status: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    # 明确退订先进入待人工确认，避免规则误判后直接永久禁止联系。
+    do_not_contact_status: Mapped[str] = mapped_column(String(40), default="none", index=True)
+    do_not_contact_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    do_not_contact_requested_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
     owner_bd: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     recommendation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     recommended_product_type: Mapped[str | None] = mapped_column(String(80), nullable=True)

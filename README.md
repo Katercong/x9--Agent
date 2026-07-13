@@ -44,6 +44,11 @@
 `negotiation` 三类回复，达人缺少 `bio` 和 `recommendation_reason`，或缺少
 `recommended_product_type` 时，也会在建议的 `warnings` 中标记缺失项并进入人工复核。
 
+达人明确拒绝合作时，系统将达人状态设为 `dropped`，不会新建回复跟进待办，并取消已有的
+`reply_followup_1` 未完成待办。若回复含明确退订表达（如 `unsubscribe`、`remove me`、
+`退订`、`不要再联系`），达人会额外标记为 `do_not_contact_status=pending_confirmation`，
+等待人工确认后再执行永久禁止联系。
+
 `POST /api/followup-agent/simulate-reply` 对同一封模拟回复是幂等的。它使用部门、达人、
 收发邮箱、主题和正文联合判断重复；首次响应 `duplicate=false`，重复请求返回已有回复和
 已有 run，且不会重复创建事件或待办。若首次请求未运行 Agent，后续相同请求带

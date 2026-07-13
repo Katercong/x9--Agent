@@ -15,6 +15,7 @@ from .schemas import CreatorIn, RunAgentIn, SimulateReplyIn
 from .services import (
     classify_reply_result,
     ensure_pending_followup,
+    handle_creator_declined,
     new_id,
     process_followup_reply,
 )
@@ -86,6 +87,11 @@ def simulate_reply(body: SimulateReplyIn, db: Session = Depends(get_db)) -> dict
     run_payload = None
     if classification.reply_category == "bounce_or_invalid":
         reply.processing_status = "ignored"
+    elif classification.reply_category == "not_interested":
+        handle_creator_declined(db, creator, reply)
+        if body.run_agent:
+            run = _create_run(db, reply.id)
+            run_payload = _run_to_dict(run)
     else:
         ensure_pending_followup(db, creator, reply)
         if body.run_agent:
@@ -184,7 +190,13 @@ def _get_or_create_existing_run(db: Session, reply: InboundReply, run_agent: boo
 
 
 def _creator_to_dict(row: Creator) -> dict[str, Any]:
-    return {"id": row.id, "handle": row.handle, "display_name": row.display_name, "current_status": row.current_status}
+    return {
+        "id": row.id,
+        "handle": row.handle,
+        "display_name": row.display_name,
+        "current_status": row.current_status,
+        "do_not_contact_status": row.do_not_contact_status,
+    }
 
 
 def _reply_to_dict(row: InboundReply) -> dict[str, Any]:
