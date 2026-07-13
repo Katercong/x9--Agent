@@ -15,6 +15,7 @@ from .models import (
     AgentFollowupRun,
     Creator,
     CreatorOutreachEvent,
+    DoNotContactConfirmation,
     FollowupTask,
     InboundReply,
     OutreachEmail,
@@ -412,6 +413,7 @@ def handle_creator_declined(db: Session, creator: Creator, reply: InboundReply) 
         creator.do_not_contact_status = "pending_confirmation"
         creator.do_not_contact_reason = "explicit_opt_out"
         creator.do_not_contact_requested_at = datetime.utcnow()
+        _ensure_dnc_confirmation(db, creator, reply)
 
     open_tasks = list(
         db.scalars(
@@ -443,6 +445,30 @@ def handle_creator_declined(db: Session, creator: Creator, reply: InboundReply) 
         )
     )
     db.flush()
+
+
+def _ensure_dnc_confirmation(db: Session, creator: Creator, reply: InboundReply) -> None:
+    """为明确退订创建唯一待确认流水，避免同一达人重复进入 DNC 审核队列。"""
+
+    existing_confirmation = db.scalars(
+        select(DoNotContactConfirmation)
+        .where(DoNotContactConfirmation.creator_id == creator.id)
+        .where(DoNotContactConfirmation.status == "pending_confirmation")
+        .limit(1)
+    ).first()
+    if existing_confirmation is not None:
+        return
+
+    db.add(
+        DoNotContactConfirmation(
+            id=new_id("dnc"),
+            department_code=creator.department_code,
+            creator_id=creator.id,
+            inbound_reply_id=reply.id,
+            reason="explicit_opt_out",
+            status="pending_confirmation",
+        )
+    )
 
 
 def _fallback_suggestion(category: str) -> AgentSuggestion:

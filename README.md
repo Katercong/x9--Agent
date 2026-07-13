@@ -19,6 +19,7 @@
 ## 数据表说明
 
 - `creators`：达人主表，一行代表一个达人。
+- `do_not_contact_confirmations`：DNC 审核流水表，保存退订请求和人工确认结果。
 - `products`：产品档案表，按 `product_type` 为达人回复提供产品信息。
 - `inbound_replies`：入站回复表，MVP 独立版用它承接达人回复。
 - `outreach_emails`：历史建联邮件表，用于构建上下文。
@@ -47,8 +48,9 @@
 
 达人明确拒绝合作时，系统将达人状态设为 `dropped`，不会新建回复跟进待办，并取消已有的
 `reply_followup_1` 未完成待办。若回复含明确退订表达（如 `unsubscribe`、`remove me`、
-`退订`、`不要再联系`），达人会额外标记为 `do_not_contact_status=pending_confirmation`，
-等待人工确认后再执行永久禁止联系。
+`退订`、`不要再联系`），系统会创建一条 `do_not_contact_confirmations` 待确认流水，并将达人标记为
+`do_not_contact_status=pending_confirmation`。确认表以 `(creator_id, status)` 建立复合索引，保留审核历史；
+后续采集和建联应直接查询达人主表的当前 DNC 状态，跳过 `confirmed` 达人。
 
 `POST /api/followup-agent/simulate-reply` 对同一封模拟回复是幂等的。模拟消息固定标记为
 `channel=simulation` 且没有 `external_message_id`，使用部门、达人、收发邮箱、主题和正文

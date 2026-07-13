@@ -33,6 +33,24 @@ class Creator(Base):
     updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class DoNotContactConfirmation(Base):
+    """DNC 审核流水：保存待确认和已决议记录，供后续采集与建联拦截审计。"""
+
+    __tablename__ = "do_not_contact_confirmations"
+    __table_args__ = (Index("ix_dnc_confirmations_creator_status", "creator_id", "status"),)
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    department_code: Mapped[str] = mapped_column(String(40), default="cross_border", index=True)
+    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id", ondelete="CASCADE"), index=True)
+    inbound_reply_id: Mapped[str] = mapped_column(String(120), ForeignKey("inbound_replies.id", ondelete="CASCADE"), index=True)
+    reason: Mapped[str] = mapped_column(String(80), default="explicit_opt_out")
+    status: Mapped[str] = mapped_column(String(40), default="pending_confirmation")
+    reviewed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    reviewed_at: Mapped[object | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
+    updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class Product(Base):
     """产品档案：按产品类型为达人回复建议提供可控的业务上下文。"""
 

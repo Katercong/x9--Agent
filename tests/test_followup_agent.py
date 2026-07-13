@@ -15,7 +15,13 @@ from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 from app.database import Base, SessionLocal, engine, init_db  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import AgentFollowupRun, Creator, CreatorOutreachEvent, FollowupTask, InboundReply  # noqa: E402
+from app.models import (  # noqa: E402
+    AgentFollowupRun,
+    Creator,
+    CreatorOutreachEvent,
+    FollowupTask,
+    InboundReply,
+)
 from app import models, services  # noqa: E402
 from app.schemas import AgentSuggestion  # noqa: E402
 from app.services import classify_reply  # noqa: E402
@@ -174,6 +180,8 @@ def test_bounce_reply_is_ignored_without_followup_side_effects():
     assert payload["run"] is None
 
     with SessionLocal() as db:
+        assert hasattr(models, "DoNotContactConfirmation")
+        confirmation_model = models.DoNotContactConfirmation
         creator = db.get(Creator, creator_id)
         assert creator is not None
         assert creator.current_status is None
@@ -235,15 +243,58 @@ def test_explicit_opt_out_marks_do_not_contact_pending_confirmation():
     assert response.status_code == 200, response.text
 
     with SessionLocal() as db:
+        assert hasattr(models, "DoNotContactConfirmation")
+        confirmation_model = models.DoNotContactConfirmation
         creator = db.get(Creator, creator_id)
         assert creator is not None
         assert creator.current_status == "dropped"
         assert creator.do_not_contact_status == "pending_confirmation"
         assert creator.do_not_contact_reason == "explicit_opt_out"
         assert creator.do_not_contact_requested_at is not None
-        assert db.scalar(
-            select(func.count()).select_from(FollowupTask).where(FollowupTask.creator_id == creator_id)
-        ) == 0
+        assert db.scalar(select(func.count()).select_from(FollowupTask).where(FollowupTask.creator_id == creator_id)) == 0
+        confirmations = list(
+            db.scalars(
+                select(confirmation_model)
+                .where(confirmation_model.creator_id == creator_id)
+                .where(confirmation_model.status == "pending_confirmation")
+            ).all()
+        )
+        assert len(confirmations) == 1
+        assert confirmations[0].reason == "explicit_opt_out"
+        assert confirmations[0].inbound_reply_id is not None
+        assert confirmations[0].reviewed_by is None
+        assert confirmations[0].reviewed_at is None
+
+
+def test_repeated_explicit_opt_out_keeps_one_pending_dnc_confirmation():
+    """同一达人再次明确退订时，DNC 审核流水不应出现重复待确认记录。"""
+
+    client = TestClient(app)
+    creator_id = "creator_repeated_opt_out"
+    _create_creator(client, creator_id)
+
+    first = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Please unsubscribe me.", "run_agent": True},
+    )
+    second = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Remove me from future contact.", "run_agent": True},
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+    with SessionLocal() as db:
+        assert hasattr(models, "DoNotContactConfirmation")
+        confirmation_model = models.DoNotContactConfirmation
+        confirmations = list(
+            db.scalars(
+                select(confirmation_model)
+                .where(confirmation_model.creator_id == creator_id)
+                .where(confirmation_model.status == "pending_confirmation")
+            ).all()
+        )
+        assert len(confirmations) == 1
 
 
 def test_product_api_creates_updates_and_rejects_duplicate_type():
