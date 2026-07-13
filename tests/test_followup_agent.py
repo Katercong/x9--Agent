@@ -353,6 +353,8 @@ def test_duplicate_reply_is_idempotent_and_does_not_repeat_side_effects():
     assert second.json()["duplicate"] is True
     assert second.json()["reply"]["id"] == first.json()["reply"]["id"]
     assert second.json()["run"]["id"] == first.json()["run"]["id"]
+    assert first.json()["reply"]["channel"] == "simulation"
+    assert first.json()["reply"]["external_message_id"] is None
 
     with SessionLocal() as db:
         assert db.scalar(select(func.count()).select_from(InboundReply).where(InboundReply.creator_id == creator_id)) == 1
@@ -405,15 +407,16 @@ def test_duplicate_reply_can_be_run_later_without_creating_a_second_reply():
         ) == 1
 
 
-def test_database_unique_constraint_rejects_duplicate_reply_when_business_check_is_bypassed():
+def test_real_message_external_id_is_unique_while_identical_content_can_coexist():
     init_db()
     client = TestClient(app)
-    creator_id = "creator_database_unique"
+    creator_id = "creator_external_message_id"
     _create_creator(client, creator_id)
     values = {
         "department_code": "cross_border",
         "creator_id": creator_id,
         "direction": "inbound",
+        "channel": "email",
         "from_email": "",
         "to_email": "",
         "subject": "",
@@ -423,12 +426,15 @@ def test_database_unique_constraint_rejects_duplicate_reply_when_business_check_
     }
 
     with SessionLocal() as db:
-        db.add(InboundReply(id="ir_unique_first", **values))
+        db.add(InboundReply(id="ir_external_first", external_message_id="provider_message_1", **values))
         db.commit()
-        db.add(InboundReply(id="ir_unique_second", **values))
+        db.add(InboundReply(id="ir_external_second", external_message_id="provider_message_2", **values))
+        db.commit()
+        db.add(InboundReply(id="ir_external_duplicate", external_message_id="provider_message_1", **values))
         with pytest.raises(IntegrityError):
             db.commit()
         db.rollback()
+        assert db.scalar(select(func.count()).select_from(InboundReply).where(InboundReply.creator_id == creator_id)) == 2
 
 
 def test_running_an_ignored_reply_returns_conflict():

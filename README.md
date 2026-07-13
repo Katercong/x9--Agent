@@ -49,10 +49,15 @@
 `退订`、`不要再联系`），达人会额外标记为 `do_not_contact_status=pending_confirmation`，
 等待人工确认后再执行永久禁止联系。
 
-`POST /api/followup-agent/simulate-reply` 对同一封模拟回复是幂等的。它使用部门、达人、
-收发邮箱、主题和正文联合判断重复；首次响应 `duplicate=false`，重复请求返回已有回复和
-已有 run，且不会重复创建事件或待办。若首次请求未运行 Agent，后续相同请求带
-`run_agent=true` 时会补跑一次。已标记为 `ignored` 的回复不能通过 `/runs` 再次运行。
+`POST /api/followup-agent/simulate-reply` 对同一封模拟回复是幂等的。模拟消息固定标记为
+`channel=simulation` 且没有 `external_message_id`，使用部门、达人、收发邮箱、主题和正文
+进行内容去重；首次响应 `duplicate=false`，重复请求返回已有回复和已有 run，且不会重复创建
+事件或待办。若首次请求未运行 Agent，后续相同请求带 `run_agent=true` 时会补跑一次。
+已标记为 `ignored` 的回复不能通过 `/runs` 再次运行。
+
+未来真实渠道接入应写入非空的 `channel` 和上游稳定的 `external_message_id`。数据库以
+`department_code + channel + external_message_id` 保证真实消息幂等；相同正文但不同外部消息 ID
+可以同时存在。本轮尚未提供真实消息接收接口。
 
 ## 本地运行
 

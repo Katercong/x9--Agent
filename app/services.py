@@ -471,6 +471,8 @@ def _reply_snapshot(row: InboundReply) -> dict[str, Any]:
         "id": row.id,
         "creator_id": row.creator_id,
         "direction": row.direction,
+        "channel": row.channel,
+        "external_message_id": row.external_message_id,
         "from_email": row.from_email,
         "to_email": row.to_email,
         "subject": row.subject,

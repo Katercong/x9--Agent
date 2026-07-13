@@ -40,13 +40,9 @@ class InboundReply(Base):
     __table_args__ = (
         UniqueConstraint(
             "department_code",
-            "creator_id",
-            "direction",
-            "from_email",
-            "to_email",
-            "subject",
-            "body",
-            name="uq_inbound_replies_message_content",
+            "channel",
+            "external_message_id",
+            name="uq_inbound_replies_external_message",
         ),
     )
 
@@ -54,6 +50,9 @@ class InboundReply(Base):
     department_code: Mapped[str] = mapped_column(String(40), default="cross_border", index=True)
     creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id", ondelete="CASCADE"), index=True)
     direction: Mapped[str] = mapped_column(String(20), default="inbound", index=True)
+    # simulation 仅用于 MVP 演练；真实渠道需提供上游稳定消息 ID。
+    channel: Mapped[str] = mapped_column(String(40), default="simulation", index=True)
+    external_message_id: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
     from_email: Mapped[str] = mapped_column(String(320), default="")
     to_email: Mapped[str] = mapped_column(String(1000), default="")
     subject: Mapped[str] = mapped_column(Text, default="")
