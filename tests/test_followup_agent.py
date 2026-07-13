@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from datetime import datetime
+import json
 
 os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.NamedTemporaryFile(delete=False, suffix='.db').name}"
 
@@ -11,11 +12,19 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import func, select  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 
-from app.database import SessionLocal, init_db  # noqa: E402
+from app.database import Base, SessionLocal, engine, init_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import AgentFollowupRun, Creator, CreatorOutreachEvent, FollowupTask, InboundReply  # noqa: E402
 from app import services  # noqa: E402
 from app.services import classify_reply  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def reset_database():
+    """每个用例使用干净表结构，避免上一条回复影响本用例的状态和计数。"""
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
 
 def test_classify_reply_categories():
@@ -58,6 +67,7 @@ def test_simulate_reply_runs_agent_and_persists_run():
             "display_name": "Creator Test",
             "email": "creator@example.com",
             "recommendation_reason": "Audience overlaps with mom and baby care.",
+            "recommended_product_type": "baby care",
         },
     )
     assert creator.status_code == 200, creator.text
@@ -283,15 +293,131 @@ def test_running_an_ignored_reply_returns_conflict():
     assert response.json()["detail"] == "ignored reply cannot run agent"
 
 
-def _create_creator(client: TestClient, creator_id: str) -> None:
+def test_invalid_http_json_returns_422_without_writing_reply():
+    client = TestClient(app)
+    with SessionLocal() as db:
+        before = db.scalar(select(func.count()).select_from(InboundReply))
+
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        content=b'{"creator_id":',
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 422
+
+    with SessionLocal() as db:
+        after = db.scalar(select(func.count()).select_from(InboundReply))
+    assert after == before
+
+
+def test_invalid_generated_json_is_persisted_and_sent_to_manual_review(monkeypatch):
+    client = TestClient(app)
+    creator_id = "creator_invalid_generated_json"
+    _create_creator(client, creator_id)
+    monkeypatch.setattr(services, "generate_raw_followup_output", lambda context: ("not-json", "mocked"))
+
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["reply"]["processing_status"] == "need_ai_review"
+    assert payload["run"]["llm_status"] == "invalid_json"
+    assert payload["run"]["suggested_status"] is None
+    assert payload["run"]["output"]["raw_output"] == "not-json"
+    assert payload["run"]["validation_error"]
+
+
+def test_pydantic_validation_failure_is_persisted_and_sent_to_manual_review(monkeypatch):
+    client = TestClient(app)
+    creator_id = "creator_invalid_suggestion"
+    _create_creator(client, creator_id)
+    invalid_output = json.dumps({"reply_category": "interested", "confidence": 0.9})
+    monkeypatch.setattr(services, "generate_raw_followup_output", lambda context: (invalid_output, "mocked"))
+
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["reply"]["processing_status"] == "need_ai_review"
+    assert payload["run"]["llm_status"] == "validation_failed"
+    assert payload["run"]["suggested_status"] is None
+    assert payload["run"]["output"]["raw_output"] == invalid_output
+    assert payload["run"]["validation_error"]
+
+
+def test_low_suggestion_confidence_requires_manual_review(monkeypatch):
+    client = TestClient(app)
+    creator_id = "creator_low_suggestion_confidence"
+    _create_creator(client, creator_id)
+    low_confidence_output = json.dumps(
+        {
+            "reply_category": "interested",
+            "suggested_reply": "Thanks for your interest.",
+            "next_action": "send_campaign_details",
+            "suggested_status": "pending_followup",
+            "confidence": 0.69,
+            "warnings": [],
+            "reasoning_summary": "The creator expressed interest.",
+        }
+    )
+    monkeypatch.setattr(services, "generate_raw_followup_output", lambda context: (low_confidence_output, "mocked"))
+
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["reply"]["processing_status"] == "need_ai_review"
+
+
+def test_missing_creator_context_adds_warning_and_requires_manual_review():
+    client = TestClient(app)
+    creator_id = "creator_missing_context"
+    _create_creator(client, creator_id, recommendation_reason=None, recommended_product_type="baby care")
+
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["reply"]["processing_status"] == "need_ai_review"
+    assert "missing_creator_context" in payload["run"]["output"]["warnings"]
+
+
+def test_missing_product_context_adds_warning_and_requires_manual_review():
+    client = TestClient(app)
+    creator_id = "creator_missing_product"
+    _create_creator(client, creator_id, recommendation_reason="Strong audience match.", recommended_product_type=None)
+
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["reply"]["processing_status"] == "need_ai_review"
+    assert "missing_product_context" in payload["run"]["output"]["warnings"]
+
+
+def _create_creator(
+    client: TestClient,
+    creator_id: str,
+    recommendation_reason: str | None = "Audience matches the campaign.",
+    recommended_product_type: str | None = "baby care",
+) -> None:
     response = client.post(
         "/api/followup-agent/creators",
         json={
             "id": creator_id,
             "handle": creator_id,
             "email": f"{creator_id}@example.com",
-            "recommendation_reason": "Audience matches the campaign.",
-            "recommended_product_type": "baby care",
+            "recommendation_reason": recommendation_reason,
+            "recommended_product_type": recommended_product_type,
         },
     )
     assert response.status_code == 200, response.text

@@ -35,6 +35,15 @@
 回复意图另存于 `reply_category`，规则置信度、命中原因和分类时间分别记录在
 `classification_confidence`、`classification_reason` 和 `classified_at`。
 
+建议生成先要求 JSON 可解析，再由 Pydantic 校验字段。若生成结果不是 JSON，run 会记录
+`llm_status=invalid_json`；若 JSON 字段不符合建议结构，会记录
+`llm_status=validation_failed`。两类失败都会保留原始输出和校验错误，并将回复转为
+`need_ai_review`。
+
+规则或建议任一置信度低于 `0.70` 时会进入人工复核。对 `interested`、`need_more_info`、
+`negotiation` 三类回复，达人缺少 `bio` 和 `recommendation_reason`，或缺少
+`recommended_product_type` 时，也会在建议的 `warnings` 中标记缺失项并进入人工复核。
+
 `POST /api/followup-agent/simulate-reply` 对同一封模拟回复是幂等的。它使用部门、达人、
 收发邮箱、主题和正文联合判断重复；首次响应 `duplicate=false`，重复请求返回已有回复和
 已有 run，且不会重复创建事件或待办。若首次请求未运行 Agent，后续相同请求带

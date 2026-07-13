@@ -13,12 +13,10 @@ from .database import get_db, init_db
 from .models import AgentFollowupRun, Creator, InboundReply
 from .schemas import CreatorIn, RunAgentIn, SimulateReplyIn
 from .services import (
-    build_followup_context,
     classify_reply_result,
     ensure_pending_followup,
-    generate_followup_suggestion,
     new_id,
-    persist_followup_run,
+    process_followup_reply,
 )
 
 
@@ -150,15 +148,7 @@ def list_runs(
 
 
 def _create_run(db: Session, inbound_reply_id: str) -> AgentFollowupRun:
-    context = build_followup_context(db, inbound_reply_id)
-    suggestion, llm_status = generate_followup_suggestion(context)
-    run = persist_followup_run(db, context=context, suggestion=suggestion, llm_status=llm_status)
-    reply = db.get(InboundReply, inbound_reply_id)
-    if reply is not None and reply.processing_status != "ignored":
-        rule_confidence = reply.classification_confidence or 0.0
-        reply.processing_status = "need_ai_review" if min(rule_confidence, suggestion.confidence) < 0.70 else "suggestion_ready"
-        db.flush()
-    return run
+    return process_followup_reply(db, inbound_reply_id)
 
 
 def _normalized_message_fields(creator: Creator, body: SimulateReplyIn) -> dict[str, str]:

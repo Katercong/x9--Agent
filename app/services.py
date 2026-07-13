@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -94,6 +95,9 @@ CLASSIFICATION_CONFIDENCE = {
     "unclear": 0.52,
 }
 
+LOW_CONFIDENCE_THRESHOLD = 0.70
+CONTEXT_REQUIRED_CATEGORIES = {"interested", "need_more_info", "negotiation"}
+
 
 def classify_reply(text: str | None) -> str:
     return classify_reply_result(text).reply_category
@@ -165,12 +169,65 @@ def generate_followup_suggestion(context: dict[str, Any]) -> tuple[AgentSuggesti
     return _fallback_suggestion(category), "not_configured"
 
 
+def generate_raw_followup_output(context: dict[str, Any]) -> tuple[str, str]:
+    """MVP 的生成边界：后续接入 LLM 时只需替换这里的原始输出来源。"""
+
+    suggestion, llm_status = generate_followup_suggestion(context)
+    return suggestion.model_dump_json(), llm_status
+
+
+def parse_followup_suggestion(raw_output: str) -> AgentSuggestion:
+    """先解析 JSON，再由 Pydantic 校验建议字段和枚举值。"""
+
+    return AgentSuggestion.model_validate(json.loads(raw_output))
+
+
+def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupRun:
+    """集中处理建议生成、失败留痕、上下文警告和最终状态更新。"""
+
+    context = build_followup_context(db, inbound_reply_id)
+    raw_output, llm_status = generate_raw_followup_output(context)
+    try:
+        suggestion = parse_followup_suggestion(raw_output)
+    except json.JSONDecodeError as exc:
+        return _persist_failed_run(
+            db,
+            context=context,
+            raw_output=raw_output,
+            llm_status="invalid_json",
+            validation_error=str(exc),
+        )
+    except ValidationError as exc:
+        return _persist_failed_run(
+            db,
+            context=context,
+            raw_output=raw_output,
+            llm_status="validation_failed",
+            validation_error=str(exc),
+        )
+
+    context_warnings = _context_warnings(context)
+    if context_warnings:
+        warnings = list(dict.fromkeys([*suggestion.warnings, *context_warnings]))
+        suggestion = suggestion.model_copy(update={"warnings": warnings})
+    run = persist_followup_run(db, context=context, suggestion=suggestion, llm_status=llm_status)
+    _update_reply_processing_status(
+        db,
+        inbound_reply_id,
+        suggestion=suggestion,
+        requires_manual_review=bool(context_warnings),
+    )
+    return run
+
+
 def persist_followup_run(
     db: Session,
     *,
     context: dict[str, Any],
-    suggestion: AgentSuggestion,
+    suggestion: AgentSuggestion | None,
     llm_status: str,
+    raw_output: str | None = None,
+    validation_error: str | None = None,
     created_by: str | None = None,
 ) -> AgentFollowupRun:
     creator = context.get("creator") or {}
@@ -180,16 +237,78 @@ def persist_followup_run(
         department_code=str(creator.get("department_code") or "cross_border"),
         creator_id=str(creator.get("id") or reply.get("creator_id") or ""),
         inbound_reply_id=reply.get("id"),
-        reply_category=suggestion.reply_category,
-        suggested_status=suggestion.suggested_status,
+        reply_category=suggestion.reply_category if suggestion else str(context.get("reply_category") or "unclear"),
+        suggested_status=suggestion.suggested_status if suggestion else None,
         llm_status=llm_status,
         context_json=json.dumps(context, ensure_ascii=False, default=str),
-        output_json=json.dumps(suggestion.model_dump(), ensure_ascii=False, default=str),
+        output_json=json.dumps(
+            suggestion.model_dump() if suggestion else {"raw_output": raw_output or ""},
+            ensure_ascii=False,
+            default=str,
+        ),
+        validation_error=validation_error,
         created_by=created_by,
     )
     db.add(row)
     db.flush()
     return row
+
+
+def _persist_failed_run(
+    db: Session,
+    *,
+    context: dict[str, Any],
+    raw_output: str,
+    llm_status: str,
+    validation_error: str,
+) -> AgentFollowupRun:
+    run = persist_followup_run(
+        db,
+        context=context,
+        suggestion=None,
+        llm_status=llm_status,
+        raw_output=raw_output,
+        validation_error=validation_error,
+    )
+    reply = context.get("inbound_reply") or {}
+    _update_reply_processing_status(db, str(reply.get("id") or ""), suggestion=None, requires_manual_review=True)
+    return run
+
+
+def _context_warnings(context: dict[str, Any]) -> list[str]:
+    category = str(context.get("reply_category") or "unclear")
+    if category not in CONTEXT_REQUIRED_CATEGORIES:
+        return []
+    creator = context.get("creator") or {}
+    warnings = []
+    if not (creator.get("bio") or creator.get("recommendation_reason")):
+        warnings.append("missing_creator_context")
+    if not creator.get("recommended_product_type"):
+        warnings.append("missing_product_context")
+    return warnings
+
+
+def _update_reply_processing_status(
+    db: Session,
+    inbound_reply_id: str,
+    *,
+    suggestion: AgentSuggestion | None,
+    requires_manual_review: bool,
+) -> None:
+    reply = db.get(InboundReply, inbound_reply_id)
+    if reply is None or reply.processing_status == "ignored":
+        return
+    rule_confidence = reply.classification_confidence or 0.0
+    suggestion_confidence = suggestion.confidence if suggestion else 0.0
+    if (
+        requires_manual_review
+        or rule_confidence < LOW_CONFIDENCE_THRESHOLD
+        or suggestion_confidence < LOW_CONFIDENCE_THRESHOLD
+    ):
+        reply.processing_status = "need_ai_review"
+    else:
+        reply.processing_status = "suggestion_ready"
+    db.flush()
 
 
 def ensure_pending_followup(db: Session, creator: Creator, reply: InboundReply) -> None:
