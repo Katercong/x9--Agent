@@ -10,6 +10,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.NamedTemporaryFile(delete=Fal
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from pydantic import ValidationError  # noqa: E402
 from sqlalchemy import func, select  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 
@@ -795,6 +796,75 @@ def test_agent_suggestion_exposes_explicit_human_review_decision():
 
     assert suggestion.model_dump().get("requires_human_review") is True
     assert suggestion.model_dump().get("review_reasons") == ["negotiation_requires_manual_review"]
+
+
+def test_agent_suggestion_rejects_unknown_next_action():
+    """真实模型不能生成系统无法路由的后续动作。"""
+
+    with pytest.raises(ValidationError, match="next_action"):
+        AgentSuggestion.model_validate(
+            {
+                "reply_category": "interested",
+                "suggested_reply": "Thanks for your interest.",
+                "next_action": "unknown_future_action",
+                "suggested_status": "pending_followup",
+                "confidence": 0.9,
+                "reasoning_summary": "The creator expressed interest.",
+            }
+        )
+
+
+def test_prompt_package_includes_pydantic_next_action_contract():
+    """模型提示词应携带与本地校验一致的 JSON Schema 动作约束。"""
+
+    prompts = importlib.import_module("app.prompts")
+    package = prompts.build_prompt_package(
+        {
+            "reply_category": "interested",
+            "creator": {},
+            "inbound_reply": {"body": "Sounds interesting."},
+        }
+    )
+
+    assert '"next_action"' in package.system_prompt
+    for action in (
+        "send_campaign_details",
+        "clarify_terms",
+        "acknowledge_and_close",
+        "ask_clarifying_question",
+        "verify_contact_method",
+    ):
+        assert f'"{action}"' in package.system_prompt
+
+
+def test_unknown_model_next_action_is_persisted_as_validation_failure(monkeypatch):
+    """Provider 即使返回合法 JSON，未知动作也应落入人工复核失败路径。"""
+
+    client = TestClient(app)
+    creator_id = "creator_unknown_next_action"
+    _create_creator(client, creator_id)
+    unknown_action_output = json.dumps(
+        {
+            "reply_category": "interested",
+            "suggested_reply": "Thanks for your interest.",
+            "next_action": "unknown_future_action",
+            "suggested_status": "pending_followup",
+            "confidence": 0.9,
+            "reasoning_summary": "The creator expressed interest.",
+        }
+    )
+    monkeypatch.setattr(services, "generate_raw_followup_output", lambda context, prompt: (unknown_action_output, "mocked"))
+
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["reply"]["processing_status"] == "need_ai_review"
+    assert payload["run"]["llm_status"] == "validation_failed"
+    assert payload["run"]["suggested_status"] is None
+    assert payload["run"]["validation_error"]
 
 
 def test_explicit_human_review_output_moves_reply_to_manual_review(monkeypatch):

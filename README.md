@@ -74,6 +74,11 @@
 `review_reasons`（复核原因列表）。这两个字段会与上下文缺失告警合并为 `warnings`，任一项要求复核时，
 回复状态都会进入 `need_ai_review`。
 
+建议中的 `next_action` 只能是 `send_campaign_details`、`clarify_terms`、
+`acknowledge_and_close`、`ask_clarifying_question` 或 `verify_contact_method`。该集合由
+Pydantic `Literal` 与提示词中的 JSON Schema 共用；Provider 返回未知动作时会记录为
+`validation_failed`，并转入人工复核。
+
 ## 本地运行
 
 ```powershell

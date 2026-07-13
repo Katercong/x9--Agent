@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -13,6 +15,13 @@ REPLY_CATEGORIES = {
 }
 
 SUGGESTED_STATUSES = {"pending_followup", "pending_reply", "communicating", "dropped"}
+AgentNextAction = Literal[
+    "send_campaign_details",
+    "clarify_terms",
+    "acknowledge_and_close",
+    "ask_clarifying_question",
+    "verify_contact_method",
+]
 
 
 class ReplyClassification(BaseModel):
@@ -142,7 +151,8 @@ class RunAgentIn(BaseModel):
 class AgentSuggestion(BaseModel):
     reply_category: str
     suggested_reply: str = Field(min_length=1)
-    next_action: str = Field(min_length=1)
+    # 仅允许系统已实现路由的动作，避免真实模型产生无法处理的新字符串。
+    next_action: AgentNextAction
     suggested_status: str
     confidence: float = Field(ge=0, le=1)
     warnings: list[str] = Field(default_factory=list)

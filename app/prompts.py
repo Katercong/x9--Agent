@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from .schemas import AgentSuggestion
+
 
 PROMPT_VERSION = "reply_followup_v1"
 MAX_RENDERED_PROMPT_CHARS = 12000
@@ -58,10 +60,11 @@ def build_prompt_package(context: dict[str, Any]) -> PromptPackage:
 
 def _system_prompt(reply_language: str) -> str:
     language_instruction = "Use Chinese for the suggested reply." if reply_language == "zh" else "Use English for the suggested reply."
+    output_schema = json.dumps(AgentSuggestion.model_json_schema(), ensure_ascii=False, separators=(",", ":"))
     return (
         "You are a creator outreach follow-up assistant. Use only the supplied context, do not invent product facts, "
         "and preserve human review when the information is incomplete or risky. "
-        f"{language_instruction} Return only JSON that conforms to the requested suggestion schema."
+        f"{language_instruction} Return only a JSON object conforming to this schema: {output_schema}"
     )
 
 
