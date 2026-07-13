@@ -79,6 +79,11 @@
 Pydantic `Literal` 与提示词中的 JSON Schema 共用；Provider 返回未知动作时会记录为
 `validation_failed`，并转入人工复核。
 
+配置 `SILICONFLOW_API_KEY` 后，Agent 会通过硅基流动 OpenAI 兼容接口调用
+`deepseek-ai/DeepSeek-V4-Flash`，并使用 Provider JSON Mode。可选的 `SILICONFLOW_MODEL`
+可以覆盖默认模型。未配置 Key 时保持本地 fallback；Provider 调用失败会写入
+`llm_status=provider_error` 并转人工复核。Key 只应放在本机环境变量中，不会写入 run、数据库或日志。
+
 ## 本地运行
 
 ```powershell
@@ -86,6 +91,13 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 uvicorn app.main:app --reload
+```
+
+PowerShell 临时配置真实模型时：
+
+```powershell
+$env:SILICONFLOW_API_KEY = "<replace-with-a-new-key>"
+$env:SILICONFLOW_MODEL = "deepseek-ai/DeepSeek-V4-Flash" # 可选
 ```
 
 默认使用 SQLite：

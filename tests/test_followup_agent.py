@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from datetime import datetime
 import importlib
 import json
+from types import SimpleNamespace
 
 os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.NamedTemporaryFile(delete=False, suffix='.db').name}"
 
@@ -865,6 +867,103 @@ def test_unknown_model_next_action_is_persisted_as_validation_failure(monkeypatc
     assert payload["run"]["llm_status"] == "validation_failed"
     assert payload["run"]["suggested_status"] is None
     assert payload["run"]["validation_error"]
+
+
+def test_configured_siliconflow_provider_output_is_used(monkeypatch):
+    """配置 Provider Key 后，应使用结构化模型输出而非本地 fallback。"""
+
+    client = TestClient(app)
+    creator_id = "creator_siliconflow_success"
+    _create_creator(client, creator_id)
+    provider_output = json.dumps(
+        {
+            "reply_category": "interested",
+            "suggested_reply": "Thanks for your interest. I will share the details.",
+            "next_action": "send_campaign_details",
+            "suggested_status": "pending_followup",
+            "confidence": 0.91,
+            "reasoning_summary": "The creator expressed clear interest.",
+            "requires_human_review": False,
+            "review_reasons": [],
+        }
+    )
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "test-key")
+    monkeypatch.setattr(
+        services,
+        "call_siliconflow_json",
+        lambda system_prompt, user_prompt: provider_output,
+        raising=False,
+    )
+
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["run"]["llm_status"] == "success"
+    assert payload["run"]["output"]["confidence"] == 0.91
+
+
+def test_siliconflow_provider_error_is_persisted_for_manual_review(monkeypatch):
+    """Provider 调用异常不可静默回退，必须留下失败 run 供人工处理。"""
+
+    client = TestClient(app)
+    creator_id = "creator_siliconflow_error"
+    _create_creator(client, creator_id)
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "test-key")
+
+    def raise_provider_error(system_prompt: str, user_prompt: str) -> str:
+        raise RuntimeError("provider request failed")
+
+    monkeypatch.setattr(services, "call_siliconflow_json", raise_provider_error, raising=False)
+
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["reply"]["processing_status"] == "need_ai_review"
+    assert payload["run"]["llm_status"] == "provider_error"
+    assert payload["run"]["validation_error"] == "provider request failed"
+
+
+def test_siliconflow_client_uses_openai_json_mode(monkeypatch):
+    """硅基流动调用参数应固定为 OpenAI 兼容 JSON Mode。"""
+
+    captured: dict[str, object] = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs: object) -> SimpleNamespace:
+            captured["request"] = kwargs
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}'))])
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            captured["client"] = kwargs
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "test-key")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    llm = importlib.import_module("app.llm")
+
+    assert llm.call_siliconflow_json("system contract", "user context") == '{"ok": true}'
+    assert captured["client"] == {
+        "api_key": "test-key",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "timeout": 20.0,
+    }
+    assert captured["request"] == {
+        "model": "deepseek-ai/DeepSeek-V4-Flash",
+        "messages": [
+            {"role": "system", "content": "system contract"},
+            {"role": "user", "content": "user context"},
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.2,
+        "max_tokens": 1000,
+    }
 
 
 def test_explicit_human_review_output_moves_reply_to_manual_review(monkeypatch):

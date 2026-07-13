@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from datetime import datetime
@@ -11,6 +12,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .llm import SiliconFlowProviderError, call_siliconflow_json
 from .models import (
     AgentFollowupRun,
     Creator,
@@ -204,8 +206,12 @@ def generate_followup_suggestion(context: dict[str, Any]) -> tuple[AgentSuggesti
 def generate_raw_followup_output(context: dict[str, Any], prompt_package: PromptPackage) -> tuple[str, str]:
     """MVP 的生成边界：后续接入 LLM 时只需替换这里的原始输出来源。"""
 
-    # 当前 fallback 不调用模型；保留 prompt 参数以固定未来 LLM 调用边界。
-    _ = prompt_package
+    if os.getenv("SILICONFLOW_API_KEY"):
+        try:
+            return call_siliconflow_json(prompt_package.system_prompt, prompt_package.user_prompt), "success"
+        except Exception as exc:
+            raise SiliconFlowProviderError("provider request failed") from exc
+
     suggestion, llm_status = generate_followup_suggestion(context)
     return suggestion.model_dump_json(), llm_status
 
@@ -221,7 +227,17 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
 
     context = build_followup_context(db, inbound_reply_id)
     prompt_package = build_prompt_package(context)
-    raw_output, llm_status = generate_raw_followup_output(context, prompt_package)
+    try:
+        raw_output, llm_status = generate_raw_followup_output(context, prompt_package)
+    except SiliconFlowProviderError as exc:
+        return _persist_failed_run(
+            db,
+            context=context,
+            raw_output="",
+            llm_status="provider_error",
+            validation_error=str(exc),
+            prompt_package=prompt_package,
+        )
     try:
         suggestion = parse_followup_suggestion(raw_output)
     except json.JSONDecodeError as exc:
