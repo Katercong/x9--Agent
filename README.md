@@ -64,6 +64,14 @@
 未匹配或未启用时，合作相关回复会标记 `missing_product_context` 并转人工复核。
 上下文还会保留当前回复以外最近 5 条历史入站回复，用于后续提示词拼装。
 
+每次 Agent run 会生成 `reply_followup_v1` PromptPackage，并保存已脱敏、已截断后的最终 prompt。
+提示词包含产品、达人公开档案摘要、当前回复、双向历史消息、事件和待办；邮箱、主页 URL 与
+正文中的邮箱/URL 会被替换为脱敏标记。当前回复优先保留，最终 prompt 最大为 `12,000` 字符。
+本轮仅建设提示词工厂，fallback 仍未调用真实 LLM。后续接入真实 LLM 时，生成器会接收完整的
+`PromptPackage`，并须在 JSON 建议中返回 `requires_human_review`（是否必须人工复核）与
+`review_reasons`（复核原因列表）。这两个字段会与上下文缺失告警合并为 `warnings`，任一项要求复核时，
+回复状态都会进入 `need_ai_review`。
+
 ## 本地运行
 
 ```powershell

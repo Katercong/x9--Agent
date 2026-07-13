@@ -200,9 +200,11 @@ def generate_followup_suggestion(context: dict[str, Any]) -> tuple[AgentSuggesti
     return _fallback_suggestion(category), "not_configured"
 
 
-def generate_raw_followup_output(context: dict[str, Any]) -> tuple[str, str]:
+def generate_raw_followup_output(context: dict[str, Any], prompt_package: PromptPackage) -> tuple[str, str]:
     """MVP 的生成边界：后续接入 LLM 时只需替换这里的原始输出来源。"""
 
+    # 当前 fallback 不调用模型；保留 prompt 参数以固定未来 LLM 调用边界。
+    _ = prompt_package
     suggestion, llm_status = generate_followup_suggestion(context)
     return suggestion.model_dump_json(), llm_status
 
@@ -218,7 +220,7 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
 
     context = build_followup_context(db, inbound_reply_id)
     prompt_package = build_prompt_package(context)
-    raw_output, llm_status = generate_raw_followup_output(context)
+    raw_output, llm_status = generate_raw_followup_output(context, prompt_package)
     try:
         suggestion = parse_followup_suggestion(raw_output)
     except json.JSONDecodeError as exc:
@@ -241,9 +243,16 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
         )
 
     context_warnings = _context_warnings(context)
-    if context_warnings:
-        warnings = list(dict.fromkeys([*suggestion.warnings, *context_warnings]))
-        suggestion = suggestion.model_copy(update={"warnings": warnings})
+    review_reasons = list(dict.fromkeys([*suggestion.review_reasons, *context_warnings]))
+    requires_human_review = suggestion.requires_human_review or bool(context_warnings)
+    warnings = list(dict.fromkeys([*suggestion.warnings, *review_reasons]))
+    suggestion = suggestion.model_copy(
+        update={
+            "warnings": warnings,
+            "requires_human_review": requires_human_review,
+            "review_reasons": review_reasons,
+        }
+    )
     run = persist_followup_run(
         db,
         context=context,
@@ -255,7 +264,7 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
         db,
         inbound_reply_id,
         suggestion=suggestion,
-        requires_manual_review=bool(context_warnings),
+        requires_manual_review=suggestion.requires_human_review,
     )
     return run
 
@@ -446,14 +455,21 @@ def _fallback_suggestion(category: str) -> AgentSuggestion:
         "unclear": ("ask_clarifying_question", "pending_followup", 0.52, "The creator intent is unclear."),
     }
     next_action, status, confidence, reason = templates[category]
+    review_reasons = {
+        "negotiation": ["negotiation_requires_manual_review"],
+        "bounce_or_invalid": ["contact_delivery_failure"],
+        "unclear": ["unclear_reply"],
+    }.get(category, [])
     return AgentSuggestion(
         reply_category=category,
         suggested_reply=_suggested_reply(category),
         next_action=next_action,
         suggested_status=status,
         confidence=confidence,
-        warnings=[] if category not in {"negotiation", "bounce_or_invalid", "unclear"} else ["Manual review recommended."],
+        warnings=[] if not review_reasons else ["Manual review recommended."],
         reasoning_summary=reason,
+        requires_human_review=bool(review_reasons),
+        review_reasons=review_reasons,
     )
 
 
@@ -551,4 +567,3 @@ def _event_snapshot(row: CreatorOutreachEvent) -> dict[str, Any]:
 
 def _task_snapshot(row: FollowupTask) -> dict[str, Any]:
     return {"id": row.id, "task_type": row.task_type, "status": row.status, "reason": row.reason, "due_at": _iso(row.due_at)}
-

@@ -17,6 +17,7 @@ from app.database import Base, SessionLocal, engine, init_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import AgentFollowupRun, Creator, CreatorOutreachEvent, FollowupTask, InboundReply  # noqa: E402
 from app import models, services  # noqa: E402
+from app.schemas import AgentSuggestion  # noqa: E402
 from app.services import classify_reply  # noqa: E402
 
 
@@ -664,7 +665,7 @@ def test_invalid_generated_json_is_persisted_and_sent_to_manual_review(monkeypat
     client = TestClient(app)
     creator_id = "creator_invalid_generated_json"
     _create_creator(client, creator_id)
-    monkeypatch.setattr(services, "generate_raw_followup_output", lambda context: ("not-json", "mocked"))
+    monkeypatch.setattr(services, "generate_raw_followup_output", lambda context, prompt: ("not-json", "mocked"))
 
     response = client.post(
         "/api/followup-agent/simulate-reply",
@@ -684,7 +685,7 @@ def test_pydantic_validation_failure_is_persisted_and_sent_to_manual_review(monk
     creator_id = "creator_invalid_suggestion"
     _create_creator(client, creator_id)
     invalid_output = json.dumps({"reply_category": "interested", "confidence": 0.9})
-    monkeypatch.setattr(services, "generate_raw_followup_output", lambda context: (invalid_output, "mocked"))
+    monkeypatch.setattr(services, "generate_raw_followup_output", lambda context, prompt: (invalid_output, "mocked"))
 
     response = client.post(
         "/api/followup-agent/simulate-reply",
@@ -714,7 +715,7 @@ def test_low_suggestion_confidence_requires_manual_review(monkeypatch):
             "reasoning_summary": "The creator expressed interest.",
         }
     )
-    monkeypatch.setattr(services, "generate_raw_followup_output", lambda context: (low_confidence_output, "mocked"))
+    monkeypatch.setattr(services, "generate_raw_followup_output", lambda context, prompt: (low_confidence_output, "mocked"))
 
     response = client.post(
         "/api/followup-agent/simulate-reply",
@@ -722,6 +723,59 @@ def test_low_suggestion_confidence_requires_manual_review(monkeypatch):
     )
     assert response.status_code == 200, response.text
     assert response.json()["reply"]["processing_status"] == "need_ai_review"
+
+
+def test_agent_suggestion_exposes_explicit_human_review_decision():
+    """模型输出应能明确声明人工复核结论，避免只依赖置信度推断。"""
+
+    suggestion = AgentSuggestion.model_validate(
+        {
+            "reply_category": "negotiation",
+            "suggested_reply": "I will confirm the terms before we proceed.",
+            "next_action": "clarify_terms",
+            "suggested_status": "pending_followup",
+            "confidence": 0.9,
+            "warnings": [],
+            "reasoning_summary": "The creator is discussing collaboration terms.",
+            "requires_human_review": True,
+            "review_reasons": ["negotiation_requires_manual_review"],
+        }
+    )
+
+    assert suggestion.model_dump().get("requires_human_review") is True
+    assert suggestion.model_dump().get("review_reasons") == ["negotiation_requires_manual_review"]
+
+
+def test_explicit_human_review_output_moves_reply_to_manual_review(monkeypatch):
+    """即使置信度和上下文均正常，模型明确要求复核时也必须转人工。"""
+
+    client = TestClient(app)
+    creator_id = "creator_explicit_review"
+    _create_creator(client, creator_id)
+    reviewed_output = json.dumps(
+        {
+            "reply_category": "interested",
+            "suggested_reply": "Thanks for your interest. I will send the campaign details.",
+            "next_action": "send_campaign_details",
+            "suggested_status": "pending_followup",
+            "confidence": 0.9,
+            "warnings": [],
+            "reasoning_summary": "The creator expressed interest but asked for a manual check.",
+            "requires_human_review": True,
+            "review_reasons": ["sensitive_collaboration_detail"],
+        }
+    )
+    monkeypatch.setattr(services, "generate_raw_followup_output", lambda *args: (reviewed_output, "mocked"))
+
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["reply"]["processing_status"] == "need_ai_review"
+    assert payload["run"]["output"]["requires_human_review"] is True
+    assert "sensitive_collaboration_detail" in payload["run"]["output"]["warnings"]
 
 
 def test_missing_creator_context_adds_warning_and_requires_manual_review():

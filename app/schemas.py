@@ -147,6 +147,9 @@ class AgentSuggestion(BaseModel):
     confidence: float = Field(ge=0, le=1)
     warnings: list[str] = Field(default_factory=list)
     reasoning_summary: str = Field(min_length=1)
+    # 由模型显式给出是否需要人工复核，不能只依赖置信度阈值推断。
+    requires_human_review: bool = False
+    review_reasons: list[str] = Field(default_factory=list)
 
     @field_validator("reply_category")
     @classmethod
