@@ -82,6 +82,49 @@ class CreatorPatchIn(BaseModel):
     recommended_collab_type: str | None = None
 
 
+class ProductCreateIn(BaseModel):
+    """创建产品档案。"""
+
+    id: str
+    product_type: str
+    name: str
+    summary: str
+    selling_points: list[str] = Field(default_factory=list)
+    target_audience: str | None = None
+    collaboration_requirements: str | None = None
+    forbidden_claims: list[str] = Field(default_factory=list)
+    notes: str | None = None
+    is_active: bool = True
+
+
+class ProductReplaceIn(BaseModel):
+    """PUT 全量产品档案。"""
+
+    product_type: str
+    name: str
+    summary: str
+    selling_points: list[str]
+    target_audience: str | None
+    collaboration_requirements: str | None
+    forbidden_claims: list[str]
+    notes: str | None
+    is_active: bool
+
+
+class ProductPatchIn(BaseModel):
+    """PATCH 局部产品档案。"""
+
+    product_type: str | None = None
+    name: str | None = None
+    summary: str | None = None
+    selling_points: list[str] | None = None
+    target_audience: str | None = None
+    collaboration_requirements: str | None = None
+    forbidden_claims: list[str] | None = None
+    notes: str | None = None
+    is_active: bool | None = None
+
+
 class SimulateReplyIn(BaseModel):
     creator_id: str
     from_email: str | None = None

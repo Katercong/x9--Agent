@@ -19,6 +19,7 @@
 ## 数据表说明
 
 - `creators`：达人主表，一行代表一个达人。
+- `products`：产品档案表，按 `product_type` 为达人回复提供产品信息。
 - `inbound_replies`：入站回复表，MVP 独立版用它承接达人回复。
 - `outreach_emails`：历史建联邮件表，用于构建上下文。
 - `creator_outreach_events`：达人建联事件流水表。
@@ -59,6 +60,10 @@
 `department_code + channel + external_message_id` 保证真实消息幂等；相同正文但不同外部消息 ID
 可以同时存在。本轮尚未提供真实消息接收接口。
 
+产品档案通过达人 `recommended_product_type` 匹配。只有启用中的产品会进入 Agent 上下文；
+未匹配或未启用时，合作相关回复会标记 `missing_product_context` 并转人工复核。
+上下文还会保留当前回复以外最近 5 条历史入站回复，用于后续提示词拼装。
+
 ## 本地运行
 
 ```powershell
@@ -90,6 +95,9 @@ Remove-Item -LiteralPath .\data\replychat_agent.sqlite -ErrorAction SilentlyCont
 POST /api/followup-agent/creators
 PUT  /api/followup-agent/creators/{creator_id}
 PATCH /api/followup-agent/creators/{creator_id}
+POST /api/followup-agent/products
+PUT  /api/followup-agent/products/{product_id}
+PATCH /api/followup-agent/products/{product_id}
 POST /api/followup-agent/simulate-reply
 POST /api/followup-agent/runs
 GET  /api/followup-agent/replies/{reply_id}
@@ -103,6 +111,9 @@ GET  /health
 `PATCH /creators/{creator_id}` 只更新请求中显式提供的字段，未提供字段保持不变。
 在 PATCH 中显式传入 `null` 会清空对应可空档案字段。PUT/PATCH 对不存在的达人返回 `404`。
 达人当前跟进状态和 DNC 状态由回复流程维护，不接受档案接口直接修改。
+
+产品接口同样采用明确语义：POST 创建产品，PUT 完整替换，PATCH 仅更新显式字段；
+产品类型在产品档案中唯一。
 
 ## 测试
 

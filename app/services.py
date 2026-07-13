@@ -18,6 +18,7 @@ from .models import (
     FollowupTask,
     InboundReply,
     OutreachEmail,
+    Product,
 )
 from .schemas import AgentSuggestion, REPLY_CATEGORIES, ReplyClassification
 
@@ -135,6 +136,25 @@ def build_followup_context(db: Session, inbound_reply_id: str) -> dict[str, Any]
     creator = db.get(Creator, reply.creator_id)
     if creator is None:
         raise HTTPException(status_code=404, detail="creator not found")
+    product = None
+    if creator.recommended_product_type:
+        product = db.scalars(
+            select(Product)
+            .where(Product.product_type == creator.recommended_product_type)
+            .where(Product.is_active.is_(True))
+            .limit(1)
+        ).first()
+    recent_inbound_replies = list(
+        db.scalars(
+            select(InboundReply)
+            .where(InboundReply.creator_id == creator.id)
+            .where(InboundReply.direction == "inbound")
+            .where(InboundReply.id != reply.id)
+            .order_by(InboundReply.message_at.desc().nullslast(), InboundReply.created_at.desc())
+            .limit(5)
+        ).all()
+    )
+    recent_inbound_replies.reverse()
     recent_emails = list(
         db.scalars(
             select(OutreachEmail)
@@ -162,8 +182,10 @@ def build_followup_context(db: Session, inbound_reply_id: str) -> dict[str, Any]
     )
     return {
         "reply_category": reply.reply_category or classify_reply("\n".join([reply.subject or "", reply.body])),
+        "product": _product_snapshot(product) if product else None,
         "creator": _creator_snapshot(creator),
         "inbound_reply": _reply_snapshot(reply),
+        "recent_inbound_replies": [_reply_snapshot(row) for row in recent_inbound_replies],
         "recent_outreach_emails": [_email_snapshot(row) for row in recent_emails],
         "recent_events": [_event_snapshot(row) for row in recent_events],
         "open_followup_tasks": [_task_snapshot(row) for row in open_tasks],
@@ -291,7 +313,7 @@ def _context_warnings(context: dict[str, Any]) -> list[str]:
     warnings = []
     if not (creator.get("bio") or creator.get("recommendation_reason")):
         warnings.append("missing_creator_context")
-    if not creator.get("recommended_product_type"):
+    if not context.get("product"):
         warnings.append("missing_product_context")
     return warnings
 
@@ -464,6 +486,28 @@ def _creator_snapshot(row: Creator) -> dict[str, Any]:
         "recommended_product_type": row.recommended_product_type,
         "recommended_collab_type": row.recommended_collab_type,
     }
+
+
+def _product_snapshot(row: Product) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "product_type": row.product_type,
+        "name": row.name,
+        "summary": row.summary,
+        "selling_points": _load_json_list(row.selling_points_json),
+        "target_audience": row.target_audience,
+        "collaboration_requirements": row.collaboration_requirements,
+        "forbidden_claims": _load_json_list(row.forbidden_claims_json),
+        "notes": row.notes,
+    }
+
+
+def _load_json_list(value: str | None) -> list[str]:
+    try:
+        parsed = json.loads(value or "[]")
+    except ValueError:
+        return []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
 
 
 def _reply_snapshot(row: InboundReply) -> dict[str, Any]:

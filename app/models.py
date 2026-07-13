@@ -33,6 +33,26 @@ class Creator(Base):
     updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class Product(Base):
+    """产品档案：按产品类型为达人回复建议提供可控的业务上下文。"""
+
+    __tablename__ = "products"
+    __table_args__ = (UniqueConstraint("product_type", name="uq_products_product_type"),)
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    product_type: Mapped[str] = mapped_column(String(80), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    summary: Mapped[str] = mapped_column(Text)
+    selling_points_json: Mapped[str] = mapped_column(Text, default="[]")
+    target_audience: Mapped[str | None] = mapped_column(Text, nullable=True)
+    collaboration_requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
+    forbidden_claims_json: Mapped[str] = mapped_column(Text, default="[]")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(default=True, index=True)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
+    updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class InboundReply(Base):
     """入站回复表：独立 MVP 中承接原项目 creator_email_messages 的 inbound 角色。"""
 

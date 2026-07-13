@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError  # noqa: E402
 from app.database import Base, SessionLocal, engine, init_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import AgentFollowupRun, Creator, CreatorOutreachEvent, FollowupTask, InboundReply  # noqa: E402
-from app import services  # noqa: E402
+from app import models, services  # noqa: E402
 from app.services import classify_reply  # noqa: E402
 
 
@@ -25,6 +25,23 @@ def reset_database():
 
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    if hasattr(models, "Product"):
+        with SessionLocal() as db:
+            db.add(
+                models.Product(
+                    id="product_default_baby_care",
+                    product_type="baby care",
+                    name="Baby Care Starter",
+                    summary="Daily baby care product for young families.",
+                    selling_points_json=json.dumps(["gentle formula", "easy daily use"]),
+                    target_audience="Parents of young children",
+                    collaboration_requirements="One short product demonstration video.",
+                    forbidden_claims_json=json.dumps(["medical cure claims"]),
+                    notes="Avoid health treatment promises.",
+                    is_active=True,
+                )
+            )
+            db.commit()
 
 
 def test_classify_reply_categories():
@@ -225,6 +242,103 @@ def test_explicit_opt_out_marks_do_not_contact_pending_confirmation():
         assert db.scalar(
             select(func.count()).select_from(FollowupTask).where(FollowupTask.creator_id == creator_id)
         ) == 0
+
+
+def test_product_api_creates_updates_and_rejects_duplicate_type():
+    client = TestClient(app)
+    payload = _product_payload(id="product_travel", product_type="travel care")
+
+    created = client.post("/api/followup-agent/products", json=payload)
+    duplicate = client.post("/api/followup-agent/products", json={**payload, "id": "product_travel_duplicate"})
+    replaced = client.put(
+        "/api/followup-agent/products/product_travel",
+        json=_product_payload(
+            id="ignored_by_path",
+            product_type="travel care",
+            name="Updated Travel Care",
+            notes=None,
+        ),
+    )
+    patched = client.patch(
+        "/api/followup-agent/products/product_travel",
+        json={"summary": "Patched summary."},
+    )
+
+    assert created.status_code == 201, created.text
+    assert duplicate.status_code == 409
+    assert replaced.status_code == 200, replaced.text
+    assert patched.status_code == 200, patched.text
+    assert hasattr(models, "Product")
+    with SessionLocal() as db:
+        product = db.get(models.Product, "product_travel")
+        assert product is not None
+        assert product.name == "Updated Travel Care"
+        assert product.summary == "Patched summary."
+        assert product.notes is None
+
+
+def test_product_context_is_added_to_run_and_previous_inbound_reply_is_preserved():
+    client = TestClient(app)
+    creator_id = "creator_product_context"
+    _create_creator(client, creator_id)
+
+    previous = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Could you share the details?", "run_agent": False},
+    )
+    current = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert previous.status_code == 200, previous.text
+    assert current.status_code == 200, current.text
+    context = current.json()["run"]["context"]
+    assert context["product"]["name"] == "Baby Care Starter"
+    assert context["product"]["selling_points"] == ["gentle formula", "easy daily use"]
+    assert context["recent_inbound_replies"][0]["id"] == previous.json()["reply"]["id"]
+
+
+def test_missing_or_inactive_product_context_requires_manual_review():
+    client = TestClient(app)
+    missing_creator_id = "creator_missing_catalog_product"
+    _create_creator(client, missing_creator_id, recommended_product_type="unknown type")
+
+    missing_response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": missing_creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert missing_response.status_code == 200, missing_response.text
+    assert missing_response.json()["reply"]["processing_status"] == "need_ai_review"
+    assert "missing_product_context" in missing_response.json()["run"]["output"]["warnings"]
+
+    inactive_product = client.post(
+        "/api/followup-agent/products",
+        json=_product_payload(id="product_inactive", product_type="inactive care", is_active=False),
+    )
+    assert inactive_product.status_code == 201, inactive_product.text
+    inactive_creator_id = "creator_inactive_catalog_product"
+    _create_creator(client, inactive_creator_id, recommended_product_type="inactive care")
+    inactive_response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": inactive_creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert inactive_response.status_code == 200, inactive_response.text
+    assert inactive_response.json()["reply"]["processing_status"] == "need_ai_review"
+    assert "missing_product_context" in inactive_response.json()["run"]["output"]["warnings"]
+
+
+def test_product_put_and_patch_return_404_for_missing_product():
+    client = TestClient(app)
+    put_response = client.put(
+        "/api/followup-agent/products/product_missing",
+        json=_product_payload(id="ignored", product_type="missing type"),
+    )
+    patch_response = client.patch(
+        "/api/followup-agent/products/product_missing",
+        json={"name": "Missing"},
+    )
+    assert put_response.status_code == 404
+    assert patch_response.status_code == 404
 
 
 def test_post_creator_returns_conflict_when_creator_already_exists():
@@ -600,6 +714,23 @@ def _creator_replace_payload(**overrides: object) -> dict[str, object | None]:
         "recommendation_reason": "Replacement reason.",
         "recommended_product_type": "baby care",
         "recommended_collab_type": "affiliate",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _product_payload(**overrides: object) -> dict[str, object | None]:
+    payload: dict[str, object | None] = {
+        "id": "product_default",
+        "product_type": "default type",
+        "name": "Default Product",
+        "summary": "Default product summary.",
+        "selling_points": ["point one", "point two"],
+        "target_audience": "Default audience",
+        "collaboration_requirements": "One short video.",
+        "forbidden_claims": ["No medical claims"],
+        "notes": "Default notes.",
+        "is_active": True,
     }
     payload.update(overrides)
     return payload

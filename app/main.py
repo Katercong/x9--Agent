@@ -10,8 +10,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .database import get_db, init_db
-from .models import AgentFollowupRun, Creator, InboundReply
-from .schemas import CreatorCreateIn, CreatorPatchIn, CreatorReplaceIn, RunAgentIn, SimulateReplyIn
+from .models import AgentFollowupRun, Creator, InboundReply, Product
+from .schemas import (
+    CreatorCreateIn,
+    CreatorPatchIn,
+    CreatorReplaceIn,
+    ProductCreateIn,
+    ProductPatchIn,
+    ProductReplaceIn,
+    RunAgentIn,
+    SimulateReplyIn,
+)
 from .services import (
     classify_reply_result,
     ensure_pending_followup,
@@ -78,6 +87,55 @@ def patch_creator(
     db.commit()
     db.refresh(creator)
     return {"ok": True, "creator": _creator_to_dict(creator)}
+
+
+@app.post("/api/followup-agent/products", status_code=201)
+def create_product(body: ProductCreateIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+    existing = db.get(Product, body.id)
+    duplicate_type = db.scalars(select(Product).where(Product.product_type == body.product_type).limit(1)).first()
+    if existing is not None or duplicate_type is not None:
+        raise HTTPException(status_code=409, detail="product id or product_type already exists")
+    product = Product(**_product_values(body.model_dump()))
+    db.add(product)
+    db.commit()
+    db.refresh(product)
+    return {"ok": True, "product": _product_to_dict(product)}
+
+
+@app.put("/api/followup-agent/products/{product_id}")
+def replace_product(
+    product_id: str,
+    body: ProductReplaceIn,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    product = db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="product not found")
+    _ensure_product_type_available(db, product_id, body.product_type)
+    for key, value in _product_values(body.model_dump()).items():
+        setattr(product, key, value)
+    db.commit()
+    db.refresh(product)
+    return {"ok": True, "product": _product_to_dict(product)}
+
+
+@app.patch("/api/followup-agent/products/{product_id}")
+def patch_product(
+    product_id: str,
+    body: ProductPatchIn,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    product = db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="product not found")
+    updates = body.model_dump(exclude_unset=True)
+    if "product_type" in updates and updates["product_type"] is not None:
+        _ensure_product_type_available(db, product_id, str(updates["product_type"]))
+    for key, value in _product_values(updates).items():
+        setattr(product, key, value)
+    db.commit()
+    db.refresh(product)
+    return {"ok": True, "product": _product_to_dict(product)}
 
 
 @app.post("/api/followup-agent/simulate-reply")
@@ -231,6 +289,46 @@ def _creator_to_dict(row: Creator) -> dict[str, Any]:
         "current_status": row.current_status,
         "do_not_contact_status": row.do_not_contact_status,
     }
+
+
+def _product_values(values: dict[str, Any]) -> dict[str, Any]:
+    """把接口中的列表字段转换为数据库保存的 JSON 文本。"""
+
+    converted = dict(values)
+    if "selling_points" in converted:
+        converted["selling_points_json"] = json.dumps(converted.pop("selling_points") or [], ensure_ascii=False)
+    if "forbidden_claims" in converted:
+        converted["forbidden_claims_json"] = json.dumps(converted.pop("forbidden_claims") or [], ensure_ascii=False)
+    return converted
+
+
+def _ensure_product_type_available(db: Session, product_id: str, product_type: str) -> None:
+    existing = db.scalars(select(Product).where(Product.product_type == product_type).limit(1)).first()
+    if existing is not None and existing.id != product_id:
+        raise HTTPException(status_code=409, detail="product_type already exists")
+
+
+def _product_to_dict(row: Product) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "product_type": row.product_type,
+        "name": row.name,
+        "summary": row.summary,
+        "selling_points": _load_json_list(row.selling_points_json),
+        "target_audience": row.target_audience,
+        "collaboration_requirements": row.collaboration_requirements,
+        "forbidden_claims": _load_json_list(row.forbidden_claims_json),
+        "notes": row.notes,
+        "is_active": row.is_active,
+    }
+
+
+def _load_json_list(value: str | None) -> list[str]:
+    try:
+        parsed = json.loads(value or "[]")
+    except ValueError:
+        return []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
 
 
 def _reply_to_dict(row: InboundReply) -> dict[str, Any]:
