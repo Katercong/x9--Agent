@@ -12,6 +12,7 @@ from .evaluation_cases import get_suite
 from .llm import SiliconFlowProviderError, call_siliconflow_json
 from .prompts import build_prompt_package
 from .schemas import AgentSuggestion
+from .services import build_context_insufficient_suggestion, collect_context_warnings, has_missing_campaign_brief
 
 
 def load_suite(name: str) -> list[dict[str, Any]]:
@@ -33,19 +34,24 @@ def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
             "missed_manual_review_count": 0,
             "p95_latency_ms": 0.0,
         }
-    latencies = sorted(float(record["latency_ms"]) for record in records)
+    provider_records = [record for record in records if record["outcome"] != "context_insufficient"]
+    preflight_records = [record for record in records if record["outcome"] == "context_insufficient"]
+    latencies = sorted(float(record["latency_ms"]) for record in provider_records)
     p95_index = max(0, math.ceil(len(latencies) * 0.95) - 1)
     return {
         "total": total,
-        "json_parse_rate": _rate(records, "json_parse_valid"),
-        "pydantic_pass_rate": _rate(records, "pydantic_valid"),
-        "route_exact_rate": _rate(records, "route_exact"),
+        "provider_attempt_count": len(provider_records),
+        "context_insufficient_count": len(preflight_records),
+        "json_parse_rate": _rate(provider_records, "json_parse_valid") if provider_records else None,
+        "pydantic_pass_rate": _rate(provider_records, "pydantic_valid") if provider_records else None,
+        "route_exact_rate": _rate(provider_records, "route_exact") if provider_records else None,
+        "preflight_route_exact_rate": _rate(preflight_records, "route_exact") if preflight_records else None,
         "missed_manual_review_count": sum(
             1
             for record in records
             if record["manual_review_expected"] and not record["manual_review_actual"]
         ),
-        "p95_latency_ms": latencies[p95_index],
+        "p95_latency_ms": latencies[p95_index] if latencies else 0.0,
     }
 
 
@@ -58,9 +64,11 @@ def run_suite(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """显式允许后才批量调用 Provider，并可将评测结果写入忽略目录。"""
 
-    if not live:
+    cases = load_suite(name)
+    requires_provider = any(not has_missing_campaign_brief(collect_context_warnings(case["context"])) for case in cases)
+    if requires_provider and not live:
         raise ValueError("real provider evaluation requires --live")
-    records = [_run_case(case, prompt_version=prompt_version) for case in load_suite(name)]
+    records = [_run_case(case, prompt_version=prompt_version) for case in cases]
     summary = summarize_records(records)
     summary["prompt_version"] = prompt_version
     if output_dir is not None:
@@ -69,6 +77,16 @@ def run_suite(
 
 
 def _run_case(case: dict[str, Any], *, prompt_version: str) -> dict[str, Any]:
+    context_warnings = collect_context_warnings(case["context"])
+    if has_missing_campaign_brief(context_warnings):
+        return _record(
+            case,
+            "context_insufficient",
+            True,
+            True,
+            build_context_insufficient_suggestion(case["context"], context_warnings),
+            0.0,
+        )
     package = build_prompt_package(case["context"], prompt_version=prompt_version)
     started = time.perf_counter()
     try:
@@ -120,7 +138,7 @@ def _record(
 
 
 def _rate(records: list[dict[str, Any]], field: str) -> float:
-    return sum(1 for record in records if record[field]) / len(records)
+    return sum(1 for record in records if record[field]) / len(records) if records else 0.0
 
 
 def _elapsed_ms(started: float) -> float:
@@ -147,7 +165,7 @@ def _write_report(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run synthetic LLM evaluation without touching the business database.")
-    parser.add_argument("--suite", default="pilot", choices=("pilot",))
+    parser.add_argument("--suite", default="pilot", choices=("pilot", "context_preflight"))
     parser.add_argument("--prompt-version", default="reply_followup_v1", choices=("reply_followup_v1", "reply_followup_v2"))
     parser.add_argument("--live", action="store_true", help="Allow real SiliconFlow requests.")
     parser.add_argument("--output-dir", type=Path, default=Path("evaluation_reports"))

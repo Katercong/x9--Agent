@@ -118,6 +118,7 @@ CAMPAIGN_DETAIL_REQUESTS = {
         "campaign details",
         "合作详情",
         "内容要求",
+        "交付",
         "具体信息",
     ),
     "budget_guidance": ("budget", "rate", "commission", "预算", "报价", "佣金"),
@@ -239,12 +240,12 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
 
     context = build_followup_context(db, inbound_reply_id)
     prompt_package = build_prompt_package(context)
-    context_warnings = _context_warnings(context)
-    if _has_missing_campaign_brief(context_warnings):
+    context_warnings = collect_context_warnings(context)
+    if has_missing_campaign_brief(context_warnings):
         return _persist_suggestion_run(
             db,
             context=context,
-            suggestion=_context_insufficient_suggestion(context, context_warnings),
+            suggestion=build_context_insufficient_suggestion(context, context_warnings),
             llm_status="context_insufficient",
             prompt_package=prompt_package,
             context_warnings=context_warnings,
@@ -325,11 +326,11 @@ def _persist_suggestion_run(
     return run
 
 
-def _has_missing_campaign_brief(warnings: list[str]) -> bool:
+def has_missing_campaign_brief(warnings: list[str]) -> bool:
     return any(warning.startswith("missing_campaign_") or warning == "missing_budget_guidance" for warning in warnings)
 
 
-def _context_insufficient_suggestion(context: dict[str, Any], warnings: list[str]) -> AgentSuggestion:
+def build_context_insufficient_suggestion(context: dict[str, Any], warnings: list[str]) -> AgentSuggestion:
     """资料不足时使用受限草稿，避免为了生成话术而调用模型并编造细节。"""
 
     reply = context.get("inbound_reply") or {}
@@ -414,7 +415,7 @@ def _persist_failed_run(
     return run
 
 
-def _context_warnings(context: dict[str, Any]) -> list[str]:
+def collect_context_warnings(context: dict[str, Any]) -> list[str]:
     category = str(context.get("reply_category") or "unclear")
     if category not in CONTEXT_REQUIRED_CATEGORIES:
         return []

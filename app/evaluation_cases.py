@@ -12,22 +12,42 @@ ROUTE_EXPECTATIONS = {
 }
 
 
-def _case(case_id: str, category: str, body: str, language: str) -> dict[str, Any]:
+CAMPAIGN_BRIEF = {
+    "campaign_timeline": "Product dispatch within five business days; content due within fourteen calendar days.",
+    "campaign_deliverables": "One 30 to 60 second vertical video with a product link and campaign disclosure.",
+    "budget_guidance": "Budget guidance is reviewed and confirmed by BD before a creator accepts the campaign.",
+}
+
+
+def _case(
+    case_id: str,
+    category: str,
+    body: str,
+    language: str,
+    *,
+    missing_campaign_fields: tuple[str, ...] = (),
+) -> dict[str, Any]:
     action, status, requires_human_review = ROUTE_EXPECTATIONS[category]
+    if missing_campaign_fields:
+        action, status, requires_human_review = "prepare_campaign_brief", "pending_followup", True
+    product = {
+        "name": "Aurora Wireless Earbuds",
+        "product_type": "wireless earbuds",
+        "summary": "Noise-cancelling earbuds for everyday commuting.",
+        "selling_points": ["active noise cancellation", "30-hour battery"],
+        "target_audience": "commuters and lifestyle audiences",
+        "collaboration_requirements": "Short-form product demonstration.",
+        "forbidden_claims": ["medical benefit"],
+        **CAMPAIGN_BRIEF,
+    }
+    for field in missing_campaign_fields:
+        product[field] = None
     return {
         "id": case_id,
         "language": language,
         "context": {
             "reply_category": category,
-            "product": {
-                "name": "Aurora Wireless Earbuds",
-                "product_type": "wireless earbuds",
-                "summary": "Noise-cancelling earbuds for everyday commuting.",
-                "selling_points": ["active noise cancellation", "30-hour battery"],
-                "target_audience": "commuters and lifestyle audiences",
-                "collaboration_requirements": "Short-form product demonstration.",
-                "forbidden_claims": ["medical benefit"],
-            },
+            "product": product,
             "creator": {
                 "id": f"synthetic_{case_id}",
                 "handle": f"creator_{case_id}",
@@ -81,7 +101,28 @@ PILOT_SPECS = (
 )
 
 
+CONTEXT_PREFLIGHT_SPECS = (
+    ("timeline_en", "need_more_info", "Could you share the campaign timeline?", "en", ("campaign_timeline",)),
+    ("deliverables_en", "need_more_info", "What deliverables do you need from me?", "en", ("campaign_deliverables",)),
+    ("budget_en", "negotiation", "What is the budget range for this collaboration?", "en", ("budget_guidance",)),
+    ("timeline_zh", "need_more_info", "请提供这次合作的时间线。", "zh", ("campaign_timeline",)),
+    ("deliverables_zh", "need_more_info", "这次合作需要交付哪些内容？", "zh", ("campaign_deliverables",)),
+    ("budget_zh", "negotiation", "这次合作的预算是多少？", "zh", ("budget_guidance",)),
+)
+
+
 def get_suite(name: str) -> list[dict[str, Any]]:
-    if name != "pilot":
-        raise ValueError(f"unknown evaluation suite: {name}")
-    return [_case(f"pilot_{case_id}", category, body, language) for case_id, category, body, language in PILOT_SPECS]
+    if name == "pilot":
+        return [_case(f"pilot_{case_id}", category, body, language) for case_id, category, body, language in PILOT_SPECS]
+    if name == "context_preflight":
+        return [
+            _case(
+                f"context_preflight_{case_id}",
+                category,
+                body,
+                language,
+                missing_campaign_fields=missing_fields,
+            )
+            for case_id, category, body, language, missing_fields in CONTEXT_PREFLIGHT_SPECS
+        ]
+    raise ValueError(f"unknown evaluation suite: {name}")

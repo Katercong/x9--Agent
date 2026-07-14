@@ -1129,6 +1129,9 @@ def test_evaluation_suite_is_synthetic_and_has_the_planned_pilot_size():
     assert len(cases) == 24
     assert all(case["id"].startswith("pilot_") for case in cases)
     assert all("@" not in json.dumps(case, ensure_ascii=False) for case in cases)
+    assert all(case["context"]["product"]["campaign_timeline"] for case in cases)
+    assert all(case["context"]["product"]["campaign_deliverables"] for case in cases)
+    assert all(case["context"]["product"]["budget_guidance"] for case in cases)
 
 
 def test_evaluation_summary_tracks_validation_routing_review_and_latency():
@@ -1178,6 +1181,26 @@ def test_evaluation_requires_explicit_live_flag(monkeypatch):
 
     with pytest.raises(ValueError, match="--live"):
         evaluation.run_suite("pilot", live=False)
+
+
+def test_context_preflight_suite_runs_without_provider_and_counts_missing_briefs(monkeypatch):
+    """资料缺失评测是本地预检，不应要求 Key 或调用真实模型。"""
+
+    evaluation = importlib.import_module("app.evaluation")
+    monkeypatch.setattr(
+        evaluation,
+        "call_siliconflow_json",
+        lambda system_prompt, user_prompt: pytest.fail("Context preflight must not call the provider"),
+    )
+
+    records, summary = evaluation.run_suite("context_preflight", live=False)
+
+    assert len(records) == 6
+    assert all(record["outcome"] == "context_insufficient" for record in records)
+    assert summary["context_insufficient_count"] == 6
+    assert summary["provider_attempt_count"] == 0
+    assert summary["preflight_route_exact_rate"] == 1.0
+    assert summary["pydantic_pass_rate"] is None
 
 
 def test_evaluation_can_run_a_named_prompt_version_without_real_provider(monkeypatch):
