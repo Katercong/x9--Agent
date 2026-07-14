@@ -79,7 +79,7 @@
 Pydantic `Literal` 与提示词中的 JSON Schema 共用；Provider 返回未知动作时会记录为
 `validation_failed`，并转入人工复核。
 
-配置 `SILICONFLOW_API_KEY` 后，Agent 会通过硅基流动 OpenAI 兼容接口调用
+在项目根目录的 `.env` 中配置 `SILICONFLOW_API_KEY` 后，Agent 会通过硅基流动 OpenAI 兼容接口调用
 `deepseek-ai/DeepSeek-V4-Flash`，并使用 Provider JSON Mode。可选的 `SILICONFLOW_MODEL`
 可以覆盖默认模型。未配置 Key 时保持本地 fallback；Provider 调用失败会写入
 `llm_status=provider_error` 并转人工复核。Key 只应放在本机环境变量中，不会写入 run、数据库或日志。
@@ -93,11 +93,12 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-PowerShell 临时配置真实模型时：
+项目已创建本地 `.env` 占位文件；只需填写新生成的 Key。`.env.example` 是可提交的模板，真实
+`.env` 已被 `.gitignore` 忽略。系统环境变量存在时优先于 `.env`。
 
-```powershell
-$env:SILICONFLOW_API_KEY = "<replace-with-a-new-key>"
-$env:SILICONFLOW_MODEL = "deepseek-ai/DeepSeek-V4-Flash" # 可选
+```dotenv
+SILICONFLOW_API_KEY=<replace-with-a-new-key>
+SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V4-Flash
 ```
 
 默认使用 SQLite：
@@ -105,6 +106,19 @@ $env:SILICONFLOW_MODEL = "deepseek-ai/DeepSeek-V4-Flash" # 可选
 ```text
 sqlite:///./data/replychat_agent.sqlite
 ```
+
+## LLM 评测
+
+评测使用仓库内的脱敏合成上下文，不写入业务数据库。开发集当前固定为 24 条，结果会记录
+JSON 解析率、Pydantic 通过率、分类/动作/状态三项路由准确率、漏转人工数和 P95 延迟。
+
+真实 Provider 调用必须显式传入 `--live`，避免因为本地 `.env` 被读取而在测试中意外消耗额度：
+
+```powershell
+python -m app.evaluation --suite pilot --live
+```
+
+报告写入被 Git 忽略的 `evaluation_reports/`。未传入 `--live` 时命令会拒绝执行，不会请求模型。
 
 当前 MVP 尚未引入数据库迁移。若本地已经运行过旧版本，升级模型字段后请先重建可丢弃的开发库：
 

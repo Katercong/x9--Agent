@@ -6,9 +6,12 @@ import tempfile
 from datetime import datetime
 import importlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.NamedTemporaryFile(delete=False, suffix='.db').name}"
+# 单元测试必须使用本地 fallback，避免读取开发者 .env 后意外消耗真实模型额度。
+os.environ["SILICONFLOW_API_KEY"] = ""
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -953,6 +956,7 @@ def test_siliconflow_client_uses_openai_json_mode(monkeypatch):
         "api_key": "test-key",
         "base_url": "https://api.siliconflow.cn/v1",
         "timeout": 20.0,
+        "max_retries": 0,
     }
     assert captured["request"] == {
         "model": "deepseek-ai/DeepSeek-V4-Flash",
@@ -962,8 +966,78 @@ def test_siliconflow_client_uses_openai_json_mode(monkeypatch):
         ],
         "response_format": {"type": "json_object"},
         "temperature": 0.2,
-        "max_tokens": 1000,
+        "max_tokens": 512,
     }
+
+
+def test_env_example_documents_siliconflow_configuration():
+    """仓库应提供无密钥的环境变量模板，避免把真实 Key 写进源码。"""
+
+    example_path = Path(__file__).resolve().parents[1] / ".env.example"
+    assert example_path.is_file()
+    content = example_path.read_text(encoding="utf-8")
+    assert "SILICONFLOW_API_KEY=" in content
+    assert "SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V4-Flash" in content
+
+
+def test_evaluation_suite_is_synthetic_and_has_the_planned_pilot_size():
+    """评测样本应为可复现的脱敏合成数据，且开发集固定为 24 条。"""
+
+    evaluation = importlib.import_module("app.evaluation")
+    cases = evaluation.load_suite("pilot")
+
+    assert len(cases) == 24
+    assert all(case["id"].startswith("pilot_") for case in cases)
+    assert all("@" not in json.dumps(case, ensure_ascii=False) for case in cases)
+
+
+def test_evaluation_summary_tracks_validation_routing_review_and_latency():
+    """评测汇总必须区分解析、校验、路由、人工复核与延迟。"""
+
+    evaluation = importlib.import_module("app.evaluation")
+    summary = evaluation.summarize_records(
+        [
+            {
+                "outcome": "success",
+                "json_parse_valid": True,
+                "pydantic_valid": True,
+                "route_exact": True,
+                "manual_review_expected": False,
+                "manual_review_actual": False,
+                "latency_ms": 100.0,
+            },
+            {
+                "outcome": "validation_failed",
+                "json_parse_valid": True,
+                "pydantic_valid": False,
+                "route_exact": False,
+                "manual_review_expected": True,
+                "manual_review_actual": False,
+                "latency_ms": 200.0,
+            },
+        ]
+    )
+
+    assert summary["total"] == 2
+    assert summary["json_parse_rate"] == 1.0
+    assert summary["pydantic_pass_rate"] == 0.5
+    assert summary["route_exact_rate"] == 0.5
+    assert summary["missed_manual_review_count"] == 1
+    assert summary["p95_latency_ms"] == 200.0
+
+
+def test_evaluation_requires_explicit_live_flag(monkeypatch):
+    """默认评测不能因读取 .env 而意外消耗真实模型额度。"""
+
+    evaluation = importlib.import_module("app.evaluation")
+    monkeypatch.setattr(
+        evaluation,
+        "call_siliconflow_json",
+        lambda system_prompt, user_prompt: pytest.fail("Provider must not be called without --live"),
+    )
+
+    with pytest.raises(ValueError, match="--live"):
+        evaluation.run_suite("pilot", live=False)
 
 
 def test_explicit_human_review_output_moves_reply_to_manual_review(monkeypatch):

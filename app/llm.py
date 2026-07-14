@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import os
 
+from .config import load_project_environment
+
+
+load_project_environment()
+
 
 SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 DEFAULT_SILICONFLOW_MODEL = "deepseek-ai/DeepSeek-V4-Flash"
@@ -26,6 +31,7 @@ def call_siliconflow_json(system_prompt: str, user_prompt: str) -> str:
             api_key=api_key,
             base_url=SILICONFLOW_BASE_URL,
             timeout=SILICONFLOW_TIMEOUT_SECONDS,
+            max_retries=0,
         )
         response = client.chat.completions.create(
             model=os.getenv("SILICONFLOW_MODEL", DEFAULT_SILICONFLOW_MODEL),
@@ -35,7 +41,7 @@ def call_siliconflow_json(system_prompt: str, user_prompt: str) -> str:
             ],
             response_format={"type": "json_object"},
             temperature=0.2,
-            max_tokens=1000,
+            max_tokens=512,
         )
         content = response.choices[0].message.content
     except Exception as exc:

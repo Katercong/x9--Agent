@@ -8,3 +8,4 @@ venv/
 *.sqlite
 *.sqlite-journal
 data/
+evaluation_reports/
