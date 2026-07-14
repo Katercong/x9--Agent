@@ -34,16 +34,24 @@ def call_siliconflow_json(system_prompt: str, user_prompt: str) -> str:
             timeout=SILICONFLOW_TIMEOUT_SECONDS,
             max_retries=0,
         )
-        response = client.chat.completions.create(
-            model=os.getenv("SILICONFLOW_MODEL", DEFAULT_SILICONFLOW_MODEL),
-            messages=[
+        model = os.getenv("SILICONFLOW_MODEL", DEFAULT_SILICONFLOW_MODEL)
+        request_params = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            response_format={"type": "json_object"},
-            temperature=0.2,
-            max_tokens=512,
-        )
+            "response_format": {"type": "json_object"},
+            "temperature": 0.2,
+            "max_tokens": 512,
+        }
+        if model == DEFAULT_SILICONFLOW_MODEL:
+            # V4 Flash 的 low/medium 会被 Provider 映射为 high，故显式使用最低有效档。
+            request_params["reasoning_effort"] = "high"
+        elif model in {"deepseek-ai/DeepSeek-V3.2", "Pro/deepseek-ai/DeepSeek-V3.2"}:
+            # V3.2 支持关闭思考；业务仅需结构化草稿，优先降低排队和生成耗时。
+            request_params["extra_body"] = {"enable_thinking": False}
+        response = client.chat.completions.create(**request_params)
         content = response.choices[0].message.content
     except Exception as exc:
         # 不保留 Provider 原始异常，避免响应体或配置意外出现在 run 留痕中。

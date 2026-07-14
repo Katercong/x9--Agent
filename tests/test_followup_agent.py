@@ -1145,9 +1145,37 @@ def test_siliconflow_client_uses_openai_json_mode(monkeypatch):
             {"role": "user", "content": "user context"},
         ],
         "response_format": {"type": "json_object"},
+        "reasoning_effort": "high",
         "temperature": 0.2,
         "max_tokens": 512,
     }
+
+
+def test_siliconflow_v32_disables_thinking_without_v4_reasoning_parameter(monkeypatch):
+    """V3.2 应使用关闭思考参数，不能沿用只属于 V4 Flash 的强度参数。"""
+
+    captured: dict[str, object] = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs: object) -> SimpleNamespace:
+            captured["request"] = kwargs
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}'))])
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "test-key")
+    monkeypatch.setenv("SILICONFLOW_MODEL", "deepseek-ai/DeepSeek-V3.2")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    llm = importlib.import_module("app.llm")
+
+    assert llm.call_siliconflow_json("system contract", "user context") == '{"ok": true}'
+    request = captured["request"]
+    assert isinstance(request, dict)
+    assert request["model"] == "deepseek-ai/DeepSeek-V3.2"
+    assert request["extra_body"] == {"enable_thinking": False}
+    assert "reasoning_effort" not in request
 
 
 def test_env_example_documents_siliconflow_configuration():
