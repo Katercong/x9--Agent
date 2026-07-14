@@ -133,6 +133,22 @@ class InboundReply(Base):
     updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class SimulatedOutboundInstruction(Base):
+    """未来渠道执行器可消费的模拟出站指令；当前版本绝不实际发送。"""
+
+    __tablename__ = "simulated_outbound_instructions"
+    __table_args__ = (UniqueConstraint("inbound_reply_id", "action_type", name="uq_outbound_instruction_reply_action"),)
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id", ondelete="CASCADE"), index=True)
+    inbound_reply_id: Mapped[str] = mapped_column(String(120), ForeignKey("inbound_replies.id", ondelete="CASCADE"), index=True)
+    action_type: Mapped[str] = mapped_column(String(60), index=True)
+    template_key: Mapped[str] = mapped_column(String(80))
+    content: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(40), default="simulated", index=True)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
 class OutreachEmail(Base):
     """历史建联邮件表：用于让 Agent 知道之前发过什么。"""
 

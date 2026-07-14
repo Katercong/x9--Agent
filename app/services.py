@@ -23,6 +23,7 @@ from .models import (
     OutreachEmail,
     Product,
     ReferenceMaterial,
+    SimulatedOutboundInstruction,
 )
 from .prompts import PromptPackage, build_prompt_package
 from .schemas import AgentSuggestion, REPLY_CATEGORIES, ReplyClassification
@@ -652,6 +653,7 @@ def handle_creator_declined(db: Session, creator: Creator, reply: InboundReply) 
         creator.do_not_contact_reason = "explicit_opt_out"
         creator.do_not_contact_requested_at = datetime.utcnow()
         _ensure_dnc_confirmation(db, creator, reply)
+    _ensure_simulated_decline_instruction(db, creator, reply)
 
     open_tasks = list(
         db.scalars(
@@ -707,6 +709,15 @@ def _ensure_dnc_confirmation(db: Session, creator: Creator, reply: InboundReply)
             status="pending_confirmation",
         )
     )
+
+
+def _ensure_simulated_decline_instruction(db: Session, creator: Creator, reply: InboundReply) -> None:
+    """为每条明确拒绝创建一条固定确认模板，仅作为未来渠道接入前的内部留痕。"""
+
+    exists = db.scalar(select(SimulatedOutboundInstruction.id).where(SimulatedOutboundInstruction.inbound_reply_id == reply.id).where(SimulatedOutboundInstruction.action_type == "acknowledge_decline"))
+    if exists is not None:
+        return
+    db.add(SimulatedOutboundInstruction(id=new_id("out"), creator_id=creator.id, inbound_reply_id=reply.id, action_type="acknowledge_decline", template_key="decline_acknowledgement_v1", content="Thanks for letting us know. We will not follow up on this collaboration.", status="simulated"))
 
 
 def _fallback_suggestion(category: str) -> AgentSuggestion:

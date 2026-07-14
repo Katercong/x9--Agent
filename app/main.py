@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .database import get_db, init_db
-from .models import AgentFollowupRun, Creator, InboundReply, Product, ReferenceMaterial
+from .models import AgentFollowupRun, Creator, InboundReply, Product, ReferenceMaterial, SimulatedOutboundInstruction
 from .schemas import (
     CreatorCreateIn,
     CreatorPatchIn,
@@ -175,6 +175,17 @@ def list_reference_materials(active_only: bool = Query(default=False), db: Sessi
         query = query.where(ReferenceMaterial.is_active.is_(True))
     rows = list(db.scalars(query.order_by(ReferenceMaterial.reference_key.asc(), ReferenceMaterial.version.desc())).all())
     return {"ok": True, "items": [_reference_material_to_dict(row) for row in rows]}
+
+
+@app.get("/api/followup-agent/outbound-instructions")
+def list_outbound_instructions(creator_id: str | None = Query(default=None), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """查询内部模拟出站指令，当前接口不会触发任何外部渠道发送。"""
+
+    query = select(SimulatedOutboundInstruction)
+    if creator_id:
+        query = query.where(SimulatedOutboundInstruction.creator_id == creator_id)
+    rows = list(db.scalars(query.order_by(SimulatedOutboundInstruction.created_at.desc())).all())
+    return {"ok": True, "total": len(rows), "items": [{"id": row.id, "creator_id": row.creator_id, "inbound_reply_id": row.inbound_reply_id, "action_type": row.action_type, "template_key": row.template_key, "content": row.content, "status": row.status} for row in rows]}
 
 
 @app.post("/api/followup-agent/simulate-reply")

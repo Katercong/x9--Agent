@@ -407,6 +407,24 @@ def test_repeated_explicit_opt_out_keeps_one_pending_dnc_confirmation():
         assert len(confirmations) == 1
 
 
+def test_decline_creates_one_simulated_outbound_instruction_but_bounce_creates_none():
+    """拒绝只生成固定模拟确认指令，退信因无法送达不应产生任何出站记录。"""
+
+    client = TestClient(app)
+    _create_creator(client, "creator_simulated_decline")
+    declined = client.post("/api/followup-agent/simulate-reply", json={"creator_id": "creator_simulated_decline", "body": "Please unsubscribe me.", "run_agent": True})
+    repeated = client.post("/api/followup-agent/simulate-reply", json={"creator_id": "creator_simulated_decline", "body": "No thanks, not interested.", "run_agent": True})
+    _create_creator(client, "creator_simulated_bounce")
+    bounced = client.post("/api/followup-agent/simulate-reply", json={"creator_id": "creator_simulated_bounce", "body": "Delivery failed, invalid address.", "run_agent": True})
+    assert declined.status_code == 200 and repeated.status_code == 200 and bounced.status_code == 200
+
+    instructions = client.get("/api/followup-agent/outbound-instructions?creator_id=creator_simulated_decline")
+    assert instructions.status_code == 200, instructions.text
+    assert instructions.json()["total"] == 2
+    assert all(row["status"] == "simulated" for row in instructions.json()["items"])
+    assert client.get("/api/followup-agent/outbound-instructions?creator_id=creator_simulated_bounce").json()["total"] == 0
+
+
 def test_product_api_creates_updates_and_rejects_duplicate_type():
     client = TestClient(app)
     payload = _product_payload(id="product_travel", product_type="travel care")
