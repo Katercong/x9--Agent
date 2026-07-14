@@ -31,8 +31,8 @@
 
 - `new`：已入库和分类，尚未完成 Agent 建议处理。
 - `ignored`：规则判定为退信或无效地址，不进入建议生成。
-- `need_ai_review`：分类或建议置信度不足，需要人工复核。
-- `suggestion_ready`：建议已生成并通过当前 MVP 的置信度门槛。
+- `need_ai_review`：除已忽略回复外，所有 Agent 建议都必须由人工确认后才能执行。
+- `suggestion_ready`：保留为历史兼容状态；当前零容忍人工跟进策略不会再自动写入该状态。
 
 回复意图另存于 `reply_category`，规则置信度、命中原因和分类时间分别记录在
 `classification_confidence`、`classification_reason` 和 `classified_at`。
@@ -119,6 +119,15 @@ python -m app.evaluation --suite pilot --live
 ```
 
 报告写入被 Git 忽略的 `evaluation_reports/`。未传入 `--live` 时命令会拒绝执行，不会请求模型。
+
+## 人工确认与活动资料
+
+除退信/无效地址和明确退订外，所有回复的 Agent 结果都会进入 `need_ai_review`：AI 只生成草稿与下一步建议，
+不会自动发送消息、自动恢复达人业务状态或自动应用建议状态。明确拒绝仍会由规则层标记为 `dropped`；若该达人
+后续重新表达合作意向，系统只创建 `reengagement_review` 人工确认待办，状态保持 `dropped` 直到人工确认。
+
+产品档案可选填写 `campaign_timeline`、`campaign_deliverables`、`budget_guidance`。达人明确索要其中缺失的
+合作资料时，系统不调用 LLM，而是创建 `llm_status=context_insufficient` 的受限草稿，建议人工先准备活动资料。
 
 当前 MVP 尚未引入数据库迁移。若本地已经运行过旧版本，升级模型字段后请先重建可丢弃的开发库：
 

@@ -116,9 +116,11 @@ def test_simulate_reply_runs_agent_and_persists_run():
     assert reply.status_code == 200, reply.text
     payload = reply.json()
     assert payload["run"]["reply_category"] == "need_more_info"
-    assert payload["run"]["llm_status"] == "not_configured"
-    assert payload["run"]["output"]["next_action"] == "send_campaign_details"
-    assert payload["reply"]["processing_status"] == "suggestion_ready"
+    assert payload["run"]["llm_status"] == "context_insufficient"
+    assert payload["run"]["output"]["next_action"] == "prepare_campaign_brief"
+    assert payload["reply"]["processing_status"] == "need_ai_review"
+    assert payload["run"]["output"]["requires_human_review"] is True
+    assert "human_approval_required" in payload["run"]["output"]["warnings"]
     assert payload["reply"]["reply_category"] == "need_more_info"
     assert payload["reply"]["classification_confidence"] == 0.82
     assert payload["reply"]["classification_reason"].startswith("matched_keyword:")
@@ -235,6 +237,90 @@ def test_not_interested_drops_creator_and_cancels_existing_reply_followup_task()
             ).all()
         )
         assert event_types.count("creator_declined") == 1
+
+
+def test_dropped_creator_reengagement_requires_human_confirmation_before_status_restore():
+    """拒绝后的重新表达意向只能进入确认队列，不能自动恢复达人业务状态。"""
+
+    client = TestClient(app)
+    creator_id = "creator_reengagement_review"
+    _create_creator(client, creator_id)
+    client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "No thanks, not interested.", "run_agent": True},
+    )
+
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "I changed my mind and am interested in collaborating.", "run_agent": True},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["reply"]["processing_status"] == "need_ai_review"
+
+    with SessionLocal() as db:
+        creator = db.get(Creator, creator_id)
+        assert creator is not None
+        assert creator.current_status == "dropped"
+        task = db.scalar(
+            select(FollowupTask)
+            .where(FollowupTask.creator_id == creator_id)
+            .where(FollowupTask.task_type == "reengagement_review")
+        )
+        assert task is not None
+        assert task.status == "open"
+
+
+def test_campaign_brief_fields_are_available_to_product_context():
+    """时间线、交付物和预算指引应能随产品档案写入并返回。"""
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/followup-agent/products",
+        json={
+            "id": "product_campaign_brief",
+            "product_type": "campaign brief type",
+            "name": "Campaign Brief Product",
+            "summary": "Synthetic product.",
+            "campaign_timeline": "Content due within 14 days after product delivery.",
+            "campaign_deliverables": "One short video and one product link.",
+            "budget_guidance": "Budget is confirmed by BD before approval.",
+        },
+    )
+    assert response.status_code == 201, response.text
+    product = response.json()["product"]
+    assert product["campaign_timeline"] == "Content due within 14 days after product delivery."
+    assert product["campaign_deliverables"] == "One short video and one product link."
+    assert product["budget_guidance"] == "Budget is confirmed by BD before approval."
+
+
+def test_detail_request_with_missing_campaign_brief_requires_human_and_names_missing_fields(monkeypatch):
+    """达人索要合作资料而档案缺失时，系统必须转人工而非要求模型编造。"""
+
+    client = TestClient(app)
+    creator_id = "creator_missing_campaign_brief"
+    _create_creator(client, creator_id)
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "test-key")
+    monkeypatch.setattr(
+        services,
+        "call_siliconflow_json",
+        lambda system_prompt, user_prompt: pytest.fail("Missing campaign brief must not call the provider"),
+    )
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={
+            "creator_id": creator_id,
+            "body": "Could you send campaign details, timeline, deliverables, and budget?",
+            "run_agent": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    output = response.json()["run"]["output"]
+    assert response.json()["reply"]["processing_status"] == "need_ai_review"
+    assert response.json()["run"]["llm_status"] == "context_insufficient"
+    assert output["next_action"] == "prepare_campaign_brief"
+    assert "missing_campaign_timeline" in output["warnings"]
+    assert "missing_campaign_deliverables" in output["warnings"]
+    assert "missing_budget_guidance" in output["warnings"]
 
 
 def test_explicit_opt_out_marks_do_not_contact_pending_confirmation():
@@ -881,6 +967,7 @@ def test_v2_prompt_makes_rule_category_and_route_mapping_explicit():
     assert package.prompt_version == "reply_followup_v2"
     assert "Authoritative rule category: negotiation" in package.system_prompt
     assert "negotiation -> clarify_terms / pending_followup / requires_human_review=true" in package.system_prompt
+    assert "Campaign detail policy" in package.system_prompt
     assert "Do not invent any other value." in package.system_prompt
 
 

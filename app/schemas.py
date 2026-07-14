@@ -30,6 +30,7 @@ AgentNextAction = Literal[
     "acknowledge_and_close",
     "ask_clarifying_question",
     "verify_contact_method",
+    "prepare_campaign_brief",
 ]
 
 
@@ -110,6 +111,9 @@ class ProductCreateIn(BaseModel):
     selling_points: list[str] = Field(default_factory=list)
     target_audience: str | None = None
     collaboration_requirements: str | None = None
+    campaign_timeline: str | None = None
+    campaign_deliverables: str | None = None
+    budget_guidance: str | None = None
     forbidden_claims: list[str] = Field(default_factory=list)
     notes: str | None = None
     is_active: bool = True
@@ -124,6 +128,9 @@ class ProductReplaceIn(BaseModel):
     selling_points: list[str]
     target_audience: str | None
     collaboration_requirements: str | None
+    campaign_timeline: str | None = None
+    campaign_deliverables: str | None = None
+    budget_guidance: str | None = None
     forbidden_claims: list[str]
     notes: str | None
     is_active: bool
@@ -138,6 +145,9 @@ class ProductPatchIn(BaseModel):
     selling_points: list[str] | None = None
     target_audience: str | None = None
     collaboration_requirements: str | None = None
+    campaign_timeline: str | None = None
+    campaign_deliverables: str | None = None
+    budget_guidance: str | None = None
     forbidden_claims: list[str] | None = None
     notes: str | None = None
     is_active: bool | None = None

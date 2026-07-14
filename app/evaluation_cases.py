@@ -4,10 +4,10 @@ from typing import Any
 
 
 ROUTE_EXPECTATIONS = {
-    "interested": ("send_campaign_details", "pending_followup", False),
-    "need_more_info": ("send_campaign_details", "pending_followup", False),
+    "interested": ("send_campaign_details", "pending_followup", True),
+    "need_more_info": ("send_campaign_details", "pending_followup", True),
     "negotiation": ("clarify_terms", "pending_followup", True),
-    "not_interested": ("acknowledge_and_close", "dropped", False),
+    "not_interested": ("acknowledge_and_close", "dropped", True),
     "unclear": ("ask_clarifying_question", "pending_followup", True),
 }
 

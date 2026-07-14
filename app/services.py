@@ -110,6 +110,18 @@ CLASSIFICATION_CONFIDENCE = {
 
 LOW_CONFIDENCE_THRESHOLD = 0.70
 CONTEXT_REQUIRED_CATEGORIES = {"interested", "need_more_info", "negotiation"}
+CAMPAIGN_DETAIL_REQUESTS = {
+    "campaign_timeline": ("timeline", "schedule", "deadline", "时间线", "时间安排"),
+    "campaign_deliverables": (
+        "deliverables",
+        "content requirements",
+        "campaign details",
+        "合作详情",
+        "内容要求",
+        "具体信息",
+    ),
+    "budget_guidance": ("budget", "rate", "commission", "预算", "报价", "佣金"),
+}
 
 
 def classify_reply(text: str | None) -> str:
@@ -227,6 +239,16 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
 
     context = build_followup_context(db, inbound_reply_id)
     prompt_package = build_prompt_package(context)
+    context_warnings = _context_warnings(context)
+    if _has_missing_campaign_brief(context_warnings):
+        return _persist_suggestion_run(
+            db,
+            context=context,
+            suggestion=_context_insufficient_suggestion(context, context_warnings),
+            llm_status="context_insufficient",
+            prompt_package=prompt_package,
+            context_warnings=context_warnings,
+        )
     try:
         raw_output, llm_status = generate_raw_followup_output(context, prompt_package)
     except SiliconFlowProviderError as exc:
@@ -259,14 +281,31 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
             prompt_package=prompt_package,
         )
 
-    context_warnings = _context_warnings(context)
-    review_reasons = list(dict.fromkeys([*suggestion.review_reasons, *context_warnings]))
-    requires_human_review = suggestion.requires_human_review or bool(context_warnings)
+    return _persist_suggestion_run(
+        db,
+        context=context,
+        suggestion=suggestion,
+        llm_status=llm_status,
+        prompt_package=prompt_package,
+        context_warnings=context_warnings,
+    )
+
+
+def _persist_suggestion_run(
+    db: Session,
+    *,
+    context: dict[str, Any],
+    suggestion: AgentSuggestion,
+    llm_status: str,
+    prompt_package: PromptPackage,
+    context_warnings: list[str],
+) -> AgentFollowupRun:
+    review_reasons = list(dict.fromkeys([*suggestion.review_reasons, *context_warnings, "human_approval_required"]))
     warnings = list(dict.fromkeys([*suggestion.warnings, *review_reasons]))
     suggestion = suggestion.model_copy(
         update={
             "warnings": warnings,
-            "requires_human_review": requires_human_review,
+            "requires_human_review": True,
             "review_reasons": review_reasons,
         }
     )
@@ -279,11 +318,40 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
     )
     _update_reply_processing_status(
         db,
-        inbound_reply_id,
+        str((context.get("inbound_reply") or {}).get("id") or ""),
         suggestion=suggestion,
         requires_manual_review=suggestion.requires_human_review,
     )
     return run
+
+
+def _has_missing_campaign_brief(warnings: list[str]) -> bool:
+    return any(warning.startswith("missing_campaign_") or warning == "missing_budget_guidance" for warning in warnings)
+
+
+def _context_insufficient_suggestion(context: dict[str, Any], warnings: list[str]) -> AgentSuggestion:
+    """资料不足时使用受限草稿，避免为了生成话术而调用模型并编造细节。"""
+
+    reply = context.get("inbound_reply") or {}
+    source_text = f"{reply.get('subject') or ''}\n{reply.get('body') or ''}"
+    chinese_reply = bool(re.search(r"[\u4e00-\u9fff]", source_text))
+    suggested_reply = (
+        "感谢您的咨询。我们正在由合作负责人确认本次合作的时间线、交付内容和预算信息，确认后将由人工跟进回复您。"
+        if chinese_reply
+        else "Thanks for your interest. Our partnership owner is confirming the campaign timeline, deliverables, and budget guidance and will follow up with the confirmed details."
+    )
+    category = str(context.get("reply_category") or "need_more_info")
+    return AgentSuggestion(
+        reply_category=category,
+        suggested_reply=suggested_reply,
+        next_action="prepare_campaign_brief",
+        suggested_status="pending_followup",
+        confidence=1.0,
+        warnings=warnings,
+        reasoning_summary="Campaign details requested by the creator are missing from the approved product context.",
+        requires_human_review=True,
+        review_reasons=warnings,
+    )
 
 
 def persist_followup_run(
@@ -356,6 +424,13 @@ def _context_warnings(context: dict[str, Any]) -> list[str]:
         warnings.append("missing_creator_context")
     if not context.get("product"):
         warnings.append("missing_product_context")
+        return warnings
+    reply = context.get("inbound_reply") or {}
+    normalized_reply = " ".join([str(reply.get("subject") or ""), str(reply.get("body") or "")]).lower()
+    product = context.get("product") or {}
+    for field, keywords in CAMPAIGN_DETAIL_REQUESTS.items():
+        if _find_keyword(normalized_reply, keywords) is not None and not product.get(field):
+            warnings.append(f"missing_{field}")
     return warnings
 
 
@@ -369,20 +444,15 @@ def _update_reply_processing_status(
     reply = db.get(InboundReply, inbound_reply_id)
     if reply is None or reply.processing_status == "ignored":
         return
-    rule_confidence = reply.classification_confidence or 0.0
-    suggestion_confidence = suggestion.confidence if suggestion else 0.0
-    if (
-        requires_manual_review
-        or rule_confidence < LOW_CONFIDENCE_THRESHOLD
-        or suggestion_confidence < LOW_CONFIDENCE_THRESHOLD
-    ):
-        reply.processing_status = "need_ai_review"
-    else:
-        reply.processing_status = "suggestion_ready"
+    # 除已忽略的退信外，AI 输出只能辅助人工，不能进入自动推进状态。
+    reply.processing_status = "need_ai_review"
     db.flush()
 
 
 def ensure_pending_followup(db: Session, creator: Creator, reply: InboundReply) -> None:
+    if creator.current_status == "dropped":
+        _ensure_reengagement_review(db, creator, reply)
+        return
     creator.current_status = "pending_followup"
     db.add(
         CreatorOutreachEvent(
@@ -413,6 +483,44 @@ def ensure_pending_followup(db: Session, creator: Creator, reply: InboundReply) 
                 status="open",
                 priority=90,
                 reason="Creator replied; follow up now.",
+                due_at=datetime.utcnow(),
+            )
+        )
+    db.flush()
+
+
+def _ensure_reengagement_review(db: Session, creator: Creator, reply: InboundReply) -> None:
+    """已拒绝达人重新表达意向时，仅建立人工确认入口，不自动恢复业务状态。"""
+
+    db.add(
+        CreatorOutreachEvent(
+            id=new_id("oev"),
+            department_code=creator.department_code,
+            creator_id=creator.id,
+            event_type="reengagement_review_required",
+            note="Dropped creator expressed renewed interest; human confirmation required.",
+            metadata_json=json.dumps({"inbound_reply_id": reply.id}, ensure_ascii=False),
+            event_at=datetime.utcnow(),
+        )
+    )
+    existing_task = db.scalars(
+        select(FollowupTask)
+        .where(FollowupTask.creator_id == creator.id)
+        .where(FollowupTask.task_type == "reengagement_review")
+        .where(FollowupTask.status.in_(("open", "pending")))
+        .limit(1)
+    ).first()
+    if existing_task is None:
+        db.add(
+            FollowupTask(
+                id=new_id("task"),
+                department_code=creator.department_code,
+                creator_id=creator.id,
+                owner_user_id=creator.owner_bd,
+                task_type="reengagement_review",
+                status="open",
+                priority=95,
+                reason="Dropped creator expressed renewed interest; confirm before restoring status.",
                 due_at=datetime.utcnow(),
             )
         )
@@ -570,6 +678,9 @@ def _product_snapshot(row: Product) -> dict[str, Any]:
         "selling_points": _load_json_list(row.selling_points_json),
         "target_audience": row.target_audience,
         "collaboration_requirements": row.collaboration_requirements,
+        "campaign_timeline": row.campaign_timeline,
+        "campaign_deliverables": row.campaign_deliverables,
+        "budget_guidance": row.budget_guidance,
         "forbidden_claims": _load_json_list(row.forbidden_claims_json),
         "notes": row.notes,
     }
