@@ -169,6 +169,8 @@ class AgentFollowupRun(Base):
     __table_args__ = (
         Index("ix_agent_followup_runs_creator_reply", "creator_id", "inbound_reply_id"),
         Index("ix_agent_followup_runs_department_created", "department_code", "created_at"),
+        # SQLite MVP 由单 worker 轮询该索引；迁移 PostgreSQL 后可沿用它做并发领取。
+        Index("ix_agent_followup_runs_execution_created", "execution_status", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(120), primary_key=True)
@@ -178,6 +180,13 @@ class AgentFollowupRun(Base):
     reply_category: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     suggested_status: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     llm_status: Mapped[str] = mapped_column(String(40), default="not_configured", index=True)
+    # execution_status 描述任务生命周期；llm_status 只描述模型或校验结果，避免混淆。
+    execution_status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
+    provider_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    started_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
+    finished_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     output_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     validation_error: Mapped[str | None] = mapped_column(Text, nullable=True)

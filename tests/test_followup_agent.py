@@ -116,15 +116,19 @@ def test_simulate_reply_runs_agent_and_persists_run():
     assert reply.status_code == 200, reply.text
     payload = reply.json()
     assert payload["run"]["reply_category"] == "need_more_info"
-    assert payload["run"]["llm_status"] == "context_insufficient"
-    assert payload["run"]["output"]["next_action"] == "prepare_campaign_brief"
     assert payload["reply"]["processing_status"] == "need_ai_review"
-    assert payload["run"]["output"]["requires_human_review"] is True
-    assert "human_approval_required" in payload["run"]["output"]["warnings"]
+    assert payload["run"]["execution_status"] == "queued"
     assert payload["reply"]["reply_category"] == "need_more_info"
     assert payload["reply"]["classification_confidence"] == 0.82
     assert payload["reply"]["classification_reason"].startswith("matched_keyword:")
     assert payload["reply"]["classified_at"] is not None
+
+    completed_run = _process_response_run(client, reply)
+    assert completed_run["llm_status"] == "context_insufficient"
+    assert completed_run["execution_status"] == "context_insufficient"
+    assert completed_run["output"]["next_action"] == "prepare_campaign_brief"
+    assert completed_run["output"]["requires_human_review"] is True
+    assert "human_approval_required" in completed_run["output"]["warnings"]
 
     listed = client.get("/api/followup-agent/runs?creator_id=creator_test_1")
     assert listed.status_code == 200, listed.text
@@ -220,7 +224,7 @@ def test_not_interested_drops_creator_and_cancels_existing_reply_followup_task()
         json={"creator_id": creator_id, "body": "Thanks, but not interested.", "run_agent": True},
     )
     assert rejection.status_code == 200, rejection.text
-    assert rejection.json()["run"]["suggested_status"] == "dropped"
+    assert rejection.json()["run"]["execution_status"] == "queued"
 
     with SessionLocal() as db:
         creator = db.get(Creator, creator_id)
@@ -314,9 +318,10 @@ def test_detail_request_with_missing_campaign_brief_requires_human_and_names_mis
         },
     )
     assert response.status_code == 200, response.text
-    output = response.json()["run"]["output"]
     assert response.json()["reply"]["processing_status"] == "need_ai_review"
-    assert response.json()["run"]["llm_status"] == "context_insufficient"
+    run = _process_response_run(client, response)
+    output = run["output"]
+    assert run["llm_status"] == "context_insufficient"
     assert output["next_action"] == "prepare_campaign_brief"
     assert "missing_campaign_timeline" in output["warnings"]
     assert "missing_campaign_deliverables" in output["warnings"]
@@ -437,7 +442,7 @@ def test_product_context_is_added_to_run_and_previous_inbound_reply_is_preserved
     )
     assert previous.status_code == 200, previous.text
     assert current.status_code == 200, current.text
-    context = current.json()["run"]["context"]
+    context = _process_response_run(client, current)["context"]
     assert context["product"]["name"] == "Baby Care Starter"
     assert context["product"]["selling_points"] == ["gentle formula", "easy daily use"]
     assert context["recent_inbound_replies"][0]["id"] == previous.json()["reply"]["id"]
@@ -454,7 +459,7 @@ def test_missing_or_inactive_product_context_requires_manual_review():
     )
     assert missing_response.status_code == 200, missing_response.text
     assert missing_response.json()["reply"]["processing_status"] == "need_ai_review"
-    assert "missing_product_context" in missing_response.json()["run"]["output"]["warnings"]
+    assert "missing_product_context" in _process_response_run(client, missing_response)["output"]["warnings"]
 
     inactive_product = client.post(
         "/api/followup-agent/products",
@@ -469,7 +474,7 @@ def test_missing_or_inactive_product_context_requires_manual_review():
     )
     assert inactive_response.status_code == 200, inactive_response.text
     assert inactive_response.json()["reply"]["processing_status"] == "need_ai_review"
-    assert "missing_product_context" in inactive_response.json()["run"]["output"]["warnings"]
+    assert "missing_product_context" in _process_response_run(client, inactive_response)["output"]["warnings"]
 
 
 def test_product_put_and_patch_return_404_for_missing_product():
@@ -552,7 +557,7 @@ def test_agent_run_persists_redacted_prompt_package():
         },
     )
     assert response.status_code == 200, response.text
-    run = response.json()["run"]
+    run = _process_response_run(client, response)
     assert run["prompt_version"] == "reply_followup_v1"
     assert run["rendered_prompt"]
     assert "inbound-audit@example.com" not in run["rendered_prompt"]
@@ -817,10 +822,11 @@ def test_invalid_generated_json_is_persisted_and_sent_to_manual_review(monkeypat
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["reply"]["processing_status"] == "need_ai_review"
-    assert payload["run"]["llm_status"] == "invalid_json"
-    assert payload["run"]["suggested_status"] is None
-    assert payload["run"]["output"]["raw_output"] == "not-json"
-    assert payload["run"]["validation_error"]
+    run = _process_response_run(client, response)
+    assert run["llm_status"] == "invalid_json"
+    assert run["suggested_status"] is None
+    assert run["output"]["raw_output"] == "not-json"
+    assert run["validation_error"]
 
 
 def test_pydantic_validation_failure_is_persisted_and_sent_to_manual_review(monkeypatch):
@@ -837,10 +843,11 @@ def test_pydantic_validation_failure_is_persisted_and_sent_to_manual_review(monk
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["reply"]["processing_status"] == "need_ai_review"
-    assert payload["run"]["llm_status"] == "validation_failed"
-    assert payload["run"]["suggested_status"] is None
-    assert payload["run"]["output"]["raw_output"] == invalid_output
-    assert payload["run"]["validation_error"]
+    run = _process_response_run(client, response)
+    assert run["llm_status"] == "validation_failed"
+    assert run["suggested_status"] is None
+    assert run["output"]["raw_output"] == invalid_output
+    assert run["validation_error"]
 
 
 def test_low_suggestion_confidence_requires_manual_review(monkeypatch):
@@ -1007,9 +1014,10 @@ def test_unknown_model_next_action_is_persisted_as_validation_failure(monkeypatc
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["reply"]["processing_status"] == "need_ai_review"
-    assert payload["run"]["llm_status"] == "validation_failed"
-    assert payload["run"]["suggested_status"] is None
-    assert payload["run"]["validation_error"]
+    run = _process_response_run(client, response)
+    assert run["llm_status"] == "validation_failed"
+    assert run["suggested_status"] is None
+    assert run["validation_error"]
 
 
 def test_configured_siliconflow_provider_output_is_used(monkeypatch):
@@ -1043,9 +1051,9 @@ def test_configured_siliconflow_provider_output_is_used(monkeypatch):
         json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
     )
     assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["run"]["llm_status"] == "success"
-    assert payload["run"]["output"]["confidence"] == 0.91
+    run = _process_response_run(client, response)
+    assert run["llm_status"] == "success"
+    assert run["output"]["confidence"] == 0.91
 
 
 def test_siliconflow_provider_error_is_persisted_for_manual_review(monkeypatch):
@@ -1068,8 +1076,9 @@ def test_siliconflow_provider_error_is_persisted_for_manual_review(monkeypatch):
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["reply"]["processing_status"] == "need_ai_review"
-    assert payload["run"]["llm_status"] == "provider_error"
-    assert payload["run"]["validation_error"] == "provider request failed"
+    run = _process_response_run(client, response)
+    assert run["llm_status"] == "provider_error"
+    assert run["validation_error"] == "provider request failed"
 
 
 def test_siliconflow_client_uses_openai_json_mode(monkeypatch):
@@ -1095,7 +1104,7 @@ def test_siliconflow_client_uses_openai_json_mode(monkeypatch):
     assert captured["client"] == {
         "api_key": "test-key",
         "base_url": "https://api.siliconflow.cn/v1",
-        "timeout": 20.0,
+            "timeout": 90.0,
         "max_retries": 0,
     }
     assert captured["request"] == {
@@ -1264,8 +1273,9 @@ def test_explicit_human_review_output_moves_reply_to_manual_review(monkeypatch):
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["reply"]["processing_status"] == "need_ai_review"
-    assert payload["run"]["output"]["requires_human_review"] is True
-    assert "sensitive_collaboration_detail" in payload["run"]["output"]["warnings"]
+    run = _process_response_run(client, response)
+    assert run["output"]["requires_human_review"] is True
+    assert "sensitive_collaboration_detail" in run["output"]["warnings"]
 
 
 def test_missing_creator_context_adds_warning_and_requires_manual_review():
@@ -1280,7 +1290,7 @@ def test_missing_creator_context_adds_warning_and_requires_manual_review():
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["reply"]["processing_status"] == "need_ai_review"
-    assert "missing_creator_context" in payload["run"]["output"]["warnings"]
+    assert "missing_creator_context" in _process_response_run(client, response)["output"]["warnings"]
 
 
 def test_missing_product_context_adds_warning_and_requires_manual_review():
@@ -1295,7 +1305,117 @@ def test_missing_product_context_adds_warning_and_requires_manual_review():
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["reply"]["processing_status"] == "need_ai_review"
-    assert "missing_product_context" in payload["run"]["output"]["warnings"]
+    assert "missing_product_context" in _process_response_run(client, response)["output"]["warnings"]
+
+
+def test_simulate_reply_queues_run_without_calling_generator(monkeypatch):
+    """入站接口只创建待执行任务，不能等待或直接调用模型生成。"""
+
+    client = TestClient(app)
+    creator_id = "creator_async_queue"
+    _create_creator(client, creator_id)
+    monkeypatch.setattr(
+        services,
+        "generate_raw_followup_output",
+        lambda *_: pytest.fail("simulate reply must not invoke the generator"),
+    )
+
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["reply"]["processing_status"] == "need_ai_review"
+    assert payload["run"]["execution_status"] == "queued"
+    assert payload["run"]["llm_status"] == "pending"
+    assert payload["run"]["output"] is None
+
+
+def test_worker_processes_queued_run_and_records_completion(monkeypatch):
+    """worker 领取任务后才生成建议，并回写同一条 run 的执行结果。"""
+
+    client = TestClient(app)
+    creator_id = "creator_async_worker"
+    _create_creator(client, creator_id)
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert queued.status_code == 200, queued.text
+    run_id = queued.json()["run"]["id"]
+    generated = json.dumps(
+        {
+            "reply_category": "interested",
+            "suggested_reply": "Thanks, I will share the campaign details for your review.",
+            "next_action": "send_campaign_details",
+            "suggested_status": "pending_followup",
+            "confidence": 0.91,
+            "reasoning_summary": "The creator expressed clear collaboration interest.",
+        }
+    )
+    monkeypatch.setattr(services, "generate_raw_followup_output", lambda *_: (generated, "success"))
+
+    with SessionLocal() as db:
+        processed = services.process_next_queued_run(db)
+        assert processed is not None
+        assert processed.id == run_id
+        db.commit()
+
+    completed = client.get(f"/api/followup-agent/runs/{run_id}")
+    assert completed.status_code == 200, completed.text
+    run = completed.json()["run"]
+    assert run["execution_status"] == "succeeded"
+    assert run["llm_status"] == "success"
+    assert run["provider_model"] == "deepseek-ai/DeepSeek-V4-Flash"
+    assert run["output"]["next_action"] == "send_campaign_details"
+    assert run["started_at"] is not None
+    assert run["finished_at"] is not None
+
+
+def test_worker_process_once_returns_processed_run_id(monkeypatch):
+    """独立 worker 的单次模式应处理一条任务并返回其 run ID。"""
+
+    import app.worker as worker
+
+    client = TestClient(app)
+    creator_id = "creator_worker_command"
+    _create_creator(client, creator_id)
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert queued.status_code == 200, queued.text
+    generated = json.dumps(
+        {
+            "reply_category": "interested",
+            "suggested_reply": "Thanks, I will send the campaign details.",
+            "next_action": "send_campaign_details",
+            "suggested_status": "pending_followup",
+            "confidence": 0.91,
+            "reasoning_summary": "The creator is interested.",
+        }
+    )
+    monkeypatch.setattr(services, "generate_raw_followup_output", lambda *_: (generated, "success"))
+
+    assert worker.process_once() == queued.json()["run"]["id"]
+
+
+def _process_response_run(client: TestClient, response: object) -> dict[str, object]:
+    """让旧的结果断言显式经过 worker，保持入队与执行两个阶段可见。"""
+
+    payload = response.json()
+    run = payload["run"]
+    assert run is not None
+    with SessionLocal() as db:
+        processed = services.process_next_queued_run(db)
+        assert processed is not None
+        assert processed.id == run["id"]
+        db.commit()
+    completed = client.get(f"/api/followup-agent/runs/{run['id']}")
+    assert completed.status_code == 200, completed.text
+    return completed.json()["run"]
 
 
 def _create_creator(

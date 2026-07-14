@@ -23,10 +23,10 @@ from .schemas import (
 )
 from .services import (
     classify_reply_result,
+    enqueue_followup_run,
     ensure_pending_followup,
     handle_creator_declined,
     new_id,
-    process_followup_reply,
 )
 
 
@@ -245,7 +245,7 @@ def list_runs(
 
 
 def _create_run(db: Session, inbound_reply_id: str) -> AgentFollowupRun:
-    return process_followup_reply(db, inbound_reply_id)
+    return enqueue_followup_run(db, inbound_reply_id)
 
 
 def _normalized_message_fields(creator: Creator, body: SimulateReplyIn) -> dict[str, str]:
@@ -364,11 +364,17 @@ def _run_to_dict(row: AgentFollowupRun) -> dict[str, Any]:
         "reply_category": row.reply_category,
         "suggested_status": row.suggested_status,
         "llm_status": row.llm_status,
+        "execution_status": row.execution_status,
+        "provider_model": row.provider_model,
         "context": _load_json(row.context_json),
         "output": _load_json(row.output_json),
         "validation_error": row.validation_error,
         "prompt_version": row.prompt_version,
         "rendered_prompt": row.rendered_prompt,
+        "error_summary": row.error_summary,
+        "started_at": row.started_at.isoformat() if row.started_at else None,
+        "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+        "duration_ms": row.duration_ms,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 

@@ -10,7 +10,8 @@ load_project_environment()
 
 SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 DEFAULT_SILICONFLOW_MODEL = "deepseek-ai/DeepSeek-V4-Flash"
-SILICONFLOW_TIMEOUT_SECONDS = 20.0
+# worker 在后台执行，允许模型获得更合理的响应窗口，但不会阻塞入站 API。
+SILICONFLOW_TIMEOUT_SECONDS = 90.0
 
 
 class SiliconFlowProviderError(RuntimeError):

@@ -9,10 +9,10 @@ from typing import Any
 
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from .llm import SiliconFlowProviderError, call_siliconflow_json
+from .llm import DEFAULT_SILICONFLOW_MODEL, SiliconFlowProviderError, call_siliconflow_json
 from .models import (
     AgentFollowupRun,
     Creator,
@@ -235,7 +235,70 @@ def parse_followup_suggestion(raw_output: str) -> AgentSuggestion:
     return AgentSuggestion.model_validate(json.loads(raw_output))
 
 
-def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupRun:
+def enqueue_followup_run(db: Session, inbound_reply_id: str, *, created_by: str | None = None) -> AgentFollowupRun:
+    """创建可持久化的待执行任务；同一回复只能同时存在一条活跃任务。"""
+
+    reply = db.get(InboundReply, inbound_reply_id)
+    if reply is None:
+        raise HTTPException(status_code=404, detail="inbound reply not found")
+    existing = db.scalars(
+        select(AgentFollowupRun)
+        .where(AgentFollowupRun.inbound_reply_id == reply.id)
+        .where(AgentFollowupRun.execution_status.in_(("queued", "running")))
+        .order_by(AgentFollowupRun.created_at.desc())
+        .limit(1)
+    ).first()
+    if existing is not None:
+        return existing
+
+    # 建议尚未生成也必须进入人工待办视野，不能因后台任务延迟而停留在 new。
+    if reply.processing_status != "ignored":
+        reply.processing_status = "need_ai_review"
+
+    row = AgentFollowupRun(
+        id=new_id("afr"),
+        department_code=reply.department_code,
+        creator_id=reply.creator_id,
+        inbound_reply_id=reply.id,
+        reply_category=reply.reply_category or "unclear",
+        llm_status="pending",
+        execution_status="queued",
+        created_by=created_by,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def process_next_queued_run(db: Session) -> AgentFollowupRun | None:
+    """领取最早的待执行任务并完成处理，单 worker 下仍用条件更新防止重复领取。"""
+
+    run_id = db.scalar(
+        select(AgentFollowupRun.id)
+        .where(AgentFollowupRun.execution_status == "queued")
+        .order_by(AgentFollowupRun.created_at.asc())
+        .limit(1)
+    )
+    if run_id is None:
+        return None
+    claimed = db.execute(
+        update(AgentFollowupRun)
+        .where(AgentFollowupRun.id == run_id)
+        .where(AgentFollowupRun.execution_status == "queued")
+        .values(execution_status="running", started_at=datetime.utcnow())
+    )
+    if claimed.rowcount != 1:
+        return None
+    db.flush()
+    run = db.get(AgentFollowupRun, run_id)
+    if run is None:
+        return None
+    return process_followup_reply(db, run.inbound_reply_id or "", run=run)
+
+
+def process_followup_reply(
+    db: Session, inbound_reply_id: str, *, run: AgentFollowupRun | None = None
+) -> AgentFollowupRun:
     """集中处理建议生成、失败留痕、上下文警告和最终状态更新。"""
 
     context = build_followup_context(db, inbound_reply_id)
@@ -249,6 +312,8 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
             llm_status="context_insufficient",
             prompt_package=prompt_package,
             context_warnings=context_warnings,
+            run=run,
+            execution_status="context_insufficient",
         )
     try:
         raw_output, llm_status = generate_raw_followup_output(context, prompt_package)
@@ -260,6 +325,7 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
             llm_status="provider_error",
             validation_error=str(exc),
             prompt_package=prompt_package,
+            run=run,
         )
     try:
         suggestion = parse_followup_suggestion(raw_output)
@@ -271,6 +337,7 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
             llm_status="invalid_json",
             validation_error=str(exc),
             prompt_package=prompt_package,
+            run=run,
         )
     except ValidationError as exc:
         return _persist_failed_run(
@@ -280,6 +347,7 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
             llm_status="validation_failed",
             validation_error=str(exc),
             prompt_package=prompt_package,
+            run=run,
         )
 
     return _persist_suggestion_run(
@@ -289,6 +357,8 @@ def process_followup_reply(db: Session, inbound_reply_id: str) -> AgentFollowupR
         llm_status=llm_status,
         prompt_package=prompt_package,
         context_warnings=context_warnings,
+        run=run,
+        execution_status="succeeded",
     )
 
 
@@ -300,6 +370,8 @@ def _persist_suggestion_run(
     llm_status: str,
     prompt_package: PromptPackage,
     context_warnings: list[str],
+    run: AgentFollowupRun | None,
+    execution_status: str,
 ) -> AgentFollowupRun:
     review_reasons = list(dict.fromkeys([*suggestion.review_reasons, *context_warnings, "human_approval_required"]))
     warnings = list(dict.fromkeys([*suggestion.warnings, *review_reasons]))
@@ -316,6 +388,8 @@ def _persist_suggestion_run(
         suggestion=suggestion,
         llm_status=llm_status,
         prompt_package=prompt_package,
+        run=run,
+        execution_status=execution_status,
     )
     _update_reply_processing_status(
         db,
@@ -365,29 +439,39 @@ def persist_followup_run(
     validation_error: str | None = None,
     prompt_package: PromptPackage | None = None,
     created_by: str | None = None,
+    run: AgentFollowupRun | None = None,
+    execution_status: str = "succeeded",
 ) -> AgentFollowupRun:
     creator = context.get("creator") or {}
     reply = context.get("inbound_reply") or {}
-    row = AgentFollowupRun(
+    row = run or AgentFollowupRun(
         id=new_id("afr"),
         department_code=str(creator.get("department_code") or "cross_border"),
         creator_id=str(creator.get("id") or reply.get("creator_id") or ""),
         inbound_reply_id=reply.get("id"),
-        reply_category=suggestion.reply_category if suggestion else str(context.get("reply_category") or "unclear"),
-        suggested_status=suggestion.suggested_status if suggestion else None,
-        llm_status=llm_status,
-        context_json=json.dumps(context, ensure_ascii=False, default=str),
-        output_json=json.dumps(
-            suggestion.model_dump() if suggestion else {"raw_output": raw_output or ""},
-            ensure_ascii=False,
-            default=str,
-        ),
-        validation_error=validation_error,
-        prompt_version=prompt_package.prompt_version if prompt_package else None,
-        rendered_prompt=prompt_package.rendered_prompt if prompt_package else None,
         created_by=created_by,
+        started_at=datetime.utcnow(),
     )
-    db.add(row)
+    row.reply_category = suggestion.reply_category if suggestion else str(context.get("reply_category") or "unclear")
+    row.suggested_status = suggestion.suggested_status if suggestion else None
+    row.llm_status = llm_status
+    row.context_json = json.dumps(context, ensure_ascii=False, default=str)
+    row.output_json = json.dumps(
+        suggestion.model_dump() if suggestion else {"raw_output": raw_output or ""}, ensure_ascii=False, default=str
+    )
+    row.validation_error = validation_error
+    row.prompt_version = prompt_package.prompt_version if prompt_package else None
+    row.rendered_prompt = prompt_package.rendered_prompt if prompt_package else None
+    row.execution_status = execution_status
+    if llm_status not in {"pending", "not_configured", "context_insufficient"}:
+        row.provider_model = os.getenv("SILICONFLOW_MODEL", DEFAULT_SILICONFLOW_MODEL)
+    row.finished_at = datetime.utcnow()
+    if row.started_at is None:
+        row.started_at = row.finished_at
+    row.duration_ms = int((row.finished_at - row.started_at).total_seconds() * 1000)
+    row.error_summary = validation_error
+    if run is None:
+        db.add(row)
     db.flush()
     return row
 
@@ -400,6 +484,7 @@ def _persist_failed_run(
     llm_status: str,
     validation_error: str,
     prompt_package: PromptPackage,
+    run: AgentFollowupRun | None,
 ) -> AgentFollowupRun:
     run = persist_followup_run(
         db,
@@ -409,6 +494,8 @@ def _persist_failed_run(
         raw_output=raw_output,
         validation_error=validation_error,
         prompt_package=prompt_package,
+        run=run,
+        execution_status="failed",
     )
     reply = context.get("inbound_reply") or {}
     _update_reply_processing_status(db, str(reply.get("id") or ""), suggestion=None, requires_manual_review=True)
