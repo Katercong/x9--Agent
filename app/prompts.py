@@ -9,6 +9,8 @@ from .schemas import AgentSuggestion
 
 
 PROMPT_VERSION = "reply_followup_v1"
+PROMPT_V2_VERSION = "reply_followup_v2"
+SUPPORTED_PROMPT_VERSIONS = {PROMPT_VERSION, PROMPT_V2_VERSION}
 MAX_RENDERED_PROMPT_CHARS = 12000
 OMITTED_MARKER = "[内容已省略]"
 
@@ -29,12 +31,15 @@ class PromptPackage:
     warnings: list[str]
 
 
-def build_prompt_package(context: dict[str, Any]) -> PromptPackage:
+def build_prompt_package(context: dict[str, Any], *, prompt_version: str = PROMPT_VERSION) -> PromptPackage:
     """将结构化上下文转换为已脱敏且受长度约束的提示词。"""
 
+    if prompt_version not in SUPPORTED_PROMPT_VERSIONS:
+        raise ValueError(f"unsupported prompt version: {prompt_version}")
     inbound_reply = context.get("inbound_reply") or {}
     reply_language = _detect_reply_language(f"{inbound_reply.get('subject') or ''}\n{inbound_reply.get('body') or ''}")
-    system_prompt = _system_prompt(reply_language)
+    rule_category = str(context.get("reply_category") or "unclear")
+    system_prompt = _system_prompt(reply_language, prompt_version, rule_category)
     sections = [
         ("当前达人回复", _current_reply_section(inbound_reply), 3500),
         ("产品信息", _product_section(context.get("product")), 2300),
@@ -49,7 +54,7 @@ def build_prompt_package(context: dict[str, Any]) -> PromptPackage:
         rendered_prompt = _truncate(rendered_prompt, MAX_RENDERED_PROMPT_CHARS)
         user_prompt = rendered_prompt.split("USER\n", 1)[-1]
     return PromptPackage(
-        prompt_version=PROMPT_VERSION,
+        prompt_version=prompt_version,
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         rendered_prompt=rendered_prompt,
@@ -58,13 +63,33 @@ def build_prompt_package(context: dict[str, Any]) -> PromptPackage:
     )
 
 
-def _system_prompt(reply_language: str) -> str:
+def _system_prompt(reply_language: str, prompt_version: str, rule_category: str) -> str:
     language_instruction = "Use Chinese for the suggested reply." if reply_language == "zh" else "Use English for the suggested reply."
     output_schema = json.dumps(AgentSuggestion.model_json_schema(), ensure_ascii=False, separators=(",", ":"))
-    return (
+    base_prompt = (
         "You are a creator outreach follow-up assistant. Use only the supplied context, do not invent product facts, "
         "and preserve human review when the information is incomplete or risky. "
         f"{language_instruction} Return only a JSON object conforming to this schema: {output_schema}"
+    )
+    if prompt_version == PROMPT_VERSION:
+        return base_prompt
+    return (
+        f"{base_prompt}\n\n"
+        f"Authoritative rule category: {rule_category}. Copy this exact value into reply_category.\n"
+        "Allowed reply_category values: interested, need_more_info, negotiation, not_interested, "
+        "bounce_or_invalid, unclear.\n"
+        "Allowed next_action values: send_campaign_details, clarify_terms, acknowledge_and_close, "
+        "ask_clarifying_question, verify_contact_method.\n"
+        "Allowed suggested_status values: pending_followup, pending_reply, communicating, dropped.\n"
+        "Required route mapping:\n"
+        "interested -> send_campaign_details / pending_followup / requires_human_review=false\n"
+        "need_more_info -> send_campaign_details / pending_followup / requires_human_review=false\n"
+        "negotiation -> clarify_terms / pending_followup / requires_human_review=true\n"
+        "not_interested -> acknowledge_and_close / dropped / requires_human_review=false\n"
+        "bounce_or_invalid -> verify_contact_method / pending_followup / requires_human_review=true\n"
+        "unclear -> ask_clarifying_question / pending_followup / requires_human_review=true\n"
+        "Use the required mapping for the authoritative rule category. Do not invent any other value. "
+        "When facts are incomplete, keep the required route and set requires_human_review=true with a review reason."
     )
 
 

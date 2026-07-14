@@ -842,6 +842,59 @@ def test_prompt_package_includes_pydantic_next_action_contract():
         assert f'"{action}"' in package.system_prompt
 
 
+def test_agent_suggestion_json_schema_exposes_category_and_status_enums():
+    """Provider 看到的 Schema 必须直接声明分类和状态白名单。"""
+
+    schema = AgentSuggestion.model_json_schema()
+    properties = schema["properties"]
+
+    assert properties["reply_category"]["enum"] == [
+        "interested",
+        "need_more_info",
+        "negotiation",
+        "not_interested",
+        "bounce_or_invalid",
+        "unclear",
+    ]
+    assert properties["suggested_status"]["enum"] == [
+        "pending_followup",
+        "pending_reply",
+        "communicating",
+        "dropped",
+    ]
+
+
+def test_v2_prompt_makes_rule_category_and_route_mapping_explicit():
+    """v2 应把规则层结果和允许路由放在模型可见的高优先级指令中。"""
+
+    prompts = importlib.import_module("app.prompts")
+    package = prompts.build_prompt_package(
+        {
+            "reply_category": "negotiation",
+            "creator": {},
+            "product": None,
+            "inbound_reply": {"subject": "Terms", "body": "Can we discuss the budget?"},
+        },
+        prompt_version="reply_followup_v2",
+    )
+
+    assert package.prompt_version == "reply_followup_v2"
+    assert "Authoritative rule category: negotiation" in package.system_prompt
+    assert "negotiation -> clarify_terms / pending_followup / requires_human_review=true" in package.system_prompt
+    assert "Do not invent any other value." in package.system_prompt
+
+
+def test_prompt_package_default_remains_v1_during_evaluation():
+    """正式评测通过前，普通业务调用不能被隐式切换到 v2。"""
+
+    prompts = importlib.import_module("app.prompts")
+    package = prompts.build_prompt_package(
+        {"creator": {}, "product": None, "inbound_reply": {"subject": "Hi", "body": "Interested"}}
+    )
+
+    assert package.prompt_version == "reply_followup_v1"
+
+
 def test_unknown_model_next_action_is_persisted_as_validation_failure(monkeypatch):
     """Provider 即使返回合法 JSON，未知动作也应落入人工复核失败路径。"""
 
@@ -1038,6 +1091,39 @@ def test_evaluation_requires_explicit_live_flag(monkeypatch):
 
     with pytest.raises(ValueError, match="--live"):
         evaluation.run_suite("pilot", live=False)
+
+
+def test_evaluation_can_run_a_named_prompt_version_without_real_provider(monkeypatch):
+    """评测器应明确把候选提示词版本传入每条样本，而不是修改生产默认值。"""
+
+    evaluation = importlib.import_module("app.evaluation")
+    prompts = importlib.import_module("app.prompts")
+    observed_versions: list[str] = []
+    original_builder = prompts.build_prompt_package
+
+    def capture_builder(context, *, prompt_version):
+        observed_versions.append(prompt_version)
+        return original_builder(context, prompt_version=prompt_version)
+
+    valid_output = json.dumps(
+        {
+            "reply_category": "interested",
+            "suggested_reply": "I will send the details.",
+            "next_action": "send_campaign_details",
+            "suggested_status": "pending_followup",
+            "confidence": 0.9,
+            "reasoning_summary": "Synthetic evaluation response.",
+            "requires_human_review": False,
+            "review_reasons": [],
+        }
+    )
+    monkeypatch.setattr(evaluation, "build_prompt_package", capture_builder)
+    monkeypatch.setattr(evaluation, "call_siliconflow_json", lambda system_prompt, user_prompt: valid_output)
+
+    records, _ = evaluation.run_suite("pilot", live=True, prompt_version="reply_followup_v2")
+
+    assert len(records) == 24
+    assert observed_versions == ["reply_followup_v2"] * 24
 
 
 def test_explicit_human_review_output_moves_reply_to_manual_review(monkeypatch):

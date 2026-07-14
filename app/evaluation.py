@@ -49,20 +49,27 @@ def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def run_suite(name: str, *, live: bool, output_dir: Path | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def run_suite(
+    name: str,
+    *,
+    live: bool,
+    prompt_version: str = "reply_followup_v1",
+    output_dir: Path | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """显式允许后才批量调用 Provider，并可将评测结果写入忽略目录。"""
 
     if not live:
         raise ValueError("real provider evaluation requires --live")
-    records = [_run_case(case) for case in load_suite(name)]
+    records = [_run_case(case, prompt_version=prompt_version) for case in load_suite(name)]
     summary = summarize_records(records)
+    summary["prompt_version"] = prompt_version
     if output_dir is not None:
-        _write_report(output_dir, name, records, summary)
+        _write_report(output_dir, name, prompt_version, records, summary)
     return records, summary
 
 
-def _run_case(case: dict[str, Any]) -> dict[str, Any]:
-    package = build_prompt_package(case["context"])
+def _run_case(case: dict[str, Any], *, prompt_version: str) -> dict[str, Any]:
+    package = build_prompt_package(case["context"], prompt_version=prompt_version)
     started = time.perf_counter()
     try:
         raw_output = call_siliconflow_json(package.system_prompt, package.user_prompt)
@@ -120,10 +127,16 @@ def _elapsed_ms(started: float) -> float:
     return (time.perf_counter() - started) * 1000
 
 
-def _write_report(output_dir: Path, suite: str, records: list[dict[str, Any]], summary: dict[str, Any]) -> None:
+def _write_report(
+    output_dir: Path,
+    suite: str,
+    prompt_version: str,
+    records: list[dict[str, Any]],
+    summary: dict[str, Any],
+) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_name = f"{suite}_{stamp}"
+    base_name = f"{suite}_{prompt_version}_{stamp}"
     (output_dir / f"{base_name}.json").write_text(
         json.dumps({"summary": summary, "records": records}, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -135,10 +148,16 @@ def _write_report(output_dir: Path, suite: str, records: list[dict[str, Any]], s
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run synthetic LLM evaluation without touching the business database.")
     parser.add_argument("--suite", default="pilot", choices=("pilot",))
+    parser.add_argument("--prompt-version", default="reply_followup_v1", choices=("reply_followup_v1", "reply_followup_v2"))
     parser.add_argument("--live", action="store_true", help="Allow real SiliconFlow requests.")
     parser.add_argument("--output-dir", type=Path, default=Path("evaluation_reports"))
     args = parser.parse_args()
-    _, summary = run_suite(args.suite, live=args.live, output_dir=args.output_dir)
+    _, summary = run_suite(
+        args.suite,
+        live=args.live,
+        prompt_version=args.prompt_version,
+        output_dir=args.output_dir,
+    )
     print(json.dumps(summary, ensure_ascii=False))
 
 

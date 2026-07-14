@@ -15,6 +15,15 @@ REPLY_CATEGORIES = {
 }
 
 SUGGESTED_STATUSES = {"pending_followup", "pending_reply", "communicating", "dropped"}
+ReplyCategory = Literal[
+    "interested",
+    "need_more_info",
+    "negotiation",
+    "not_interested",
+    "bounce_or_invalid",
+    "unclear",
+]
+SuggestedStatus = Literal["pending_followup", "pending_reply", "communicating", "dropped"]
 AgentNextAction = Literal[
     "send_campaign_details",
     "clarify_terms",
@@ -149,11 +158,11 @@ class RunAgentIn(BaseModel):
 
 
 class AgentSuggestion(BaseModel):
-    reply_category: str
+    reply_category: ReplyCategory
     suggested_reply: str = Field(min_length=1)
     # 仅允许系统已实现路由的动作，避免真实模型产生无法处理的新字符串。
     next_action: AgentNextAction
-    suggested_status: str
+    suggested_status: SuggestedStatus
     confidence: float = Field(ge=0, le=1)
     warnings: list[str] = Field(default_factory=list)
     reasoning_summary: str = Field(min_length=1)
