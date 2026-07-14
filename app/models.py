@@ -74,6 +74,28 @@ class Product(Base):
     updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class ReferenceMaterial(Base):
+    """可版本化的合作参考资料，供提示词使用并保留运营更新历史。"""
+
+    __tablename__ = "reference_materials"
+    __table_args__ = (
+        UniqueConstraint("reference_key", "version", name="uq_reference_material_version"),
+        Index("ix_reference_materials_active_scope_product", "is_active", "scope", "product_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    reference_key: Mapped[str] = mapped_column(String(120), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    scope: Mapped[str] = mapped_column(String(40), index=True)
+    material_type: Mapped[str] = mapped_column(String(60), index=True)
+    product_type: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(default=True, index=True)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
+    updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class InboundReply(Base):
     """入站回复表：独立 MVP 中承接原项目 creator_email_messages 的 inbound 角色。"""
 
@@ -195,6 +217,7 @@ class AgentFollowupRun(Base):
     validation_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     prompt_version: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     rendered_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reference_materials_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
     updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

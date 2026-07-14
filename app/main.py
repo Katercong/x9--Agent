@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .database import get_db, init_db
-from .models import AgentFollowupRun, Creator, InboundReply, Product
+from .models import AgentFollowupRun, Creator, InboundReply, Product, ReferenceMaterial
 from .schemas import (
     CreatorCreateIn,
     CreatorPatchIn,
@@ -18,6 +18,8 @@ from .schemas import (
     ProductCreateIn,
     ProductPatchIn,
     ProductReplaceIn,
+    ReferenceMaterialCreateIn,
+    ReferenceMaterialVersionIn,
     RunAgentIn,
     SimulateReplyIn,
 )
@@ -137,6 +139,42 @@ def patch_product(
     db.commit()
     db.refresh(product)
     return {"ok": True, "product": _product_to_dict(product)}
+
+
+@app.post("/api/followup-agent/reference-materials", status_code=201)
+def create_reference_material(body: ReferenceMaterialCreateIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """创建首个参考资料版本，并将同一资料键的旧活动版本停用。"""
+
+    version = int(db.scalar(select(func.max(ReferenceMaterial.version)).where(ReferenceMaterial.reference_key == body.reference_key)) or 0) + 1
+    db.query(ReferenceMaterial).filter(ReferenceMaterial.reference_key == body.reference_key).update({"is_active": False})
+    row = ReferenceMaterial(id=new_id("ref"), version=version, is_active=True, **body.model_dump())
+    db.add(row); db.commit(); db.refresh(row)
+    return {"ok": True, "reference_material": _reference_material_to_dict(row)}
+
+
+@app.patch("/api/followup-agent/reference-materials/{reference_key}")
+def version_reference_material(reference_key: str, body: ReferenceMaterialVersionIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """以新增版本替代当前活动资料，保留旧版本供历史 run 追溯。"""
+
+    exists = db.scalar(select(ReferenceMaterial.id).where(ReferenceMaterial.reference_key == reference_key).limit(1))
+    if exists is None:
+        raise HTTPException(status_code=404, detail="reference material not found")
+    version = int(db.scalar(select(func.max(ReferenceMaterial.version)).where(ReferenceMaterial.reference_key == reference_key)) or 0) + 1
+    db.query(ReferenceMaterial).filter(ReferenceMaterial.reference_key == reference_key).update({"is_active": False})
+    row = ReferenceMaterial(id=new_id("ref"), reference_key=reference_key, version=version, is_active=True, **body.model_dump())
+    db.add(row); db.commit(); db.refresh(row)
+    return {"ok": True, "reference_material": _reference_material_to_dict(row)}
+
+
+@app.get("/api/followup-agent/reference-materials")
+def list_reference_materials(active_only: bool = Query(default=False), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """按版本列出参考资料，可选择只查看当前启用版本。"""
+
+    query = select(ReferenceMaterial)
+    if active_only:
+        query = query.where(ReferenceMaterial.is_active.is_(True))
+    rows = list(db.scalars(query.order_by(ReferenceMaterial.reference_key.asc(), ReferenceMaterial.version.desc())).all())
+    return {"ok": True, "items": [_reference_material_to_dict(row) for row in rows]}
 
 
 @app.post("/api/followup-agent/simulate-reply")
@@ -375,6 +413,7 @@ def _run_to_dict(row: AgentFollowupRun) -> dict[str, Any]:
         "validation_error": row.validation_error,
         "prompt_version": row.prompt_version,
         "rendered_prompt": row.rendered_prompt,
+        "reference_materials": _load_json(row.reference_materials_json) or [],
         "error_summary": row.error_summary,
         "started_at": row.started_at.isoformat() if row.started_at else None,
         "finished_at": row.finished_at.isoformat() if row.finished_at else None,
@@ -392,3 +431,9 @@ def _load_json(value: str | None) -> Any:
         return json.loads(value)
     except ValueError:
         return None
+
+
+def _reference_material_to_dict(row: ReferenceMaterial) -> dict[str, Any]:
+    """将资料版本转换为接口返回结构，避免直接暴露 ORM 对象。"""
+
+    return {"id": row.id, "reference_key": row.reference_key, "version": row.version, "scope": row.scope, "material_type": row.material_type, "product_type": row.product_type, "title": row.title, "content": row.content, "is_active": row.is_active}

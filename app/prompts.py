@@ -43,6 +43,7 @@ def build_prompt_package(context: dict[str, Any], *, prompt_version: str = PROMP
     sections = [
         ("当前达人回复", _current_reply_section(inbound_reply), 3500),
         ("产品信息", _product_section(context.get("product")), 2300),
+        ("已批准合作参考资料", _json_section(context.get("reference_materials") or []), 1800),
         ("达人信息", _creator_section(context.get("creator") or {}), 1300),
         ("双向聊天历史", _history_section(context), 2600),
         ("历史事件", _json_section(context.get("recent_events") or []), 800),

@@ -153,6 +153,23 @@ class ProductPatchIn(BaseModel):
     is_active: bool | None = None
 
 
+class ReferenceMaterialCreateIn(BaseModel):
+    reference_key: str = Field(min_length=1, max_length=120)
+    scope: Literal["company_policy", "campaign"]
+    material_type: Literal["campaign_details", "pricing_terms", "company_policy"]
+    product_type: str | None = None
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1)
+
+
+class ReferenceMaterialVersionIn(BaseModel):
+    scope: Literal["company_policy", "campaign"]
+    material_type: Literal["campaign_details", "pricing_terms", "company_policy"]
+    product_type: str | None = None
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1)
+
+
 class SimulateReplyIn(BaseModel):
     creator_id: str
     from_email: str | None = None

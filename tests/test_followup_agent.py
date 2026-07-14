@@ -55,6 +55,18 @@ def reset_database():
                     is_active=True,
                 )
             )
+            db.add(
+                models.ReferenceMaterial(
+                    id="ref_default_company_policy_v1",
+                    reference_key="default-company-policy",
+                    version=1,
+                    scope="company_policy",
+                    material_type="company_policy",
+                    title="Default company policy",
+                    content="Do not promise exclusivity, guaranteed results, or unapproved terms.",
+                    is_active=True,
+                )
+            )
             db.commit()
 
 
@@ -1401,6 +1413,36 @@ def test_worker_process_once_returns_processed_run_id(monkeypatch):
     monkeypatch.setattr(services, "generate_raw_followup_output", lambda *_: (generated, "success"))
 
     assert worker.process_once() == queued.json()["run"]["id"]
+
+
+def test_reference_material_versions_are_used_in_prompt_context_and_run_snapshot():
+    client = TestClient(app)
+    created = client.post(
+        "/api/followup-agent/reference-materials",
+        json={"reference_key": "company-policy", "scope": "company_policy", "material_type": "company_policy", "title": "General policy", "content": "Do not promise exclusivity."},
+    )
+    updated = client.patch(
+        "/api/followup-agent/reference-materials/company-policy",
+        json={"scope": "company_policy", "material_type": "company_policy", "title": "General policy", "content": "Do not promise exclusivity or guaranteed sales."},
+    )
+    campaign = client.post(
+        "/api/followup-agent/reference-materials",
+        json={"reference_key": "baby-care-brief", "scope": "campaign", "material_type": "campaign_details", "product_type": "baby care", "title": "Baby campaign", "content": "One short video and one product link."},
+    )
+    assert created.status_code == 201, created.text
+    assert updated.status_code == 200, updated.text
+    assert campaign.status_code == 201, campaign.text
+    assert created.json()["reference_material"]["version"] == 1
+    assert updated.json()["reference_material"]["version"] == 2
+
+    _create_creator(client, "creator_reference_snapshot")
+    reply = client.post("/api/followup-agent/simulate-reply", json={"creator_id": "creator_reference_snapshot", "body": "Sounds interesting.", "run_agent": True})
+    assert reply.status_code == 200, reply.text
+    run = _process_response_run(client, reply)
+    versions = {(row["reference_key"], row["version"]) for row in run["reference_materials"]}
+    assert ("company-policy", 2) in versions
+    assert ("baby-care-brief", 1) in versions
+    assert "guaranteed sales" in run["rendered_prompt"]
 
 
 def test_automatic_generation_skips_terminal_unclear_and_incomplete_replies():

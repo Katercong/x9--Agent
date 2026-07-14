@@ -22,6 +22,7 @@ from .models import (
     InboundReply,
     OutreachEmail,
     Product,
+    ReferenceMaterial,
 )
 from .prompts import PromptPackage, build_prompt_package
 from .schemas import AgentSuggestion, REPLY_CATEGORIES, ReplyClassification
@@ -162,6 +163,17 @@ def build_followup_context(db: Session, inbound_reply_id: str) -> dict[str, Any]
             .where(Product.is_active.is_(True))
             .limit(1)
         ).first()
+    reference_materials = list(
+        db.scalars(
+            select(ReferenceMaterial)
+            .where(ReferenceMaterial.is_active.is_(True))
+            .where(
+                (ReferenceMaterial.scope == "company_policy")
+                | ((ReferenceMaterial.scope == "campaign") & (ReferenceMaterial.product_type == creator.recommended_product_type))
+            )
+            .order_by(ReferenceMaterial.scope.asc(), ReferenceMaterial.material_type.asc(), ReferenceMaterial.version.desc())
+        ).all()
+    )
     recent_inbound_replies = list(
         db.scalars(
             select(InboundReply)
@@ -201,6 +213,7 @@ def build_followup_context(db: Session, inbound_reply_id: str) -> dict[str, Any]
     return {
         "reply_category": reply.reply_category or classify_reply("\n".join([reply.subject or "", reply.body])),
         "product": _product_snapshot(product) if product else None,
+        "reference_materials": [_reference_material_snapshot(row) for row in reference_materials],
         "creator": _creator_snapshot(creator),
         "inbound_reply": _reply_snapshot(reply),
         "recent_inbound_replies": [_reply_snapshot(row) for row in recent_inbound_replies],
@@ -277,7 +290,7 @@ def is_automatic_generation_eligible(db: Session, reply: InboundReply) -> bool:
     if reply.reply_category not in AUTO_GENERATION_CATEGORIES:
         return False
     context = build_followup_context(db, reply.id)
-    return not collect_context_warnings(context)
+    return bool(context.get("reference_materials")) and not collect_context_warnings(context)
 
 
 def process_next_queued_run(db: Session) -> AgentFollowupRun | None:
@@ -472,6 +485,7 @@ def persist_followup_run(
     row.validation_error = validation_error
     row.prompt_version = prompt_package.prompt_version if prompt_package else None
     row.rendered_prompt = prompt_package.rendered_prompt if prompt_package else None
+    row.reference_materials_json = json.dumps(context.get("reference_materials") or [], ensure_ascii=False, default=str)
     row.execution_status = execution_status
     row.prompt_characters = len(prompt_package.rendered_prompt) if prompt_package else None
     row.output_characters = len(row.output_json)
@@ -784,6 +798,12 @@ def _product_snapshot(row: Product) -> dict[str, Any]:
         "forbidden_claims": _load_json_list(row.forbidden_claims_json),
         "notes": row.notes,
     }
+
+
+def _reference_material_snapshot(row: ReferenceMaterial) -> dict[str, Any]:
+    """提取写入提示词和 run 审计快照所需的活动资料字段。"""
+
+    return {"reference_key": row.reference_key, "version": row.version, "scope": row.scope, "material_type": row.material_type, "product_type": row.product_type, "title": row.title, "content": row.content}
 
 
 def _load_json_list(value: str | None) -> list[str]:
