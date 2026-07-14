@@ -93,6 +93,20 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
+另开一个 PowerShell 窗口启动单 worker（SQLite MVP 只启动一个）：
+
+```powershell
+python -m app.worker
+```
+
+开发时可只处理一条排队任务后退出：
+
+```powershell
+python -m app.worker --once
+```
+
+`agent_followup_runs.execution_status` 表示任务执行进度：`queued` 为等待 worker、`running` 为正在生成、`succeeded` 为生成完成、`failed` 为调用或校验失败、`context_insufficient` 为资料不足而未调用模型。`llm_status` 单独记录模型、JSON 或 Pydantic 校验结果；所有状态都只提供人工参考，不会自动发送消息。
+
 项目已创建本地 `.env` 占位文件；只需填写新生成的 Key。`.env.example` 是可提交的模板，真实
 `.env` 已被 `.gitignore` 忽略。系统环境变量存在时优先于 `.env`。
 
@@ -148,13 +162,21 @@ PATCH /api/followup-agent/creators/{creator_id}
 POST /api/followup-agent/products
 PUT  /api/followup-agent/products/{product_id}
 PATCH /api/followup-agent/products/{product_id}
+POST /api/followup-agent/reference-materials
+PATCH /api/followup-agent/reference-materials/{reference_key}
+GET  /api/followup-agent/reference-materials?active_only=true
 POST /api/followup-agent/simulate-reply
 POST /api/followup-agent/runs
 GET  /api/followup-agent/replies/{reply_id}
 GET  /api/followup-agent/runs/{run_id}
 GET  /api/followup-agent/runs?creator_id=&inbound_reply_id=&limit=
+GET  /api/followup-agent/outbound-instructions?creator_id=
 GET  /health
 ```
+
+参考资料以 `reference_key + version` 保存历史。`POST` 创建首版，`PATCH` 创建新版本并停用旧活动版本；当前启用的公司政策与产品匹配的活动资料会进入提示词，并以快照保存到 run。没有任何活动参考资料时，系统不会自动调用 LLM，但人工仍可显式创建建议任务。
+
+明确拒绝或退订会生成 `simulated` 出站指令供未来渠道消费；退信不会生成指令。当前项目没有 Gmail 或其他外部发送能力，查询该指令也不会触发发送。
 
 达人档案接口语义：`POST /creators` 只创建，成功返回 `201`，重复 ID 返回 `409`；
 `PUT /creators/{creator_id}` 需要提交完整档案并替换可编辑字段；
