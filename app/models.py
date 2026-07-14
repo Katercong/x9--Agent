@@ -186,6 +186,9 @@ class AgentFollowupRun(Base):
     started_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
     finished_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 字符数是 SQLite MVP 的成本代理指标；真实 token 用量后续接 Provider usage 再补充。
+    prompt_characters: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_characters: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     output_json: Mapped[str | None] = mapped_column(Text, nullable=True)

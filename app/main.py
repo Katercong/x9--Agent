@@ -26,6 +26,7 @@ from .services import (
     enqueue_followup_run,
     ensure_pending_followup,
     handle_creator_declined,
+    is_automatic_generation_eligible,
     new_id,
 )
 
@@ -180,14 +181,15 @@ def simulate_reply(body: SimulateReplyIn, db: Session = Depends(get_db)) -> dict
         reply.processing_status = "ignored"
     elif classification.reply_category == "not_interested":
         handle_creator_declined(db, creator, reply)
-        if body.run_agent:
-            run = _create_run(db, reply.id)
-            run_payload = _run_to_dict(run)
     else:
         ensure_pending_followup(db, creator, reply)
         if body.run_agent:
-            run = _create_run(db, reply.id)
-            run_payload = _run_to_dict(run)
+            if is_automatic_generation_eligible(db, reply):
+                run = _create_run(db, reply.id, created_by="automatic")
+                run_payload = _run_to_dict(run)
+            else:
+                # 即使不调用模型，也必须让人工知道该回复需要处理。
+                reply.processing_status = "need_ai_review"
     db.commit()
     return {"ok": True, "duplicate": False, "reply": _reply_to_dict(reply), "run": run_payload}
 
@@ -197,7 +199,9 @@ def run_agent(body: RunAgentIn, db: Session = Depends(get_db)) -> dict[str, Any]
     reply = db.get(InboundReply, body.inbound_reply_id)
     if reply is not None and reply.processing_status == "ignored":
         raise HTTPException(status_code=409, detail="ignored reply cannot run agent")
-    run = _create_run(db, body.inbound_reply_id)
+    if reply is not None and reply.reply_category == "not_interested":
+        raise HTTPException(status_code=409, detail="terminal reply cannot run agent")
+    run = _create_run(db, body.inbound_reply_id, created_by="manual")
     db.commit()
     return {"ok": True, "run": _run_to_dict(run)}
 
@@ -244,8 +248,8 @@ def list_runs(
     return {"ok": True, "total": total, "items": [_run_to_dict(row) for row in rows]}
 
 
-def _create_run(db: Session, inbound_reply_id: str) -> AgentFollowupRun:
-    return enqueue_followup_run(db, inbound_reply_id)
+def _create_run(db: Session, inbound_reply_id: str, *, created_by: str) -> AgentFollowupRun:
+    return enqueue_followup_run(db, inbound_reply_id, created_by=created_by)
 
 
 def _normalized_message_fields(creator: Creator, body: SimulateReplyIn) -> dict[str, str]:
@@ -276,9 +280,9 @@ def _get_or_create_existing_run(db: Session, reply: InboundReply, run_agent: boo
         .order_by(AgentFollowupRun.created_at.desc())
         .limit(1)
     ).first()
-    if run is None:
-        run = _create_run(db, reply.id)
-    return _run_to_dict(run)
+    if run is None and is_automatic_generation_eligible(db, reply):
+        run = _create_run(db, reply.id, created_by="automatic")
+    return _run_to_dict(run) if run is not None else None
 
 
 def _creator_to_dict(row: Creator) -> dict[str, Any]:
@@ -375,6 +379,8 @@ def _run_to_dict(row: AgentFollowupRun) -> dict[str, Any]:
         "started_at": row.started_at.isoformat() if row.started_at else None,
         "finished_at": row.finished_at.isoformat() if row.finished_at else None,
         "duration_ms": row.duration_ms,
+        "prompt_characters": row.prompt_characters,
+        "output_characters": row.output_characters,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 

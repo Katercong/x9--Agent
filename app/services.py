@@ -110,6 +110,7 @@ CLASSIFICATION_CONFIDENCE = {
 
 LOW_CONFIDENCE_THRESHOLD = 0.70
 CONTEXT_REQUIRED_CATEGORIES = {"interested", "need_more_info", "negotiation"}
+AUTO_GENERATION_CATEGORIES = {"interested", "need_more_info", "negotiation"}
 CAMPAIGN_DETAIL_REQUESTS = {
     "campaign_timeline": ("timeline", "schedule", "deadline", "时间线", "时间安排"),
     "campaign_deliverables": (
@@ -268,6 +269,15 @@ def enqueue_followup_run(db: Session, inbound_reply_id: str, *, created_by: str 
     db.add(row)
     db.flush()
     return row
+
+
+def is_automatic_generation_eligible(db: Session, reply: InboundReply) -> bool:
+    """规则先过滤低价值回复，只有合作推进且资料完整时才自动消耗模型额度。"""
+
+    if reply.reply_category not in AUTO_GENERATION_CATEGORIES:
+        return False
+    context = build_followup_context(db, reply.id)
+    return not collect_context_warnings(context)
 
 
 def process_next_queued_run(db: Session) -> AgentFollowupRun | None:
@@ -463,6 +473,8 @@ def persist_followup_run(
     row.prompt_version = prompt_package.prompt_version if prompt_package else None
     row.rendered_prompt = prompt_package.rendered_prompt if prompt_package else None
     row.execution_status = execution_status
+    row.prompt_characters = len(prompt_package.rendered_prompt) if prompt_package else None
+    row.output_characters = len(row.output_json)
     if llm_status not in {"pending", "not_configured", "context_insufficient"}:
         row.provider_model = os.getenv("SILICONFLOW_MODEL", DEFAULT_SILICONFLOW_MODEL)
     row.finished_at = datetime.utcnow()

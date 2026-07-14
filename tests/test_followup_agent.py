@@ -115,15 +115,16 @@ def test_simulate_reply_runs_agent_and_persists_run():
     )
     assert reply.status_code == 200, reply.text
     payload = reply.json()
-    assert payload["run"]["reply_category"] == "need_more_info"
+    assert payload["run"] is None
     assert payload["reply"]["processing_status"] == "need_ai_review"
-    assert payload["run"]["execution_status"] == "queued"
     assert payload["reply"]["reply_category"] == "need_more_info"
     assert payload["reply"]["classification_confidence"] == 0.82
     assert payload["reply"]["classification_reason"].startswith("matched_keyword:")
     assert payload["reply"]["classified_at"] is not None
 
-    completed_run = _process_response_run(client, reply)
+    manual = client.post("/api/followup-agent/runs", json={"inbound_reply_id": payload["reply"]["id"]})
+    assert manual.status_code == 200, manual.text
+    completed_run = _process_response_run(client, manual)
     assert completed_run["llm_status"] == "context_insufficient"
     assert completed_run["execution_status"] == "context_insufficient"
     assert completed_run["output"]["next_action"] == "prepare_campaign_brief"
@@ -224,7 +225,7 @@ def test_not_interested_drops_creator_and_cancels_existing_reply_followup_task()
         json={"creator_id": creator_id, "body": "Thanks, but not interested.", "run_agent": True},
     )
     assert rejection.status_code == 200, rejection.text
-    assert rejection.json()["run"]["execution_status"] == "queued"
+    assert rejection.json()["run"] is None
 
     with SessionLocal() as db:
         creator = db.get(Creator, creator_id)
@@ -1402,12 +1403,60 @@ def test_worker_process_once_returns_processed_run_id(monkeypatch):
     assert worker.process_once() == queued.json()["run"]["id"]
 
 
+def test_automatic_generation_skips_terminal_unclear_and_incomplete_replies():
+    """低价值或资料不足回复不能自动消耗模型额度，但人工可以手动请求建议。"""
+
+    client = TestClient(app)
+    creator_id = "creator_generation_gate"
+    _create_creator(client, creator_id)
+
+    declined = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "No thanks, not interested.", "run_agent": True},
+    )
+    unclear = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Thanks.", "run_agent": True},
+    )
+    incomplete = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={
+            "creator_id": creator_id,
+            "body": "Could you send the campaign timeline, deliverables, and budget?",
+            "run_agent": True,
+        },
+    )
+
+    assert declined.status_code == 200, declined.text
+    assert unclear.status_code == 200, unclear.text
+    assert incomplete.status_code == 200, incomplete.text
+    assert declined.json()["run"] is None
+    assert unclear.json()["run"] is None
+    assert incomplete.json()["run"] is None
+    assert unclear.json()["reply"]["processing_status"] == "need_ai_review"
+    assert incomplete.json()["reply"]["processing_status"] == "need_ai_review"
+
+    manual = client.post(
+        "/api/followup-agent/runs",
+        json={"inbound_reply_id": unclear.json()["reply"]["id"]},
+    )
+    assert manual.status_code == 200, manual.text
+    assert manual.json()["run"]["execution_status"] == "queued"
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, manual.json()["run"]["id"])
+        assert run is not None
+        assert run.created_by == "manual"
+
+
 def _process_response_run(client: TestClient, response: object) -> dict[str, object]:
-    """让旧的结果断言显式经过 worker，保持入队与执行两个阶段可见。"""
+    """让结果断言显式经过 worker；未自动入队时模拟人工主动请求。"""
 
     payload = response.json()
     run = payload["run"]
-    assert run is not None
+    if run is None:
+        manual = client.post("/api/followup-agent/runs", json={"inbound_reply_id": payload["reply"]["id"]})
+        assert manual.status_code == 200, manual.text
+        run = manual.json()["run"]
     with SessionLocal() as db:
         processed = services.process_next_queued_run(db)
         assert processed is not None
