@@ -6,21 +6,30 @@ import argparse
 import time
 
 from .database import SessionLocal, init_db
-from .services import process_next_queued_run
+from .services import claim_next_queued_run, process_claimed_run, recover_expired_runs
 
 
 def process_once() -> str | None:
-    """使用独立会话处理最早的一条待执行任务，并返回任务 ID。"""
+    """用三个短会话完成回收、领取和回写，模型调用期间不持有 SQLite 写事务。"""
 
     with SessionLocal() as db:
         try:
-            run = process_next_queued_run(db)
+            recover_expired_runs(db)
             db.commit()
-            return run.id if run is not None else None
         except Exception:
-            # 异常时回滚领取状态，任务会保持 queued 供人工检查或下次 worker 处理。
             db.rollback()
             raise
+    with SessionLocal() as db:
+        try:
+            claimed = claim_next_queued_run(db)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+    if claimed is None:
+        return None
+    process_claimed_run(claimed)
+    return claimed.run_id
 
 
 def main() -> None:

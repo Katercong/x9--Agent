@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
-from datetime import datetime
+import threading
+from datetime import datetime, timedelta
 import importlib
 import json
 from pathlib import Path
@@ -1459,6 +1460,117 @@ def test_worker_process_once_returns_processed_run_id(monkeypatch):
     monkeypatch.setattr(services, "generate_raw_followup_output", lambda *_: (generated, "success"))
 
     assert worker.process_once() == queued.json()["run"]["id"]
+
+
+def test_worker_commits_running_claim_before_blocking_provider_call(monkeypatch):
+    """Worker 调用 Provider 前必须让其他会话可见 running 租约。"""
+
+    import app.worker as worker
+
+    client = TestClient(app)
+    _create_creator(client, "creator_committed_claim")
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_committed_claim", "body": "Sounds interesting.", "run_agent": True},
+    )
+    run_id = queued.json()["run"]["id"]
+    provider_started = threading.Event()
+    release_provider = threading.Event()
+    generated = json.dumps(
+        {
+            "reply_category": "interested",
+            "suggested_reply": "Thanks, I will share the campaign details.",
+            "next_action": "send_campaign_details",
+            "suggested_status": "pending_followup",
+            "confidence": 0.91,
+            "reasoning_summary": "The creator is interested.",
+        }
+    )
+
+    def block_provider(*_: object) -> tuple[str, str]:
+        provider_started.set()
+        assert release_provider.wait(timeout=3)
+        return generated, "success"
+
+    monkeypatch.setattr(services, "generate_raw_followup_output", block_provider)
+    thread = threading.Thread(target=worker.process_once)
+    thread.start()
+    assert provider_started.wait(timeout=3)
+    try:
+        with SessionLocal() as db:
+            claimed = db.get(AgentFollowupRun, run_id)
+            assert claimed is not None
+            assert claimed.execution_status == "running"
+            assert claimed.claim_token
+            assert claimed.lease_expires_at is not None
+        write_response = client.post(
+            "/api/followup-agent/creators",
+            json={"id": "creator_write_during_provider", "handle": "write_during_provider"},
+        )
+        assert write_response.status_code == 201, write_response.text
+    finally:
+        release_provider.set()
+        thread.join(timeout=3)
+    assert not thread.is_alive()
+
+
+def test_expired_running_run_is_failed_without_automatic_retry():
+    """过期租约必须转人工处理，不能回到 queued 或再次调用模型。"""
+
+    client = TestClient(app)
+    _create_creator(client, "creator_expired_lease")
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_expired_lease", "body": "Sounds interesting.", "run_agent": True},
+    )
+    run_id = queued.json()["run"]["id"]
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, run_id)
+        assert run is not None
+        run.execution_status = "running"
+        run.claim_token = "lost-worker-claim"
+        run.lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
+        db.commit()
+
+    with SessionLocal() as db:
+        assert services.recover_expired_runs(db) == 1
+        db.commit()
+
+    completed = client.get(f"/api/followup-agent/runs/{run_id}")
+    assert completed.status_code == 200
+    run = completed.json()["run"]
+    assert run["execution_status"] == "failed"
+    assert run["llm_status"] == "worker_lost"
+    assert run["validation_error"] == "worker lease expired before completion"
+    assert run["lease_expires_at"] is None
+
+
+def test_stale_worker_claim_cannot_overwrite_current_run_state():
+    """旧 Worker 的 claim_token 失效后不得再处理或覆盖该 run。"""
+
+    client = TestClient(app)
+    _create_creator(client, "creator_stale_claim")
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_stale_claim", "body": "Sounds interesting.", "run_agent": True},
+    )
+    run_id = queued.json()["run"]["id"]
+    with SessionLocal() as db:
+        claimed = services.claim_next_queued_run(db)
+        assert claimed is not None
+        db.commit()
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, run_id)
+        assert run is not None
+        run.claim_token = "newer-worker-claim"
+        db.commit()
+
+    assert services.process_claimed_run(claimed) is None
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, run_id)
+        assert run is not None
+        assert run.execution_status == "running"
+        assert run.claim_token == "newer-worker-claim"
 
 
 def test_reference_material_versions_are_used_in_prompt_context_and_run_snapshot():

@@ -209,6 +209,7 @@ class AgentFollowupRun(Base):
         Index("ix_agent_followup_runs_department_created", "department_code", "created_at"),
         # SQLite MVP 由单 worker 轮询该索引；迁移 PostgreSQL 后可沿用它做并发领取。
         Index("ix_agent_followup_runs_execution_created", "execution_status", "created_at"),
+        Index("ix_agent_followup_runs_execution_lease", "execution_status", "lease_expires_at"),
     )
 
     id: Mapped[str] = mapped_column(String(120), primary_key=True)
@@ -220,6 +221,8 @@ class AgentFollowupRun(Base):
     llm_status: Mapped[str] = mapped_column(String(40), default="not_configured", index=True)
     # execution_status 描述任务生命周期；llm_status 只描述模型或校验结果，避免混淆。
     execution_status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
+    claim_token: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    lease_expires_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
     provider_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     started_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
     finished_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)

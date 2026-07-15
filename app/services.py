@@ -4,7 +4,8 @@ import json
 import os
 import re
 import uuid
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException
@@ -12,6 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from .database import SessionLocal
 from .llm import DEFAULT_SILICONFLOW_MODEL, SiliconFlowProviderError, call_siliconflow_json
 from .models import (
     AgentFollowupRun,
@@ -27,6 +29,18 @@ from .models import (
 )
 from .prompts import PromptPackage, build_prompt_package
 from .schemas import AgentSuggestion, REPLY_CATEGORIES, ReplyClassification
+
+
+WORKER_LEASE_SECONDS = 120
+
+
+@dataclass(frozen=True)
+class ClaimedRun:
+    """Worker 已提交领取的任务身份，供无事务模型调用后的条件回写使用。"""
+
+    run_id: str
+    inbound_reply_id: str
+    claim_token: str
 
 
 def new_id(prefix: str) -> str:
@@ -294,8 +308,8 @@ def is_automatic_generation_eligible(db: Session, reply: InboundReply) -> bool:
     return bool(context.get("reference_materials")) and not collect_context_warnings(context)
 
 
-def process_next_queued_run(db: Session) -> AgentFollowupRun | None:
-    """领取最早的待执行任务并完成处理，单 worker 下仍用条件更新防止重复领取。"""
+def claim_next_queued_run(db: Session) -> ClaimedRun | None:
+    """原子领取最早 queued 任务；调用方必须在模型调用前立即提交。"""
 
     run_id = db.scalar(
         select(AgentFollowupRun.id)
@@ -305,19 +319,224 @@ def process_next_queued_run(db: Session) -> AgentFollowupRun | None:
     )
     if run_id is None:
         return None
+    claim_token = new_id("claim")
     claimed = db.execute(
         update(AgentFollowupRun)
         .where(AgentFollowupRun.id == run_id)
         .where(AgentFollowupRun.execution_status == "queued")
-        .values(execution_status="running", started_at=datetime.utcnow())
+        .values(
+            execution_status="running",
+            started_at=datetime.utcnow(),
+            claim_token=claim_token,
+            lease_expires_at=datetime.utcnow() + timedelta(seconds=WORKER_LEASE_SECONDS),
+        )
     )
     if claimed.rowcount != 1:
         return None
-    db.flush()
     run = db.get(AgentFollowupRun, run_id)
-    if run is None:
+    if run is None or not run.inbound_reply_id:
         return None
-    return process_followup_reply(db, run.inbound_reply_id or "", run=run)
+    return ClaimedRun(run_id=run.id, inbound_reply_id=run.inbound_reply_id, claim_token=claim_token)
+
+
+def recover_expired_runs(db: Session) -> int:
+    """将过期 running 任务标为 worker_lost，保留给人工处理且不自动重跑。"""
+
+    now = datetime.utcnow()
+    runs = list(
+        db.scalars(
+            select(AgentFollowupRun)
+            .where(AgentFollowupRun.execution_status == "running")
+            .where(AgentFollowupRun.lease_expires_at.is_not(None))
+            .where(AgentFollowupRun.lease_expires_at <= now)
+        ).all()
+    )
+    recovered = 0
+    for run in runs:
+        duration_ms = int((now - run.started_at).total_seconds() * 1000) if run.started_at else 0
+        updated = db.execute(
+            update(AgentFollowupRun)
+            .where(AgentFollowupRun.id == run.id)
+            .where(AgentFollowupRun.execution_status == "running")
+            .where(AgentFollowupRun.claim_token == run.claim_token)
+            .where(AgentFollowupRun.lease_expires_at <= now)
+            .values(
+                execution_status="failed",
+                llm_status="worker_lost",
+                validation_error="worker lease expired before completion",
+                error_summary="worker lease expired before completion",
+                finished_at=now,
+                duration_ms=duration_ms,
+                claim_token=None,
+                lease_expires_at=None,
+            )
+        )
+        if updated.rowcount != 1:
+            continue
+        _update_reply_processing_status(db, run.inbound_reply_id or "", suggestion=None, requires_manual_review=True)
+        recovered += 1
+    db.flush()
+    return recovered
+
+
+def process_next_queued_run(db: Session) -> AgentFollowupRun | None:
+    """兼容现有手工调用：提交领取后再由独立会话完成处理。"""
+
+    claimed = claim_next_queued_run(db)
+    if claimed is None:
+        return None
+    db.commit()
+    return process_claimed_run(claimed)
+
+
+def process_claimed_run(claimed: ClaimedRun) -> AgentFollowupRun | None:
+    """在 Session 关闭后调用模型，并用领取令牌保护最终短事务回写。"""
+
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, claimed.run_id)
+        if not _is_current_claim(run, claimed):
+            return None
+        context = build_followup_context(db, claimed.inbound_reply_id)
+        prompt_package = build_prompt_package(context)
+        context_warnings = collect_context_warnings(context)
+
+    if has_missing_campaign_brief(context_warnings):
+        return _complete_claimed_run(
+            claimed,
+            context=context,
+            prompt_package=prompt_package,
+            suggestion=build_context_insufficient_suggestion(context, context_warnings),
+            llm_status="context_insufficient",
+            execution_status="context_insufficient",
+            context_warnings=context_warnings,
+        )
+    try:
+        raw_output, llm_status = generate_raw_followup_output(context, prompt_package)
+    except SiliconFlowProviderError as exc:
+        return _complete_claimed_run(
+            claimed,
+            context=context,
+            prompt_package=prompt_package,
+            suggestion=None,
+            llm_status="provider_error",
+            execution_status="failed",
+            validation_error=str(exc),
+        )
+    try:
+        suggestion = parse_followup_suggestion(raw_output)
+    except json.JSONDecodeError as exc:
+        return _complete_claimed_run(
+            claimed,
+            context=context,
+            prompt_package=prompt_package,
+            suggestion=None,
+            raw_output=raw_output,
+            llm_status="invalid_json",
+            execution_status="failed",
+            validation_error=str(exc),
+        )
+    except ValidationError as exc:
+        return _complete_claimed_run(
+            claimed,
+            context=context,
+            prompt_package=prompt_package,
+            suggestion=None,
+            raw_output=raw_output,
+            llm_status="validation_failed",
+            execution_status="failed",
+            validation_error=str(exc),
+        )
+    return _complete_claimed_run(
+        claimed,
+        context=context,
+        prompt_package=prompt_package,
+        suggestion=suggestion,
+        llm_status=llm_status,
+        execution_status="succeeded",
+        context_warnings=context_warnings,
+    )
+
+
+def _is_current_claim(run: AgentFollowupRun | None, claimed: ClaimedRun) -> bool:
+    """确认 run 仍由当前 Worker 持有，避免旧 Worker 覆盖后来状态。"""
+
+    return bool(
+        run
+        and run.execution_status == "running"
+        and run.claim_token == claimed.claim_token
+        and run.inbound_reply_id == claimed.inbound_reply_id
+    )
+
+
+def _complete_claimed_run(
+    claimed: ClaimedRun,
+    *,
+    context: dict[str, Any],
+    prompt_package: PromptPackage,
+    suggestion: AgentSuggestion | None,
+    llm_status: str,
+    execution_status: str,
+    raw_output: str = "",
+    validation_error: str | None = None,
+    context_warnings: list[str] | None = None,
+) -> AgentFollowupRun | None:
+    """以 id、claim_token 和 running 条件原子写回一次已领取任务的结果。"""
+
+    if suggestion is not None:
+        review_reasons = list(dict.fromkeys([*suggestion.review_reasons, *(context_warnings or []), "human_approval_required"]))
+        suggestion = suggestion.model_copy(
+            update={
+                "warnings": list(dict.fromkeys([*suggestion.warnings, *review_reasons])),
+                "requires_human_review": True,
+                "review_reasons": review_reasons,
+            }
+        )
+    now = datetime.utcnow()
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, claimed.run_id)
+        if not _is_current_claim(run, claimed):
+            return None
+        output = suggestion.model_dump() if suggestion else {"raw_output": raw_output}
+        duration_ms = int((now - run.started_at).total_seconds() * 1000) if run.started_at else 0
+        updated = db.execute(
+            update(AgentFollowupRun)
+            .where(AgentFollowupRun.id == claimed.run_id)
+            .where(AgentFollowupRun.execution_status == "running")
+            .where(AgentFollowupRun.claim_token == claimed.claim_token)
+            .values(
+                reply_category=suggestion.reply_category if suggestion else str(context.get("reply_category") or "unclear"),
+                suggested_status=suggestion.suggested_status if suggestion else None,
+                llm_status=llm_status,
+                execution_status=execution_status,
+                provider_model=os.getenv("SILICONFLOW_MODEL", DEFAULT_SILICONFLOW_MODEL)
+                if llm_status not in {"pending", "not_configured", "context_insufficient"}
+                else None,
+                context_json=json.dumps(context, ensure_ascii=False, default=str),
+                output_json=json.dumps(output, ensure_ascii=False, default=str),
+                validation_error=validation_error,
+                error_summary=validation_error,
+                prompt_version=prompt_package.prompt_version,
+                rendered_prompt=prompt_package.rendered_prompt,
+                reference_materials_json=json.dumps(context.get("reference_materials") or [], ensure_ascii=False, default=str),
+                prompt_characters=len(prompt_package.rendered_prompt),
+                output_characters=len(json.dumps(output, ensure_ascii=False, default=str)),
+                finished_at=now,
+                duration_ms=duration_ms,
+                claim_token=None,
+                lease_expires_at=None,
+            )
+        )
+        if updated.rowcount != 1:
+            db.rollback()
+            return None
+        db.execute(
+            update(InboundReply)
+            .where(InboundReply.id == claimed.inbound_reply_id)
+            .where(InboundReply.processing_status != "ignored")
+            .values(processing_status="need_ai_review")
+        )
+        db.commit()
+        return db.get(AgentFollowupRun, claimed.run_id)
 
 
 def process_followup_reply(

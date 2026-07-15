@@ -105,6 +105,19 @@ python -m app.worker
 python -m app.worker --once
 ```
 
+### Worker 租约与异常恢复
+
+Worker 每次领取任务时会在一个短事务中把 run 从 `queued` 更新为 `running`，写入仅供内部校验的
+`claim_token`，并设置 120 秒 `lease_expires_at` 后立即提交。随后模型调用在数据库事务外执行，因此慢速
+Provider 不会持续占用 SQLite 写锁。
+
+结果回写必须同时匹配 run ID、`running` 状态和本次 `claim_token`；延迟返回的旧 Worker 不能覆盖新状态。
+每轮轮询会先检查过期租约：过期的 `running` run 会写为 `execution_status=failed`、
+`llm_status=worker_lost`，对应回复进入 `need_ai_review`。系统不会自动重跑该任务，需由人工确认后显式创建新的 run。
+
+`claim_token` 不通过 API 返回；`GET /api/followup-agent/runs` 与单条 run 查询会返回只读的
+`lease_expires_at`，方便观察当前 Worker 是否仍持有任务。
+
 `agent_followup_runs.execution_status` 表示任务执行进度：`queued` 为等待 worker、`running` 为正在生成、`succeeded` 为生成完成、`failed` 为调用或校验失败、`context_insufficient` 为资料不足而未调用模型。`llm_status` 单独记录模型、JSON 或 Pydantic 校验结果；所有状态都只提供人工参考，不会自动发送消息。
 
 项目已创建本地 `.env` 占位文件；只需填写新生成的 Key。`.env.example` 是可提交的模板，真实
@@ -192,3 +205,5 @@ GET  /health
 ```powershell
 pytest -q
 ```
+
+> 开发 SQLite 新增 Worker 租约字段后，请删除并重建可丢弃的 `data/replychat_agent.sqlite`；生产数据库迁移将在后续引入 Alembic 后处理。

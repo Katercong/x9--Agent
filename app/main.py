@@ -418,6 +418,7 @@ def _run_to_dict(row: AgentFollowupRun) -> dict[str, Any]:
         "suggested_status": row.suggested_status,
         "llm_status": row.llm_status,
         "execution_status": row.execution_status,
+        "lease_expires_at": row.lease_expires_at.isoformat() if row.lease_expires_at else None,
         "provider_model": row.provider_model,
         "context": _load_json(row.context_json),
         "output": _load_json(row.output_json),
