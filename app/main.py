@@ -417,6 +417,7 @@ def _run_to_dict(row: AgentFollowupRun) -> dict[str, Any]:
         "reply_category": row.reply_category,
         "suggested_status": row.suggested_status,
         "llm_status": row.llm_status,
+        "block_reason": row.block_reason,
         "execution_status": row.execution_status,
         "lease_expires_at": row.lease_expires_at.isoformat() if row.lease_expires_at else None,
         "provider_model": row.provider_model,

@@ -219,6 +219,7 @@ class AgentFollowupRun(Base):
     reply_category: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     suggested_status: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     llm_status: Mapped[str] = mapped_column(String(40), default="not_configured", index=True)
+    block_reason: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     # execution_status 描述任务生命周期；llm_status 只描述模型或校验结果，避免混淆。
     execution_status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
     claim_token: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)

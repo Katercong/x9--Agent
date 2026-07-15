@@ -406,8 +406,9 @@ def process_claimed_run(claimed: ClaimedRun) -> AgentFollowupRun | None:
             context=context,
             prompt_package=prompt_package,
             suggestion=build_context_insufficient_suggestion(context, context_warnings),
-            llm_status="context_insufficient",
-            execution_status="context_insufficient",
+            llm_status="skipped",
+            execution_status="succeeded",
+            block_reason="context_insufficient",
             context_warnings=context_warnings,
         )
     try:
@@ -478,6 +479,7 @@ def _complete_claimed_run(
     execution_status: str,
     raw_output: str = "",
     validation_error: str | None = None,
+    block_reason: str | None = None,
     context_warnings: list[str] | None = None,
 ) -> AgentFollowupRun | None:
     """以 id、claim_token 和 running 条件原子写回一次已领取任务的结果。"""
@@ -507,9 +509,10 @@ def _complete_claimed_run(
                 reply_category=suggestion.reply_category if suggestion else str(context.get("reply_category") or "unclear"),
                 suggested_status=suggestion.suggested_status if suggestion else None,
                 llm_status=llm_status,
+                block_reason=block_reason,
                 execution_status=execution_status,
                 provider_model=os.getenv("SILICONFLOW_MODEL", DEFAULT_SILICONFLOW_MODEL)
-                if llm_status not in {"pending", "not_configured", "context_insufficient"}
+                if llm_status not in {"pending", "not_configured", "skipped"}
                 else None,
                 context_json=json.dumps(context, ensure_ascii=False, default=str),
                 output_json=json.dumps(output, ensure_ascii=False, default=str),
@@ -520,6 +523,45 @@ def _complete_claimed_run(
                 reference_materials_json=json.dumps(context.get("reference_materials") or [], ensure_ascii=False, default=str),
                 prompt_characters=len(prompt_package.rendered_prompt),
                 output_characters=len(json.dumps(output, ensure_ascii=False, default=str)),
+                finished_at=now,
+                duration_ms=duration_ms,
+                claim_token=None,
+                lease_expires_at=None,
+            )
+        )
+        if updated.rowcount != 1:
+            db.rollback()
+            return None
+        db.execute(
+            update(InboundReply)
+            .where(InboundReply.id == claimed.inbound_reply_id)
+            .where(InboundReply.processing_status != "ignored")
+            .values(processing_status="need_ai_review")
+        )
+        db.commit()
+        return db.get(AgentFollowupRun, claimed.run_id)
+
+
+def persist_unexpected_claim_error(claimed: ClaimedRun, error: Exception) -> AgentFollowupRun | None:
+    """将 Worker 未预期异常立即写为失败，避免只能等待租约过期后再排障。"""
+
+    detail = f"{type(error).__name__}: {error}"[:500]
+    now = datetime.utcnow()
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, claimed.run_id)
+        if not _is_current_claim(run, claimed):
+            return None
+        duration_ms = int((now - run.started_at).total_seconds() * 1000) if run.started_at else 0
+        updated = db.execute(
+            update(AgentFollowupRun)
+            .where(AgentFollowupRun.id == claimed.run_id)
+            .where(AgentFollowupRun.execution_status == "running")
+            .where(AgentFollowupRun.claim_token == claimed.claim_token)
+            .values(
+                llm_status="worker_unexpected_error",
+                execution_status="failed",
+                validation_error=detail,
+                error_summary=detail,
                 finished_at=now,
                 duration_ms=duration_ms,
                 claim_token=None,
@@ -552,11 +594,12 @@ def process_followup_reply(
             db,
             context=context,
             suggestion=build_context_insufficient_suggestion(context, context_warnings),
-            llm_status="context_insufficient",
+            llm_status="skipped",
             prompt_package=prompt_package,
             context_warnings=context_warnings,
             run=run,
-            execution_status="context_insufficient",
+            execution_status="succeeded",
+            block_reason="context_insufficient",
         )
     try:
         raw_output, llm_status = generate_raw_followup_output(context, prompt_package)
@@ -615,6 +658,7 @@ def _persist_suggestion_run(
     context_warnings: list[str],
     run: AgentFollowupRun | None,
     execution_status: str,
+    block_reason: str | None = None,
 ) -> AgentFollowupRun:
     review_reasons = list(dict.fromkeys([*suggestion.review_reasons, *context_warnings, "human_approval_required"]))
     warnings = list(dict.fromkeys([*suggestion.warnings, *review_reasons]))
@@ -633,6 +677,7 @@ def _persist_suggestion_run(
         prompt_package=prompt_package,
         run=run,
         execution_status=execution_status,
+        block_reason=block_reason,
     )
     _update_reply_processing_status(
         db,
@@ -684,6 +729,7 @@ def persist_followup_run(
     created_by: str | None = None,
     run: AgentFollowupRun | None = None,
     execution_status: str = "succeeded",
+    block_reason: str | None = None,
 ) -> AgentFollowupRun:
     creator = context.get("creator") or {}
     reply = context.get("inbound_reply") or {}
@@ -698,6 +744,7 @@ def persist_followup_run(
     row.reply_category = suggestion.reply_category if suggestion else str(context.get("reply_category") or "unclear")
     row.suggested_status = suggestion.suggested_status if suggestion else None
     row.llm_status = llm_status
+    row.block_reason = block_reason
     row.context_json = json.dumps(context, ensure_ascii=False, default=str)
     row.output_json = json.dumps(
         suggestion.model_dump() if suggestion else {"raw_output": raw_output or ""}, ensure_ascii=False, default=str
@@ -709,7 +756,7 @@ def persist_followup_run(
     row.execution_status = execution_status
     row.prompt_characters = len(prompt_package.rendered_prompt) if prompt_package else None
     row.output_characters = len(row.output_json)
-    if llm_status not in {"pending", "not_configured", "context_insufficient"}:
+    if llm_status not in {"pending", "not_configured", "skipped"}:
         row.provider_model = os.getenv("SILICONFLOW_MODEL", DEFAULT_SILICONFLOW_MODEL)
     row.finished_at = datetime.utcnow()
     if row.started_at is None:

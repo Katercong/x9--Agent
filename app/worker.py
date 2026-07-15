@@ -6,7 +6,7 @@ import argparse
 import time
 
 from .database import SessionLocal, init_db
-from .services import claim_next_queued_run, process_claimed_run, recover_expired_runs
+from .services import claim_next_queued_run, persist_unexpected_claim_error, process_claimed_run, recover_expired_runs
 
 
 def process_once() -> str | None:
@@ -28,7 +28,10 @@ def process_once() -> str | None:
             raise
     if claimed is None:
         return None
-    process_claimed_run(claimed)
+    try:
+        process_claimed_run(claimed)
+    except Exception as exc:
+        persist_unexpected_claim_error(claimed, exc)
     return claimed.run_id
 
 

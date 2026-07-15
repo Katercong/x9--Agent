@@ -138,8 +138,9 @@ def test_simulate_reply_runs_agent_and_persists_run():
     manual = client.post("/api/followup-agent/runs", json={"inbound_reply_id": payload["reply"]["id"]})
     assert manual.status_code == 200, manual.text
     completed_run = _process_response_run(client, manual)
-    assert completed_run["llm_status"] == "context_insufficient"
-    assert completed_run["execution_status"] == "context_insufficient"
+    assert completed_run["llm_status"] == "skipped"
+    assert completed_run["execution_status"] == "succeeded"
+    assert completed_run["block_reason"] == "context_insufficient"
     assert completed_run["output"]["next_action"] == "prepare_campaign_brief"
     assert completed_run["output"]["requires_human_review"] is True
     assert "human_approval_required" in completed_run["output"]["warnings"]
@@ -335,7 +336,9 @@ def test_detail_request_with_missing_campaign_brief_requires_human_and_names_mis
     assert response.json()["reply"]["processing_status"] == "need_ai_review"
     run = _process_response_run(client, response)
     output = run["output"]
-    assert run["llm_status"] == "context_insufficient"
+    assert run["llm_status"] == "skipped"
+    assert run["execution_status"] == "succeeded"
+    assert run["block_reason"] == "context_insufficient"
     assert output["next_action"] == "prepare_campaign_brief"
     assert "missing_campaign_timeline" in output["warnings"]
     assert "missing_campaign_deliverables" in output["warnings"]
@@ -1571,6 +1574,35 @@ def test_stale_worker_claim_cannot_overwrite_current_run_state():
         assert run is not None
         assert run.execution_status == "running"
         assert run.claim_token == "newer-worker-claim"
+
+
+def test_worker_persists_unexpected_context_error_without_waiting_for_lease(monkeypatch):
+    """上下文拼装意外失败时应立即留痕，不能等租约过期才变为 worker_lost。"""
+
+    import app.worker as worker
+
+    client = TestClient(app)
+    _create_creator(client, "creator_unexpected_worker_error")
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_unexpected_worker_error", "body": "Sounds interesting.", "run_agent": True},
+    )
+    run_id = queued.json()["run"]["id"]
+
+    def raise_context_error(*_: object) -> dict[str, object]:
+        raise RuntimeError("context assembly failed")
+
+    monkeypatch.setattr(services, "build_followup_context", raise_context_error)
+
+    assert worker.process_once() == run_id
+    completed = client.get(f"/api/followup-agent/runs/{run_id}")
+    assert completed.status_code == 200
+    run = completed.json()["run"]
+    assert run["execution_status"] == "failed"
+    assert run["llm_status"] == "worker_unexpected_error"
+    assert run["validation_error"] == "RuntimeError: context assembly failed"
+    assert run["lease_expires_at"] is None
+    assert client.get(f"/api/followup-agent/replies/{queued.json()['reply']['id']}").json()["reply"]["processing_status"] == "need_ai_review"
 
 
 def test_reference_material_versions_are_used_in_prompt_context_and_run_snapshot():

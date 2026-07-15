@@ -118,7 +118,7 @@ Provider 不会持续占用 SQLite 写锁。
 `claim_token` 不通过 API 返回；`GET /api/followup-agent/runs` 与单条 run 查询会返回只读的
 `lease_expires_at`，方便观察当前 Worker 是否仍持有任务。
 
-`agent_followup_runs.execution_status` 表示任务执行进度：`queued` 为等待 worker、`running` 为正在生成、`succeeded` 为生成完成、`failed` 为调用或校验失败、`context_insufficient` 为资料不足而未调用模型。`llm_status` 单独记录模型、JSON 或 Pydantic 校验结果；所有状态都只提供人工参考，不会自动发送消息。
+`agent_followup_runs.execution_status` 表示任务执行进度：`queued` 为等待 worker、`running` 为正在生成、`succeeded` 为成功完成、`failed` 为失败。`llm_status` 单独记录模型、JSON 或 Pydantic 结果；资料不足但成功生成受限草稿时使用 `llm_status=skipped` 和 `block_reason=context_insufficient`。`worker_unexpected_error` 表示已捕获并立即留痕的非预期 Worker 异常；`worker_lost` 只表示租约过期后的兜底回收。所有状态都只提供人工参考，不会自动发送消息。
 
 项目已创建本地 `.env` 占位文件；只需填写新生成的 Key。`.env.example` 是可提交的模板，真实
 `.env` 已被 `.gitignore` 忽略。系统环境变量存在时优先于 `.env`。
@@ -154,7 +154,7 @@ python -m app.evaluation --suite pilot --live
 后续重新表达合作意向，系统只创建 `reengagement_review` 人工确认待办，状态保持 `dropped` 直到人工确认。
 
 产品档案可选填写 `campaign_timeline`、`campaign_deliverables`、`budget_guidance`。达人明确索要其中缺失的
-合作资料时，系统不调用 LLM，而是创建 `llm_status=context_insufficient` 的受限草稿，建议人工先准备活动资料。
+合作资料时，系统不调用 LLM，而是成功创建 `llm_status=skipped`、`block_reason=context_insufficient` 的受限草稿，建议人工先准备活动资料。
 
 当前 MVP 尚未引入数据库迁移。若本地已经运行过旧版本，升级模型字段后请先重建可丢弃的开发库：
 
