@@ -17,7 +17,7 @@ os.environ["SILICONFLOW_API_KEY"] = ""
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
-from sqlalchemy import func, select  # noqa: E402
+from sqlalchemy import delete, func, select  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 from app.database import Base, SessionLocal, engine, init_db  # noqa: E402
@@ -728,7 +728,8 @@ def test_duplicate_reply_is_idempotent_and_does_not_repeat_side_effects():
     assert second.json()["reply"]["id"] == first.json()["reply"]["id"]
     assert second.json()["run"]["id"] == first.json()["run"]["id"]
     assert first.json()["reply"]["channel"] == "simulation"
-    assert first.json()["reply"]["external_message_id"] is None
+    assert first.json()["reply"]["external_message_id"].startswith("simulation:")
+    assert first.json()["reply"]["external_message_id"] == second.json()["reply"]["external_message_id"]
 
     with SessionLocal() as db:
         assert db.scalar(select(func.count()).select_from(InboundReply).where(InboundReply.creator_id == creator_id)) == 1
@@ -809,6 +810,118 @@ def test_real_message_external_id_is_unique_while_identical_content_can_coexist(
             db.commit()
         db.rollback()
         assert db.scalar(select(func.count()).select_from(InboundReply).where(InboundReply.creator_id == creator_id)) == 2
+
+
+def test_inbound_reply_and_active_run_database_constraints():
+    init_db()
+    client = TestClient(app)
+    creator_id = "creator_database_constraints"
+    _create_creator(client, creator_id)
+    values = {
+        "department_code": "cross_border",
+        "creator_id": creator_id,
+        "direction": "inbound",
+        "channel": "email",
+        "from_email": "creator@example.com",
+        "to_email": "bd@example.com",
+        "subject": "Re: Campaign",
+        "body": "Same body",
+        "body_format": "plain",
+        "message_at": datetime.utcnow(),
+    }
+
+    with SessionLocal() as db:
+        db.add(InboundReply(id="ir_external_missing", external_message_id=None, **values))
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        reply = InboundReply(id="ir_constraints", external_message_id="provider_message_constraints", **values)
+        db.add(reply)
+        db.commit()
+
+        db.add(
+            AgentFollowupRun(
+                id="afr_orphan_creator",
+                department_code="cross_border",
+                creator_id="missing_creator",
+                inbound_reply_id=reply.id,
+                reply_category="interested",
+                llm_status="pending",
+                execution_status="queued",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        db.add(
+            AgentFollowupRun(
+                id="afr_orphan_reply",
+                department_code="cross_border",
+                creator_id=creator_id,
+                inbound_reply_id="missing_reply",
+                reply_category="interested",
+                llm_status="pending",
+                execution_status="queued",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        db.add(
+            AgentFollowupRun(
+                id="afr_active_first",
+                department_code="cross_border",
+                creator_id=creator_id,
+                inbound_reply_id=reply.id,
+                reply_category="interested",
+                llm_status="pending",
+                execution_status="queued",
+            )
+        )
+        db.commit()
+
+        db.add(
+            AgentFollowupRun(
+                id="afr_active_second",
+                department_code="cross_border",
+                creator_id=creator_id,
+                inbound_reply_id=reply.id,
+                reply_category="interested",
+                llm_status="pending",
+                execution_status="running",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+
+def test_audited_reply_and_creator_cannot_be_deleted():
+    init_db()
+    client = TestClient(app)
+    creator_id = "creator_audit_restrict"
+    _create_creator(client, creator_id)
+    response = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Please unsubscribe me.", "run_agent": False},
+    )
+    assert response.status_code == 200, response.text
+    reply_id = response.json()["reply"]["id"]
+
+    with SessionLocal() as db:
+        with pytest.raises(IntegrityError):
+            db.execute(delete(InboundReply).where(InboundReply.id == reply_id))
+            db.commit()
+        db.rollback()
+
+    with SessionLocal() as db:
+        with pytest.raises(IntegrityError):
+            db.execute(delete(Creator).where(Creator.id == creator_id))
+            db.commit()
+        db.rollback()
 
 
 def test_running_an_ignored_reply_returns_conflict():

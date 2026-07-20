@@ -128,7 +128,7 @@ SILICONFLOW_API_KEY=<replace-with-a-new-key>
 SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V4-Flash
 ```
 
-默认使用 SQLite：
+未设置 `DATABASE_URL` 的可丢弃本地开发环境默认使用 SQLite：
 
 ```text
 sqlite:///./data/replychat_agent.sqlite
@@ -164,7 +164,8 @@ Remove-Item -LiteralPath .\data\replychat_agent.sqlite -ErrorAction SilentlyCont
 
 下次启动服务时会按最新模型自动建表。请勿对需要保留数据的数据库执行该命令。
 
-可以通过 `DATABASE_URL` 切换数据库。MVP 代码保持 SQLAlchemy 兼容，后续可迁移 PostgreSQL。
+通过 `DATABASE_URL` 连接数据库。受管 PostgreSQL 的 Docker 部署和迁移方式见下方
+“PostgreSQL 与 Docker”；生产环境必须使用 PostgreSQL，不能回退到 SQLite。
 
 ## 常用接口
 
@@ -206,4 +207,11 @@ GET  /health
 pytest -q
 ```
 
-> 开发 SQLite 新增 Worker 租约字段后，请删除并重建可丢弃的 `data/replychat_agent.sqlite`；生产数据库迁移将在后续引入 Alembic 后处理。
+> 开发 SQLite 新增字段后，请删除并重建可丢弃的 `data/replychat_agent.sqlite`；PostgreSQL
+> schema 变更统一通过 Alembic migration 执行。
+
+## PostgreSQL 与 Docker
+
+PostgreSQL 的 Docker Compose 部署、环境变量和 Alembic 迁移步骤见
+[`docs/postgresql.md`](docs/postgresql.md)。生产环境必须先执行
+`alembic upgrade head`，再启动 API/Worker；应用进程不会自动修改 PostgreSQL schema。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from datetime import datetime
 from typing import Any
 
@@ -302,9 +303,9 @@ def _create_run(db: Session, inbound_reply_id: str, *, created_by: str) -> Agent
 
 
 def _normalized_message_fields(creator: Creator, body: SimulateReplyIn) -> dict[str, str]:
-    """统一可选邮件字段的空值，确保联合唯一约束不会被 NULL 绕过。"""
+    """规范化模拟消息字段，并生成可重放的稳定外部消息 ID。"""
 
-    return {
+    fields = {
         "department_code": creator.department_code,
         "creator_id": creator.id,
         "direction": "inbound",
@@ -314,6 +315,15 @@ def _normalized_message_fields(creator: Creator, body: SimulateReplyIn) -> dict[
         "subject": body.subject or "",
         "body": body.body,
     }
+    fields["external_message_id"] = _simulation_external_message_id(fields)
+    return fields
+
+
+def _simulation_external_message_id(message_fields: dict[str, str]) -> str:
+    """Derive a deterministic replay key for simulated inbound messages."""
+
+    replay_key = json.dumps(message_fields, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return f"simulation:{sha256(replay_key.encode('utf-8')).hexdigest()}"
 
 
 def _find_duplicate_reply(db: Session, **message_fields: str) -> InboundReply | None:

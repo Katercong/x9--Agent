@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -41,8 +41,8 @@ class DoNotContactConfirmation(Base):
 
     id: Mapped[str] = mapped_column(String(120), primary_key=True)
     department_code: Mapped[str] = mapped_column(String(40), default="cross_border", index=True)
-    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id", ondelete="CASCADE"), index=True)
-    inbound_reply_id: Mapped[str] = mapped_column(String(120), ForeignKey("inbound_replies.id", ondelete="CASCADE"), index=True)
+    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id"), index=True)
+    inbound_reply_id: Mapped[str] = mapped_column(String(120), ForeignKey("inbound_replies.id"), index=True)
     reason: Mapped[str] = mapped_column(String(80), default="explicit_opt_out")
     status: Mapped[str] = mapped_column(String(40), default="pending_confirmation")
     reviewed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -111,11 +111,11 @@ class InboundReply(Base):
 
     id: Mapped[str] = mapped_column(String(120), primary_key=True)
     department_code: Mapped[str] = mapped_column(String(40), default="cross_border", index=True)
-    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id", ondelete="CASCADE"), index=True)
+    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id"), index=True)
     direction: Mapped[str] = mapped_column(String(20), default="inbound", index=True)
-    # simulation 仅用于 MVP 演练；真实渠道需提供上游稳定消息 ID。
+    # simulation 使用由消息内容导出的可重放 ID；真实渠道必须提供上游稳定消息 ID。
     channel: Mapped[str] = mapped_column(String(40), default="simulation", index=True)
-    external_message_id: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
+    external_message_id: Mapped[str] = mapped_column(String(320), index=True)
     from_email: Mapped[str] = mapped_column(String(320), default="")
     to_email: Mapped[str] = mapped_column(String(1000), default="")
     subject: Mapped[str] = mapped_column(Text, default="")
@@ -140,8 +140,8 @@ class SimulatedOutboundInstruction(Base):
     __table_args__ = (UniqueConstraint("inbound_reply_id", "action_type", name="uq_outbound_instruction_reply_action"),)
 
     id: Mapped[str] = mapped_column(String(120), primary_key=True)
-    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id", ondelete="CASCADE"), index=True)
-    inbound_reply_id: Mapped[str] = mapped_column(String(120), ForeignKey("inbound_replies.id", ondelete="CASCADE"), index=True)
+    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id"), index=True)
+    inbound_reply_id: Mapped[str] = mapped_column(String(120), ForeignKey("inbound_replies.id"), index=True)
     action_type: Mapped[str] = mapped_column(String(60), index=True)
     template_key: Mapped[str] = mapped_column(String(80))
     content: Mapped[str] = mapped_column(Text)
@@ -156,7 +156,7 @@ class OutreachEmail(Base):
 
     id: Mapped[str] = mapped_column(String(120), primary_key=True)
     department_code: Mapped[str] = mapped_column(String(40), default="cross_border", index=True)
-    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id", ondelete="CASCADE"), index=True)
+    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id"), index=True)
     to_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     from_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     subject: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -174,7 +174,7 @@ class CreatorOutreachEvent(Base):
 
     id: Mapped[str] = mapped_column(String(120), primary_key=True)
     department_code: Mapped[str] = mapped_column(String(40), default="cross_border", index=True)
-    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id", ondelete="CASCADE"), index=True)
+    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id"), index=True)
     event_type: Mapped[str] = mapped_column(String(40), index=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -189,7 +189,7 @@ class FollowupTask(Base):
 
     id: Mapped[str] = mapped_column(String(120), primary_key=True)
     department_code: Mapped[str] = mapped_column(String(40), default="cross_border", index=True)
-    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id", ondelete="CASCADE"), index=True)
+    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id"), index=True)
     owner_user_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     task_type: Mapped[str] = mapped_column(String(60), index=True)
     status: Mapped[str] = mapped_column(String(40), default="open", index=True)
@@ -210,12 +210,19 @@ class AgentFollowupRun(Base):
         # SQLite MVP 由单 worker 轮询该索引；迁移 PostgreSQL 后可沿用它做并发领取。
         Index("ix_agent_followup_runs_execution_created", "execution_status", "created_at"),
         Index("ix_agent_followup_runs_execution_lease", "execution_status", "lease_expires_at"),
+        Index(
+            "uq_agent_followup_runs_active_reply",
+            "inbound_reply_id",
+            unique=True,
+            postgresql_where=text("execution_status IN ('queued', 'running')"),
+            sqlite_where=text("execution_status IN ('queued', 'running')"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(120), primary_key=True)
     department_code: Mapped[str] = mapped_column(String(40), default="cross_border", index=True)
-    creator_id: Mapped[str] = mapped_column(String(120), index=True)
-    inbound_reply_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id"), index=True)
+    inbound_reply_id: Mapped[str] = mapped_column(String(120), ForeignKey("inbound_replies.id"), index=True)
     reply_category: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     suggested_status: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     llm_status: Mapped[str] = mapped_column(String(40), default="not_configured", index=True)
