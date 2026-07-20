@@ -10,10 +10,13 @@
 
 ```powershell
 pip install -r requirements.txt
+Copy-Item .env.example .env
 docker compose up -d postgres
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
+
+首次初始化后，请在未提交的 `.env` 中填写 PostgreSQL 变量，再启动数据库。
 
 另开一个终端启动 Worker：
 
