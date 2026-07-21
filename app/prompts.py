@@ -8,9 +8,9 @@ from typing import Any
 from .schemas import AgentSuggestion
 
 
-PROMPT_VERSION = "reply_followup_v1"
-PROMPT_V2_VERSION = "reply_followup_v2"
-SUPPORTED_PROMPT_VERSIONS = {PROMPT_VERSION, PROMPT_V2_VERSION}
+PROMPT_V1_VERSION = "reply_followup_v1"
+PROMPT_VERSION = "reply_followup_v2"
+SUPPORTED_PROMPT_VERSIONS = {PROMPT_V1_VERSION, PROMPT_VERSION}
 MAX_RENDERED_PROMPT_CHARS = 12000
 OMITTED_MARKER = "[内容已省略]"
 
@@ -72,7 +72,7 @@ def _system_prompt(reply_language: str, prompt_version: str, rule_category: str)
         "and preserve human review when the information is incomplete or risky. "
         f"{language_instruction} Return only a JSON object conforming to this schema: {output_schema}"
     )
-    if prompt_version == PROMPT_VERSION:
+    if prompt_version == PROMPT_V1_VERSION:
         return base_prompt
     return (
         f"{base_prompt}\n\n"
@@ -82,6 +82,8 @@ def _system_prompt(reply_language: str, prompt_version: str, rule_category: str)
         "Allowed next_action values: send_campaign_details, clarify_terms, acknowledge_and_close, "
         "ask_clarifying_question, verify_contact_method, prepare_campaign_brief.\n"
         "Allowed suggested_status values: pending_followup, pending_reply, communicating, dropped.\n"
+        "Every suggested reply requires human approval before use: requires_human_review must always be true, "
+        "and review_reasons must contain at least one concrete reason. Never set requires_human_review to false.\n"
         "Required route mapping:\n"
         "interested -> send_campaign_details / pending_followup / requires_human_review=true\n"
         "need_more_info -> send_campaign_details / pending_followup / requires_human_review=true\n"

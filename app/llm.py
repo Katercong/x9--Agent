@@ -9,7 +9,8 @@ load_project_environment()
 
 
 SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
-DEFAULT_SILICONFLOW_MODEL = "deepseek-ai/DeepSeek-V4-Flash"
+DEFAULT_SILICONFLOW_MODEL = "deepseek-ai/DeepSeek-V3.2"
+V4_FLASH_MODEL = "deepseek-ai/DeepSeek-V4-Flash"
 # worker 在后台执行，允许模型获得更合理的响应窗口，但不会阻塞入站 API。
 SILICONFLOW_TIMEOUT_SECONDS = 90.0
 
@@ -45,7 +46,7 @@ def call_siliconflow_json(system_prompt: str, user_prompt: str) -> str:
             "temperature": 0.2,
             "max_tokens": 512,
         }
-        if model == DEFAULT_SILICONFLOW_MODEL:
+        if model == V4_FLASH_MODEL:
             # V4 Flash 的 low/medium 会被 Provider 映射为 high，故显式使用最低有效档。
             request_params["reasoning_effort"] = "high"
         elif model in {"deepseek-ai/DeepSeek-V3.2", "Pro/deepseek-ai/DeepSeek-V3.2"}:
