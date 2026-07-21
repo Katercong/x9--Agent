@@ -21,6 +21,7 @@ from .models import (
     CreatorOutreachEvent,
     DoNotContactConfirmation,
     FollowupTask,
+    HumanReviewDecision,
     InboundReply,
     OutreachEmail,
     Product,
@@ -264,11 +265,16 @@ def parse_followup_suggestion(raw_output: str) -> AgentSuggestion:
 
 
 def enqueue_followup_run(db: Session, inbound_reply_id: str, *, created_by: str | None = None) -> AgentFollowupRun:
-    """创建可持久化的待执行任务；同一回复只能同时存在一条活跃任务。"""
+    """创建可持久化的待执行任务；已审核回复不可重新排队。"""
 
     reply = db.get(InboundReply, inbound_reply_id)
     if reply is None:
         raise HTTPException(status_code=404, detail="inbound reply not found")
+    if reply.processing_status == "reviewed" or db.scalar(
+        select(HumanReviewDecision.id).where(HumanReviewDecision.inbound_reply_id == reply.id)
+    ) is not None:
+        # 当前尚未设计显式的重新审核/版本化流程，不能通过重跑模型绕过最终人工决定。
+        raise HTTPException(status_code=409, detail="reviewed reply cannot run agent")
     existing = db.scalars(
         select(AgentFollowupRun)
         .where(AgentFollowupRun.inbound_reply_id == reply.id)
@@ -292,6 +298,8 @@ def enqueue_followup_run(db: Session, inbound_reply_id: str, *, created_by: str 
         llm_status="pending",
         execution_status="queued",
         created_by=created_by,
+        # SQLite 的 CURRENT_TIMESTAMP 精度只有秒；显式写入微秒时间避免连续重跑时“最新”顺序不确定。
+        created_at=datetime.utcnow(),
     )
     db.add(row)
     db.flush()
@@ -831,9 +839,9 @@ def _update_reply_processing_status(
     requires_manual_review: bool,
 ) -> None:
     reply = db.get(InboundReply, inbound_reply_id)
-    if reply is None or reply.processing_status == "ignored":
+    if reply is None or reply.processing_status in {"ignored", "reviewed"}:
         return
-    # 除已忽略的退信外，AI 输出只能辅助人工，不能进入自动推进状态。
+    # 已审核回复的最终决定不可被延迟 Worker 结果重新打开；其他输出仅辅助人工。
     reply.processing_status = "need_ai_review"
     db.flush()
 
@@ -926,6 +934,7 @@ def handle_creator_declined(db: Session, creator: Creator, reply: InboundReply) 
         creator.do_not_contact_status = "pending_confirmation"
         creator.do_not_contact_reason = "explicit_opt_out"
         creator.do_not_contact_requested_at = datetime.utcnow()
+        _block_pending_followup_tasks_for_dnc(db, creator)
         _ensure_dnc_confirmation(db, creator, reply)
 
     db.add(
@@ -946,6 +955,22 @@ def handle_creator_declined(db: Session, creator: Creator, reply: InboundReply) 
         )
     )
     db.flush()
+
+
+def _block_pending_followup_tasks_for_dnc(db: Session, creator: Creator) -> None:
+    """DNC 待确认期间立即停止普通外联待办，避免人工沿旧任务继续联系。"""
+
+    tasks = list(
+        db.scalars(
+            select(FollowupTask)
+            .where(FollowupTask.creator_id == creator.id)
+            .where(FollowupTask.task_type == "reply_followup_1")
+            .where(FollowupTask.status.in_(("open", "pending")))
+        ).all()
+    )
+    for task in tasks:
+        task.status = "blocked_dnc_pending"
+        task.reason = "Blocked: creator requested do not contact; confirmation is pending."
 
 
 def _ensure_dnc_confirmation(db: Session, creator: Creator, reply: InboundReply) -> None:

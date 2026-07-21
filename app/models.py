@@ -257,6 +257,9 @@ class HumanReviewDecision(Base):
     __table_args__ = (
         # 同一 run 只能被人工完成一次，避免重复确认产生相互矛盾的最终草稿。
         UniqueConstraint("agent_followup_run_id", name="uq_human_review_decisions_run"),
+        # 当前没有重新审核/版本化流程，因此同一回复也只能有一个最终人工决定。
+        # 使用唯一索引而非应用层预查，确保 PostgreSQL 与 SQLite 都能抵御并发写入。
+        Index("uq_human_review_decisions_reply", "inbound_reply_id", unique=True),
         Index("ix_human_review_decisions_department_decided", "department_code", "decided_at"),
     )
 

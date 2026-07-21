@@ -263,11 +263,15 @@ def simulate_reply(body: SimulateReplyIn, db: Session = Depends(get_db)) -> dict
 @app.post("/api/followup-agent/runs")
 def run_agent(body: RunAgentIn, db: Session = Depends(get_db)) -> dict[str, Any]:
     reply = db.get(InboundReply, body.inbound_reply_id)
-    if reply is not None and reply.processing_status == "ignored":
+    if reply is None:
+        raise HTTPException(status_code=404, detail="inbound reply not found")
+    if reply.processing_status == "ignored":
         raise HTTPException(status_code=409, detail="ignored reply cannot run agent")
-    if reply is not None and reply.reply_category == "not_interested":
+    if reply.processing_status == "reviewed":
+        raise HTTPException(status_code=409, detail="reviewed reply cannot run agent")
+    if reply.reply_category == "not_interested":
         raise HTTPException(status_code=409, detail="terminal reply cannot run agent")
-    creator = db.get(Creator, reply.creator_id) if reply is not None else None
+    creator = db.get(Creator, reply.creator_id)
     if is_creator_contact_blocked(creator):
         raise HTTPException(status_code=409, detail="do not contact creator cannot run agent")
     run = _create_run(db, body.inbound_reply_id, created_by="manual")
@@ -399,6 +403,22 @@ def create_human_review_decision(
         raise HTTPException(status_code=409, detail="reply is not pending human review")
     if reply.reply_category in {"not_interested", "bounce_or_invalid"}:
         raise HTTPException(status_code=409, detail="terminal reply cannot use standard review decision")
+    active_run = db.scalar(
+        select(AgentFollowupRun.id)
+        .where(AgentFollowupRun.inbound_reply_id == reply.id)
+        .where(AgentFollowupRun.execution_status.in_(("queued", "running")))
+        .limit(1)
+    )
+    if active_run is not None:
+        raise HTTPException(status_code=409, detail="reply has an active agent followup run")
+    latest_run = db.scalars(
+        select(AgentFollowupRun)
+        .where(AgentFollowupRun.inbound_reply_id == reply.id)
+        .order_by(AgentFollowupRun.created_at.desc(), AgentFollowupRun.id.desc())
+        .limit(1)
+    ).first()
+    if latest_run is None or latest_run.id != run.id:
+        raise HTTPException(status_code=409, detail="only the latest agent followup run can be reviewed")
     if db.scalar(select(HumanReviewDecision.id).where(HumanReviewDecision.agent_followup_run_id == run.id)) is not None:
         raise HTTPException(status_code=409, detail="agent followup run already has a human review decision")
 
@@ -421,7 +441,7 @@ def create_human_review_decision(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=409, detail="agent followup run already has a human review decision")
+        raise HTTPException(status_code=409, detail="inbound reply already has a human review decision")
     db.refresh(decision)
     db.refresh(reply)
     return {"ok": True, "decision": _human_review_decision_to_dict(decision), "reply": _reply_to_dict(reply)}
@@ -511,7 +531,7 @@ def _find_duplicate_reply(db: Session, **message_fields: str) -> InboundReply | 
 
 
 def _get_or_create_existing_run(db: Session, reply: InboundReply, run_agent: bool) -> dict[str, Any] | None:
-    if not run_agent or reply.processing_status == "ignored":
+    if not run_agent or reply.processing_status in {"ignored", "reviewed"}:
         return None
     if is_creator_contact_blocked(db.get(Creator, reply.creator_id)):
         return None

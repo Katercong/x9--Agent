@@ -76,6 +76,8 @@ POST /simulate-reply
 - 真实渠道接入时必须使用 `channel + external_message_id`，且外部消息 ID 不能为空；当前没有真实渠道接收接口。
 - 规则分类是权威输入。模型只能生成草稿、建议和审核理由，不得自动写回非终态业务状态。
 - 退信进入 `ignored`，不创建 run 或普通跟进任务；拒绝和明确退订进入只读终态待审，不自动写入 `dropped` 或确认 DNC。待确认/已确认 DNC 会阻断新 run、导出和后续入站的 AI 处理。
+- 明确退订还会在同一事务中把已有 `reply_followup_1` 的 `open/pending` 待办标记为 `blocked_dnc_pending`，避免人工沿历史待办继续联系。
+- 普通回复仅允许最新且没有活跃后继的完成 run 形成最终决定；每条回复在数据库中最多一条决定，`reviewed` 后不可重新排队。
 - 资料不足时，Worker 可以不调用模型而生成受限草稿，记录 `execution_status=succeeded`、`llm_status=skipped` 和 `block_reason=context_insufficient`，仍由人工审核。
 
 ## 核心数据模型
