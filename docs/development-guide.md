@@ -68,12 +68,14 @@ POST /simulate-reply
 -> 上下文组装和 LLM JSON 输出
 -> JSON + Pydantic 校验
 -> run 留痕与 reply 进入 need_ai_review
+-> 人工审核队列
+-> 人工决定或终态只读待审
 ```
 
 - 模拟消息的幂等键由部门、达人、方向、收发地址、主题和正文确定，并生成可重放的确定性 `external_message_id`。
 - 真实渠道接入时必须使用 `channel + external_message_id`，且外部消息 ID 不能为空；当前没有真实渠道接收接口。
 - 规则分类是权威输入。模型只能生成草稿、建议和审核理由，不得自动写回非终态业务状态。
-- 退信进入 `ignored`，不创建 run 或普通跟进任务；拒绝当前会标记 `dropped`；退订会创建 DNC 待确认记录。
+- 退信进入 `ignored`，不创建 run 或普通跟进任务；拒绝和明确退订进入只读终态待审，不自动写入 `dropped` 或确认 DNC。待确认/已确认 DNC 会阻断新 run、导出和后续入站的 AI 处理。
 - 资料不足时，Worker 可以不调用模型而生成受限草稿，记录 `execution_status=succeeded`、`llm_status=skipped` 和 `block_reason=context_insufficient`，仍由人工审核。
 
 ## 核心数据模型
@@ -118,6 +120,10 @@ POST /simulate-reply
 | `GET /api/followup-agent/replies/{reply_id}` | 查询回复分类和处理状态。 |
 | `GET /api/followup-agent/runs` | 查询 run 列表。 |
 | `GET /api/followup-agent/runs/{run_id}` | 查询单个 run 的审计信息。 |
+| `GET /api/followup-agent/review-queue` | 查询普通回复、拒绝或 DNC 待审队列；终态项只读。 |
+| `POST /api/followup-agent/review-decisions` | 对普通回复批准最终草稿或关闭不使用草稿。 |
+| `GET /api/followup-agent/review-decisions/{decision_id}` | 查询人工决定及其草稿导出快照。 |
+| `POST /api/followup-agent/review-decisions/{decision_id}/exports` | 记录人工复制/导出的草稿快照；不会发送消息。 |
 | `GET /api/followup-agent/outbound-instructions` | 查询模拟出站指令，不会触发发送。 |
 | `GET /health` | 健康检查。 |
 
