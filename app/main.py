@@ -11,11 +11,20 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .database import get_db, init_db
-from .models import AgentFollowupRun, Creator, InboundReply, Product, ReferenceMaterial, SimulatedOutboundInstruction
+from .models import (
+    AgentFollowupRun,
+    Creator,
+    HumanReviewDecision,
+    InboundReply,
+    Product,
+    ReferenceMaterial,
+    SimulatedOutboundInstruction,
+)
 from .schemas import (
     CreatorCreateIn,
     CreatorPatchIn,
     CreatorReplaceIn,
+    HumanReviewDecisionCreateIn,
     ProductCreateIn,
     ProductPatchIn,
     ProductReplaceIn,
@@ -298,6 +307,95 @@ def list_runs(
     return {"ok": True, "total": total, "items": [_run_to_dict(row) for row in rows]}
 
 
+@app.get("/api/followup-agent/review-queue")
+def list_human_review_queue(
+    department_code: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """列出普通待审回复；拒绝和 DNC 的终态队列将在后续阶段单独接入。"""
+
+    filters = [InboundReply.processing_status == "need_ai_review", InboundReply.reply_category != "not_interested"]
+    if department_code:
+        filters.append(InboundReply.department_code == department_code)
+    total = int(db.scalar(select(func.count()).select_from(InboundReply).where(*filters)) or 0)
+    replies = list(
+        db.scalars(
+            select(InboundReply)
+            .where(*filters)
+            .order_by(InboundReply.created_at.desc(), InboundReply.id.desc())
+            .offset(offset)
+            .limit(limit)
+        ).all()
+    )
+    items = []
+    for reply in replies:
+        latest_run = db.scalars(
+            select(AgentFollowupRun)
+            .where(AgentFollowupRun.inbound_reply_id == reply.id)
+            .order_by(AgentFollowupRun.created_at.desc(), AgentFollowupRun.id.desc())
+            .limit(1)
+        ).first()
+        # 仅已结束的 run 可以被决定；排队或运行中的任务仍保留在队列中供人工观察。
+        decision_available = latest_run is not None and latest_run.execution_status in {"succeeded", "failed"}
+        items.append(
+            {
+                "review_type": "standard",
+                "decision_available": decision_available,
+                "reply": _reply_to_dict(reply),
+                "run": _run_to_dict(latest_run) if latest_run is not None else None,
+            }
+        )
+    return {"ok": True, "total": total, "items": items}
+
+
+@app.post("/api/followup-agent/review-decisions", status_code=201)
+def create_human_review_decision(
+    body: HumanReviewDecisionCreateIn, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """保存普通回复的最终人工决定，不自动推进达人业务状态。"""
+
+    run = db.get(AgentFollowupRun, body.agent_followup_run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="agent followup run not found")
+    if run.execution_status not in {"succeeded", "failed"}:
+        raise HTTPException(status_code=409, detail="agent followup run is not finished")
+    reply = db.get(InboundReply, run.inbound_reply_id)
+    if reply is None:
+        raise HTTPException(status_code=409, detail="agent followup run has no inbound reply")
+    if reply.processing_status != "need_ai_review":
+        raise HTTPException(status_code=409, detail="reply is not pending human review")
+    if reply.reply_category in {"not_interested", "bounce_or_invalid"}:
+        raise HTTPException(status_code=409, detail="terminal reply cannot use standard review decision")
+    if db.scalar(select(HumanReviewDecision.id).where(HumanReviewDecision.agent_followup_run_id == run.id)) is not None:
+        raise HTTPException(status_code=409, detail="agent followup run already has a human review decision")
+
+    # actor_id 当前仅是审计归属；正式身份认证与角色授权将在后续 RBAC 模块接管。
+    decision = HumanReviewDecision(
+        id=new_id("hrd"),
+        department_code=reply.department_code,
+        creator_id=reply.creator_id,
+        inbound_reply_id=reply.id,
+        agent_followup_run_id=run.id,
+        outcome=body.outcome,
+        final_draft=body.final_draft.strip() if body.final_draft is not None else None,
+        note=body.note,
+        actor_id=body.actor_id,
+    )
+    db.add(decision)
+    # 人工审核完成只结束本次回复的审核，不采纳模型 suggested_status，也不修改达人业务状态。
+    reply.processing_status = "reviewed"
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="agent followup run already has a human review decision")
+    db.refresh(decision)
+    db.refresh(reply)
+    return {"ok": True, "decision": _human_review_decision_to_dict(decision), "reply": _reply_to_dict(reply)}
+
+
 def _create_run(db: Session, inbound_reply_id: str, *, created_by: str) -> AgentFollowupRun:
     return enqueue_followup_run(db, inbound_reply_id, created_by=created_by)
 
@@ -443,6 +541,21 @@ def _run_to_dict(row: AgentFollowupRun) -> dict[str, Any]:
         "duration_ms": row.duration_ms,
         "prompt_characters": row.prompt_characters,
         "output_characters": row.output_characters,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _human_review_decision_to_dict(row: HumanReviewDecision) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "creator_id": row.creator_id,
+        "inbound_reply_id": row.inbound_reply_id,
+        "agent_followup_run_id": row.agent_followup_run_id,
+        "outcome": row.outcome,
+        "final_draft": row.final_draft,
+        "note": row.note,
+        "actor_id": row.actor_id,
+        "decided_at": row.decided_at.isoformat() if row.decided_at else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 

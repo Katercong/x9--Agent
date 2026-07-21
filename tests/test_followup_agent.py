@@ -1021,6 +1021,109 @@ def test_human_review_audit_records_require_existing_run_and_cannot_be_rewritten
         db.rollback()
 
 
+def test_standard_human_review_queue_approves_draft_without_advancing_creator_status():
+    """普通草稿必须由人工决定，且批准草稿不等于自动推进达人业务状态。"""
+
+    client = TestClient(app)
+    creator_id = "creator_standard_human_review"
+    _create_creator(client, creator_id)
+    simulated = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert simulated.status_code == 200, simulated.text
+    reply_id = simulated.json()["reply"]["id"]
+    run = _process_response_run(client, simulated)
+
+    queue = client.get("/api/followup-agent/review-queue?department_code=cross_border")
+    assert queue.status_code == 200, queue.text
+    item = next(row for row in queue.json()["items"] if row["reply"]["id"] == reply_id)
+    assert item["review_type"] == "standard"
+    assert item["decision_available"] is True
+    assert item["run"]["id"] == run["id"]
+
+    invalid = client.post(
+        "/api/followup-agent/review-decisions",
+        json={"agent_followup_run_id": run["id"], "outcome": "approve_draft", "actor_id": "reviewer_1"},
+    )
+    assert invalid.status_code == 422
+
+    approved = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": run["id"],
+            "outcome": "approve_draft",
+            "final_draft": "Thank you for your interest. Here are the campaign details.",
+            "note": "Approved after checking the product brief.",
+            "actor_id": "reviewer_1",
+        },
+    )
+    assert approved.status_code == 201, approved.text
+    payload = approved.json()
+    assert payload["reply"]["processing_status"] == "reviewed"
+    assert payload["decision"]["outcome"] == "approve_draft"
+    assert payload["decision"]["final_draft"].startswith("Thank you for your interest")
+
+    with SessionLocal() as db:
+        creator = db.get(Creator, creator_id)
+        assert creator is not None
+        assert creator.current_status is None
+        assert db.scalar(select(func.count()).select_from(HumanReviewDecision)) == 1
+
+    repeated = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": run["id"],
+            "outcome": "approve_draft",
+            "final_draft": "A second decision must fail.",
+            "actor_id": "reviewer_2",
+        },
+    )
+    assert repeated.status_code == 409
+
+    queue_after_review = client.get("/api/followup-agent/review-queue")
+    assert queue_after_review.status_code == 200, queue_after_review.text
+    assert all(row["reply"]["id"] != reply_id for row in queue_after_review.json()["items"])
+
+
+def test_standard_human_review_can_close_completed_run_without_draft():
+    """人工可以关闭无可用草稿的普通回复，但关闭请求不能混入草稿内容。"""
+
+    client = TestClient(app)
+    creator_id = "creator_close_human_review"
+    _create_creator(client, creator_id)
+    simulated = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert simulated.status_code == 200, simulated.text
+    run = _process_response_run(client, simulated)
+
+    invalid = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": run["id"],
+            "outcome": "close_without_draft",
+            "final_draft": "This must not be accepted.",
+            "actor_id": "reviewer_1",
+        },
+    )
+    assert invalid.status_code == 422
+
+    closed = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": run["id"],
+            "outcome": "close_without_draft",
+            "note": "No follow-up draft is needed.",
+            "actor_id": "reviewer_1",
+        },
+    )
+    assert closed.status_code == 201, closed.text
+    assert closed.json()["decision"]["final_draft"] is None
+    assert closed.json()["reply"]["processing_status"] == "reviewed"
+
+
 def test_running_an_ignored_reply_returns_conflict():
     init_db()
     client = TestClient(app)

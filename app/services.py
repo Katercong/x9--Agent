@@ -834,14 +834,14 @@ def ensure_pending_followup(db: Session, creator: Creator, reply: InboundReply) 
     if creator.current_status == "dropped":
         _ensure_reengagement_review(db, creator, reply)
         return
-    creator.current_status = "pending_followup"
+    # 收到回复只能创建人工处理入口，不能在 AI 或规则阶段自动推进达人业务状态。
     db.add(
         CreatorOutreachEvent(
             id=new_id("oev"),
             department_code=creator.department_code,
             creator_id=creator.id,
-            event_type="pending_followup",
-            note="Creator replied; follow up now.",
+            event_type="human_review_required",
+            note="Creator replied; human review is required before business progression.",
             metadata_json=json.dumps({"inbound_reply_id": reply.id}, ensure_ascii=False),
             event_at=datetime.utcnow(),
         )

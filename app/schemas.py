@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 REPLY_CATEGORIES = {
@@ -182,6 +182,26 @@ class SimulateReplyIn(BaseModel):
 
 class RunAgentIn(BaseModel):
     inbound_reply_id: str
+
+
+class HumanReviewDecisionCreateIn(BaseModel):
+    """普通回复的人工决定；终态 DNC/拒绝不在当前接口范围内。"""
+
+    agent_followup_run_id: str
+    outcome: Literal["approve_draft", "close_without_draft"]
+    final_draft: str | None = Field(default=None, max_length=20000)
+    note: str | None = Field(default=None, max_length=5000)
+    actor_id: str = Field(min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_final_draft_for_outcome(self) -> "HumanReviewDecisionCreateIn":
+        # 审核结果必须有唯一语义，避免客户端提交“关闭”却附带可被误用的草稿。
+        has_final_draft = bool((self.final_draft or "").strip())
+        if self.outcome == "approve_draft" and not has_final_draft:
+            raise ValueError("approve_draft requires a non-empty final_draft")
+        if self.outcome == "close_without_draft" and self.final_draft is not None:
+            raise ValueError("close_without_draft must not include final_draft")
+        return self
 
 
 class AgentSuggestion(BaseModel):
