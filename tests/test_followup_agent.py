@@ -26,7 +26,9 @@ from app.models import (  # noqa: E402
     AgentFollowupRun,
     Creator,
     CreatorOutreachEvent,
+    DraftExportRecord,
     FollowupTask,
+    HumanReviewDecision,
     InboundReply,
 )
 from app import models, services  # noqa: E402
@@ -223,7 +225,7 @@ def test_bounce_reply_is_ignored_without_followup_side_effects():
         ) == 0
 
 
-def test_not_interested_drops_creator_and_cancels_existing_reply_followup_task():
+def test_not_interested_enters_terminal_review_without_dropping_creator_or_cancelling_task():
     client = TestClient(app)
     creator_id = "creator_declined"
     _create_creator(client, creator_id)
@@ -240,26 +242,31 @@ def test_not_interested_drops_creator_and_cancels_existing_reply_followup_task()
     )
     assert rejection.status_code == 200, rejection.text
     assert rejection.json()["run"] is None
+    assert rejection.json()["reply"]["processing_status"] == "need_ai_review"
 
     with SessionLocal() as db:
         creator = db.get(Creator, creator_id)
         assert creator is not None
-        assert creator.current_status == "dropped"
+        assert creator.current_status is None
         assert creator.do_not_contact_status == "none"
         tasks = list(db.scalars(select(FollowupTask).where(FollowupTask.creator_id == creator_id)).all())
         assert len(tasks) == 1
-        assert tasks[0].status == "cancelled"
-        assert "declined" in (tasks[0].reason or "")
+        assert tasks[0].status == "open"
         event_types = list(
             db.scalars(
                 select(CreatorOutreachEvent.event_type).where(CreatorOutreachEvent.creator_id == creator_id)
             ).all()
         )
-        assert event_types.count("creator_declined") == 1
+        assert event_types.count("terminal_review_required") == 1
+
+    queue = client.get("/api/followup-agent/review-queue?review_type=decline")
+    assert queue.status_code == 200, queue.text
+    assert queue.json()["total"] == 1
+    assert queue.json()["items"][0]["decision_available"] is False
 
 
-def test_dropped_creator_reengagement_requires_human_confirmation_before_status_restore():
-    """拒绝后的重新表达意向只能进入确认队列，不能自动恢复达人业务状态。"""
+def test_unconfirmed_decline_does_not_create_reengagement_task_for_later_reply():
+    """拒绝未被终态确认前，后续意向回复仍不能触发 dropped 状态恢复流程。"""
 
     client = TestClient(app)
     creator_id = "creator_reengagement_review"
@@ -279,14 +286,13 @@ def test_dropped_creator_reengagement_requires_human_confirmation_before_status_
     with SessionLocal() as db:
         creator = db.get(Creator, creator_id)
         assert creator is not None
-        assert creator.current_status == "dropped"
+        assert creator.current_status is None
         task = db.scalar(
             select(FollowupTask)
             .where(FollowupTask.creator_id == creator_id)
             .where(FollowupTask.task_type == "reengagement_review")
         )
-        assert task is not None
-        assert task.status == "open"
+        assert task is None
 
 
 def test_campaign_brief_fields_are_available_to_product_context():
@@ -361,7 +367,7 @@ def test_explicit_opt_out_marks_do_not_contact_pending_confirmation():
         confirmation_model = models.DoNotContactConfirmation
         creator = db.get(Creator, creator_id)
         assert creator is not None
-        assert creator.current_status == "dropped"
+        assert creator.current_status is None
         assert creator.do_not_contact_status == "pending_confirmation"
         assert creator.do_not_contact_reason == "explicit_opt_out"
         assert creator.do_not_contact_requested_at is not None
@@ -378,6 +384,59 @@ def test_explicit_opt_out_marks_do_not_contact_pending_confirmation():
         assert confirmations[0].inbound_reply_id is not None
         assert confirmations[0].reviewed_by is None
         assert confirmations[0].reviewed_at is None
+
+    queue = client.get("/api/followup-agent/review-queue?review_type=dnc_confirmation")
+    assert queue.status_code == 200, queue.text
+    assert queue.json()["total"] == 1
+    assert queue.json()["items"][0]["decision_available"] is False
+
+
+def test_explicit_opt_out_blocks_existing_normal_followup_task():
+    """DNC 进入待确认时，既有普通外联待办必须立即停止，不能继续引导人工联系。"""
+
+    client = TestClient(app)
+    creator_id = "creator_opt_out_blocks_task"
+    _create_creator(client, creator_id)
+    normal_reply = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": False},
+    )
+    assert normal_reply.status_code == 200, normal_reply.text
+
+    with SessionLocal() as db:
+        task = db.scalar(
+            select(FollowupTask)
+            .where(FollowupTask.creator_id == creator_id)
+            .where(FollowupTask.task_type == "reply_followup_1")
+        )
+        assert task is not None
+        assert task.status == "open"
+        assert task.reason == "Creator replied; follow up now."
+
+    opt_out = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Please unsubscribe and remove me.", "run_agent": True},
+    )
+    assert opt_out.status_code == 200, opt_out.text
+    assert opt_out.json()["reply"]["processing_status"] == "need_ai_review"
+
+    with SessionLocal() as db:
+        task = db.scalar(
+            select(FollowupTask)
+            .where(FollowupTask.creator_id == creator_id)
+            .where(FollowupTask.task_type == "reply_followup_1")
+        )
+        assert task is not None
+        assert task.status == "blocked_dnc_pending"
+        assert task.reason == "Blocked: creator requested do not contact; confirmation is pending."
+        creator = db.get(Creator, creator_id)
+        assert creator is not None
+        assert creator.do_not_contact_status == "pending_confirmation"
+
+    queue = client.get("/api/followup-agent/review-queue?review_type=dnc_confirmation")
+    assert queue.status_code == 200, queue.text
+    assert queue.json()["total"] == 1
+    assert queue.json()["items"][0]["reply"]["id"] == opt_out.json()["reply"]["id"]
 
 
 def test_repeated_explicit_opt_out_keeps_one_pending_dnc_confirmation():
@@ -409,10 +468,13 @@ def test_repeated_explicit_opt_out_keeps_one_pending_dnc_confirmation():
             ).all()
         )
         assert len(confirmations) == 1
+        replies = list(db.scalars(select(InboundReply).where(InboundReply.creator_id == creator_id)).all())
+        assert sum(reply.processing_status == "need_ai_review" for reply in replies) == 1
+        assert sum(reply.processing_status == "dnc_blocked" for reply in replies) == 1
 
 
-def test_decline_creates_one_simulated_outbound_instruction_but_bounce_creates_none():
-    """拒绝只生成固定模拟确认指令，退信因无法送达不应产生任何出站记录。"""
+def test_decline_and_bounce_do_not_create_simulated_outbound_instruction():
+    """终态待审和退信均不应预先创建可被误解为外发动作的指令。"""
 
     client = TestClient(app)
     _create_creator(client, "creator_simulated_decline")
@@ -424,8 +486,7 @@ def test_decline_creates_one_simulated_outbound_instruction_but_bounce_creates_n
 
     instructions = client.get("/api/followup-agent/outbound-instructions?creator_id=creator_simulated_decline")
     assert instructions.status_code == 200, instructions.text
-    assert instructions.json()["total"] == 2
-    assert all(row["status"] == "simulated" for row in instructions.json()["items"])
+    assert instructions.json()["total"] == 0
     assert client.get("/api/followup-agent/outbound-instructions?creator_id=creator_simulated_bounce").json()["total"] == 0
 
 
@@ -922,6 +983,369 @@ def test_audited_reply_and_creator_cannot_be_deleted():
             db.execute(delete(Creator).where(Creator.id == creator_id))
             db.commit()
         db.rollback()
+
+
+def test_human_review_audit_records_require_existing_run_and_cannot_be_rewritten():
+    """审核决定与导出快照必须受外键和唯一约束保护，保证留痕可追溯。"""
+
+    init_db()
+    client = TestClient(app)
+    creator_id = "creator_human_review_audit"
+    _create_creator(client, creator_id)
+    reply = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": False},
+    )
+    assert reply.status_code == 200, reply.text
+    reply_id = reply.json()["reply"]["id"]
+
+    with SessionLocal() as db:
+        run = AgentFollowupRun(
+            id="afr_human_review_audit",
+            department_code="cross_border",
+            creator_id=creator_id,
+            inbound_reply_id=reply_id,
+            reply_category="interested",
+            llm_status="succeeded",
+            execution_status="succeeded",
+        )
+        db.add(run)
+        db.commit()
+
+        db.add(
+            HumanReviewDecision(
+                id="hrd_missing_run",
+                department_code="cross_border",
+                creator_id=creator_id,
+                inbound_reply_id=reply_id,
+                agent_followup_run_id="missing_run",
+                outcome="approve_draft",
+                final_draft="Thank you for your interest.",
+                actor_id="reviewer_1",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        decision = HumanReviewDecision(
+            id="hrd_human_review_audit",
+            department_code="cross_border",
+            creator_id=creator_id,
+            inbound_reply_id=reply_id,
+            agent_followup_run_id=run.id,
+            outcome="approve_draft",
+            final_draft="Thank you for your interest.",
+            actor_id="reviewer_1",
+        )
+        db.add(decision)
+        db.commit()
+
+        db.add(
+            HumanReviewDecision(
+                id="hrd_duplicate_run",
+                department_code="cross_border",
+                creator_id=creator_id,
+                inbound_reply_id=reply_id,
+                agent_followup_run_id=run.id,
+                outcome="close_without_draft",
+                actor_id="reviewer_2",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        # 即使绕过 API 为同一回复直接插入新的已完成 run，数据库仍必须禁止第二个最终决定。
+        second_run = AgentFollowupRun(
+            id="afr_human_review_audit_second",
+            department_code="cross_border",
+            creator_id=creator_id,
+            inbound_reply_id=reply_id,
+            reply_category="interested",
+            llm_status="succeeded",
+            execution_status="succeeded",
+        )
+        db.add(second_run)
+        db.commit()
+        db.add(
+            HumanReviewDecision(
+                id="hrd_duplicate_reply",
+                department_code="cross_border",
+                creator_id=creator_id,
+                inbound_reply_id=reply_id,
+                agent_followup_run_id=second_run.id,
+                outcome="close_without_draft",
+                actor_id="reviewer_2",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        db.add(
+            DraftExportRecord(
+                id="der_human_review_audit",
+                department_code="cross_border",
+                human_review_decision_id=decision.id,
+                creator_id=creator_id,
+                inbound_reply_id=reply_id,
+                exported_content="Thank you for your interest.",
+                actor_id="operator_1",
+            )
+        )
+        db.commit()
+
+        with pytest.raises(IntegrityError):
+            db.execute(delete(HumanReviewDecision).where(HumanReviewDecision.id == decision.id))
+            db.commit()
+        db.rollback()
+
+        with pytest.raises(IntegrityError):
+            db.execute(delete(AgentFollowupRun).where(AgentFollowupRun.id == run.id))
+            db.commit()
+        db.rollback()
+
+
+def test_standard_human_review_queue_approves_draft_without_advancing_creator_status():
+    """普通草稿必须由人工决定，且批准草稿不等于自动推进达人业务状态。"""
+
+    client = TestClient(app)
+    creator_id = "creator_standard_human_review"
+    _create_creator(client, creator_id)
+    simulated = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert simulated.status_code == 200, simulated.text
+    reply_id = simulated.json()["reply"]["id"]
+    run = _process_response_run(client, simulated)
+
+    queue = client.get("/api/followup-agent/review-queue?department_code=cross_border")
+    assert queue.status_code == 200, queue.text
+    item = next(row for row in queue.json()["items"] if row["reply"]["id"] == reply_id)
+    assert item["review_type"] == "standard"
+    assert item["decision_available"] is True
+    assert item["run"]["id"] == run["id"]
+
+    invalid = client.post(
+        "/api/followup-agent/review-decisions",
+        json={"agent_followup_run_id": run["id"], "outcome": "approve_draft", "actor_id": "reviewer_1"},
+    )
+    assert invalid.status_code == 422
+
+    approved = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": run["id"],
+            "outcome": "approve_draft",
+            "final_draft": "Thank you for your interest. Here are the campaign details.",
+            "note": "Approved after checking the product brief.",
+            "actor_id": "reviewer_1",
+        },
+    )
+    assert approved.status_code == 201, approved.text
+    payload = approved.json()
+    assert payload["reply"]["processing_status"] == "reviewed"
+    assert payload["decision"]["outcome"] == "approve_draft"
+    assert payload["decision"]["final_draft"].startswith("Thank you for your interest")
+
+    with SessionLocal() as db:
+        creator = db.get(Creator, creator_id)
+        assert creator is not None
+        assert creator.current_status is None
+        assert db.scalar(select(func.count()).select_from(HumanReviewDecision)) == 1
+
+    repeated = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": run["id"],
+            "outcome": "approve_draft",
+            "final_draft": "A second decision must fail.",
+            "actor_id": "reviewer_2",
+        },
+    )
+    assert repeated.status_code == 409
+
+    queue_after_review = client.get("/api/followup-agent/review-queue")
+    assert queue_after_review.status_code == 200, queue_after_review.text
+    assert all(row["reply"]["id"] != reply_id for row in queue_after_review.json()["items"])
+
+
+def test_standard_human_review_can_close_completed_run_without_draft():
+    """人工可以关闭无可用草稿的普通回复，但关闭请求不能混入草稿内容。"""
+
+    client = TestClient(app)
+    creator_id = "creator_close_human_review"
+    _create_creator(client, creator_id)
+    simulated = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert simulated.status_code == 200, simulated.text
+    run = _process_response_run(client, simulated)
+
+    invalid = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": run["id"],
+            "outcome": "close_without_draft",
+            "final_draft": "This must not be accepted.",
+            "actor_id": "reviewer_1",
+        },
+    )
+    assert invalid.status_code == 422
+
+    closed = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": run["id"],
+            "outcome": "close_without_draft",
+            "note": "No follow-up draft is needed.",
+            "actor_id": "reviewer_1",
+        },
+    )
+    assert closed.status_code == 201, closed.text
+    assert closed.json()["decision"]["final_draft"] is None
+    assert closed.json()["reply"]["processing_status"] == "reviewed"
+
+
+def test_human_review_cannot_use_stale_run_or_requeue_a_reviewed_reply():
+    """同一回复只允许最新完成 run 形成一次最终决定，审核后不能重新排队。"""
+
+    client = TestClient(app)
+    creator_id = "creator_reviewed_reply_no_requeue"
+    _create_creator(client, creator_id)
+    simulated = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert simulated.status_code == 200, simulated.text
+    reply_id = simulated.json()["reply"]["id"]
+    first_run = _process_response_run(client, simulated)
+
+    # 审核前允许人工因资料更新而重跑；此时旧 run 必须不能被当作最终版本审核。
+    second_run_response = client.post("/api/followup-agent/runs", json={"inbound_reply_id": reply_id})
+    assert second_run_response.status_code == 200, second_run_response.text
+    stale_decision = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": first_run["id"],
+            "outcome": "approve_draft",
+            "final_draft": "This older draft must not be approved.",
+            "actor_id": "reviewer_1",
+        },
+    )
+    assert stale_decision.status_code == 409
+    assert stale_decision.json()["detail"] == "reply has an active agent followup run"
+
+    with SessionLocal() as db:
+        processed = services.process_next_queued_run(db)
+        assert processed is not None
+        assert processed.id == second_run_response.json()["run"]["id"]
+        db.commit()
+
+    # 第二个 run 完成后，旧 run 仍不能被审核；最新 run 可以形成唯一最终决定。
+    stale_after_completion = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": first_run["id"],
+            "outcome": "close_without_draft",
+            "actor_id": "reviewer_1",
+        },
+    )
+    assert stale_after_completion.status_code == 409
+    latest_decision = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": second_run_response.json()["run"]["id"],
+            "outcome": "approve_draft",
+            "final_draft": "This is the only final draft for the reply.",
+            "actor_id": "reviewer_1",
+        },
+    )
+    assert latest_decision.status_code == 201, latest_decision.text
+
+    requeue = client.post("/api/followup-agent/runs", json={"inbound_reply_id": reply_id})
+    assert requeue.status_code == 409
+    assert requeue.json()["detail"] == "reviewed reply cannot run agent"
+
+    duplicate = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert duplicate.status_code == 200, duplicate.text
+    assert duplicate.json()["duplicate"] is True
+    assert duplicate.json()["run"] is None
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(AgentFollowupRun).where(AgentFollowupRun.inbound_reply_id == reply_id)) == 2
+        assert db.scalar(select(func.count()).select_from(HumanReviewDecision).where(HumanReviewDecision.inbound_reply_id == reply_id)) == 1
+
+
+def test_approved_draft_export_is_audited_and_dnc_blocks_later_export_and_runs():
+    """导出只产生快照；DNC 待确认后，系统必须停止后续导出和 Agent 运行。"""
+
+    client = TestClient(app)
+    creator_id = "creator_export_and_dnc_block"
+    _create_creator(client, creator_id)
+    simulated = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert simulated.status_code == 200, simulated.text
+    run = _process_response_run(client, simulated)
+    approved = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": run["id"],
+            "outcome": "approve_draft",
+            "final_draft": "Here are the reviewed campaign details.",
+            "actor_id": "reviewer_1",
+        },
+    )
+    assert approved.status_code == 201, approved.text
+    decision_id = approved.json()["decision"]["id"]
+
+    exported = client.post(
+        f"/api/followup-agent/review-decisions/{decision_id}/exports",
+        json={"actor_id": "operator_1"},
+    )
+    assert exported.status_code == 201, exported.text
+    assert exported.json()["export"]["exported_content"] == "Here are the reviewed campaign details."
+    assert exported.json()["export"]["delivery_status"] == "not_sent_by_system"
+
+    decision = client.get(f"/api/followup-agent/review-decisions/{decision_id}")
+    assert decision.status_code == 200, decision.text
+    assert len(decision.json()["exports"]) == 1
+
+    dnc_reply = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Please unsubscribe me.", "run_agent": True},
+    )
+    assert dnc_reply.status_code == 200, dnc_reply.text
+    assert dnc_reply.json()["reply"]["processing_status"] == "need_ai_review"
+
+    blocked_export = client.post(
+        f"/api/followup-agent/review-decisions/{decision_id}/exports",
+        json={"actor_id": "operator_2"},
+    )
+    assert blocked_export.status_code == 409
+    assert blocked_export.json()["detail"] == "do not contact creator cannot export draft"
+
+    later_reply = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Actually, I am interested.", "run_agent": True},
+    )
+    assert later_reply.status_code == 200, later_reply.text
+    assert later_reply.json()["run"] is None
+    assert later_reply.json()["reply"]["processing_status"] == "dnc_blocked"
+
+    blocked_run = client.post(
+        "/api/followup-agent/runs",
+        json={"inbound_reply_id": later_reply.json()["reply"]["id"]},
+    )
+    assert blocked_run.status_code == 409
+    assert blocked_run.json()["detail"] == "do not contact creator cannot run agent"
 
 
 def test_running_an_ignored_reply_returns_conflict():

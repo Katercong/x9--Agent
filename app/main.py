@@ -11,11 +11,23 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .database import get_db, init_db
-from .models import AgentFollowupRun, Creator, InboundReply, Product, ReferenceMaterial, SimulatedOutboundInstruction
+from .models import (
+    AgentFollowupRun,
+    Creator,
+    DoNotContactConfirmation,
+    DraftExportRecord,
+    HumanReviewDecision,
+    InboundReply,
+    Product,
+    ReferenceMaterial,
+    SimulatedOutboundInstruction,
+)
 from .schemas import (
     CreatorCreateIn,
     CreatorPatchIn,
     CreatorReplaceIn,
+    DraftExportCreateIn,
+    HumanReviewDecisionCreateIn,
     ProductCreateIn,
     ProductPatchIn,
     ProductReplaceIn,
@@ -29,6 +41,7 @@ from .services import (
     enqueue_followup_run,
     ensure_pending_followup,
     handle_creator_declined,
+    is_creator_contact_blocked,
     is_automatic_generation_eligible,
     new_id,
 )
@@ -227,7 +240,10 @@ def simulate_reply(body: SimulateReplyIn, db: Session = Depends(get_db)) -> dict
     reply.classified_at = datetime.utcnow()
 
     run_payload = None
-    if classification.reply_category == "bounce_or_invalid":
+    if is_creator_contact_blocked(creator):
+        # DNC 待确认时已停止 AI 和导出；后续消息只保留为审计，不再进入业务跟进队列。
+        reply.processing_status = "dnc_blocked"
+    elif classification.reply_category == "bounce_or_invalid":
         reply.processing_status = "ignored"
     elif classification.reply_category == "not_interested":
         handle_creator_declined(db, creator, reply)
@@ -247,10 +263,17 @@ def simulate_reply(body: SimulateReplyIn, db: Session = Depends(get_db)) -> dict
 @app.post("/api/followup-agent/runs")
 def run_agent(body: RunAgentIn, db: Session = Depends(get_db)) -> dict[str, Any]:
     reply = db.get(InboundReply, body.inbound_reply_id)
-    if reply is not None and reply.processing_status == "ignored":
+    if reply is None:
+        raise HTTPException(status_code=404, detail="inbound reply not found")
+    if reply.processing_status == "ignored":
         raise HTTPException(status_code=409, detail="ignored reply cannot run agent")
-    if reply is not None and reply.reply_category == "not_interested":
+    if reply.processing_status == "reviewed":
+        raise HTTPException(status_code=409, detail="reviewed reply cannot run agent")
+    if reply.reply_category == "not_interested":
         raise HTTPException(status_code=409, detail="terminal reply cannot run agent")
+    creator = db.get(Creator, reply.creator_id)
+    if is_creator_contact_blocked(creator):
+        raise HTTPException(status_code=409, detail="do not contact creator cannot run agent")
     run = _create_run(db, body.inbound_reply_id, created_by="manual")
     db.commit()
     return {"ok": True, "run": _run_to_dict(run)}
@@ -298,6 +321,183 @@ def list_runs(
     return {"ok": True, "total": total, "items": [_run_to_dict(row) for row in rows]}
 
 
+@app.get("/api/followup-agent/review-queue")
+def list_human_review_queue(
+    department_code: str | None = Query(default=None),
+    review_type: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """列出普通、拒绝和 DNC 待审项；终态项当前只读，不提供确认写操作。"""
+
+    allowed_review_types = {"standard", "decline", "dnc_confirmation"}
+    if review_type is not None and review_type not in allowed_review_types:
+        raise HTTPException(status_code=422, detail="unknown review_type")
+    filters = [InboundReply.processing_status == "need_ai_review"]
+    if department_code:
+        filters.append(InboundReply.department_code == department_code)
+    replies = list(
+        db.scalars(
+            select(InboundReply)
+            .where(*filters)
+            .order_by(InboundReply.created_at.desc(), InboundReply.id.desc())
+        ).all()
+    )
+    items = []
+    for reply in replies:
+        latest_run = db.scalars(
+            select(AgentFollowupRun)
+            .where(AgentFollowupRun.inbound_reply_id == reply.id)
+            .order_by(AgentFollowupRun.created_at.desc(), AgentFollowupRun.id.desc())
+            .limit(1)
+        ).first()
+        dnc_confirmation = db.scalars(
+            select(DoNotContactConfirmation)
+            .where(DoNotContactConfirmation.inbound_reply_id == reply.id)
+            .where(DoNotContactConfirmation.status == "pending_confirmation")
+            .limit(1)
+        ).first()
+        if dnc_confirmation is not None:
+            item_review_type = "dnc_confirmation"
+        elif reply.reply_category == "not_interested":
+            item_review_type = "decline"
+        else:
+            item_review_type = "standard"
+        if review_type is not None and item_review_type != review_type:
+            continue
+        # 终态项保留在队列中供审核人查看，但 RBAC 完成前不允许由本接口作出决定。
+        decision_available = (
+            item_review_type == "standard"
+            and latest_run is not None
+            and latest_run.execution_status in {"succeeded", "failed"}
+        )
+        items.append(
+            {
+                "review_type": item_review_type,
+                "decision_available": decision_available,
+                "reply": _reply_to_dict(reply),
+                "run": _run_to_dict(latest_run) if latest_run is not None else None,
+                "dnc_confirmation": _dnc_confirmation_to_dict(dnc_confirmation) if dnc_confirmation else None,
+            }
+        )
+    total = len(items)
+    return {"ok": True, "total": total, "items": items[offset : offset + limit]}
+
+
+@app.post("/api/followup-agent/review-decisions", status_code=201)
+def create_human_review_decision(
+    body: HumanReviewDecisionCreateIn, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """保存普通回复的最终人工决定，不自动推进达人业务状态。"""
+
+    run = db.get(AgentFollowupRun, body.agent_followup_run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="agent followup run not found")
+    if run.execution_status not in {"succeeded", "failed"}:
+        raise HTTPException(status_code=409, detail="agent followup run is not finished")
+    reply = db.get(InboundReply, run.inbound_reply_id)
+    if reply is None:
+        raise HTTPException(status_code=409, detail="agent followup run has no inbound reply")
+    if reply.processing_status != "need_ai_review":
+        raise HTTPException(status_code=409, detail="reply is not pending human review")
+    if reply.reply_category in {"not_interested", "bounce_or_invalid"}:
+        raise HTTPException(status_code=409, detail="terminal reply cannot use standard review decision")
+    active_run = db.scalar(
+        select(AgentFollowupRun.id)
+        .where(AgentFollowupRun.inbound_reply_id == reply.id)
+        .where(AgentFollowupRun.execution_status.in_(("queued", "running")))
+        .limit(1)
+    )
+    if active_run is not None:
+        raise HTTPException(status_code=409, detail="reply has an active agent followup run")
+    latest_run = db.scalars(
+        select(AgentFollowupRun)
+        .where(AgentFollowupRun.inbound_reply_id == reply.id)
+        .order_by(AgentFollowupRun.created_at.desc(), AgentFollowupRun.id.desc())
+        .limit(1)
+    ).first()
+    if latest_run is None or latest_run.id != run.id:
+        raise HTTPException(status_code=409, detail="only the latest agent followup run can be reviewed")
+    if db.scalar(select(HumanReviewDecision.id).where(HumanReviewDecision.agent_followup_run_id == run.id)) is not None:
+        raise HTTPException(status_code=409, detail="agent followup run already has a human review decision")
+
+    # actor_id 当前仅是审计归属；正式身份认证与角色授权将在后续 RBAC 模块接管。
+    decision = HumanReviewDecision(
+        id=new_id("hrd"),
+        department_code=reply.department_code,
+        creator_id=reply.creator_id,
+        inbound_reply_id=reply.id,
+        agent_followup_run_id=run.id,
+        outcome=body.outcome,
+        final_draft=body.final_draft.strip() if body.final_draft is not None else None,
+        note=body.note,
+        actor_id=body.actor_id,
+    )
+    db.add(decision)
+    # 人工审核完成只结束本次回复的审核，不采纳模型 suggested_status，也不修改达人业务状态。
+    reply.processing_status = "reviewed"
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="inbound reply already has a human review decision")
+    db.refresh(decision)
+    db.refresh(reply)
+    return {"ok": True, "decision": _human_review_decision_to_dict(decision), "reply": _reply_to_dict(reply)}
+
+
+@app.get("/api/followup-agent/review-decisions/{decision_id}")
+def get_human_review_decision(decision_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """读取不可变审核决定及其导出审计，不触发复制、导出或发送。"""
+
+    decision = db.get(HumanReviewDecision, decision_id)
+    if decision is None:
+        raise HTTPException(status_code=404, detail="human review decision not found")
+    exports = list(
+        db.scalars(
+            select(DraftExportRecord)
+            .where(DraftExportRecord.human_review_decision_id == decision.id)
+            .order_by(DraftExportRecord.exported_at.desc(), DraftExportRecord.id.desc())
+        ).all()
+    )
+    return {
+        "ok": True,
+        "decision": _human_review_decision_to_dict(decision),
+        "exports": [_draft_export_record_to_dict(row) for row in exports],
+    }
+
+
+@app.post("/api/followup-agent/review-decisions/{decision_id}/exports", status_code=201)
+def create_draft_export_record(
+    decision_id: str, body: DraftExportCreateIn, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """记录人工导出草稿的快照；该接口绝不调用外部渠道。"""
+
+    decision = db.get(HumanReviewDecision, decision_id)
+    if decision is None:
+        raise HTTPException(status_code=404, detail="human review decision not found")
+    if decision.outcome != "approve_draft" or not decision.final_draft:
+        raise HTTPException(status_code=409, detail="human review decision has no approved draft")
+    creator = db.get(Creator, decision.creator_id)
+    if is_creator_contact_blocked(creator):
+        raise HTTPException(status_code=409, detail="do not contact creator cannot export draft")
+
+    export = DraftExportRecord(
+        id=new_id("der"),
+        department_code=decision.department_code,
+        human_review_decision_id=decision.id,
+        creator_id=decision.creator_id,
+        inbound_reply_id=decision.inbound_reply_id,
+        exported_content=decision.final_draft,
+        actor_id=body.actor_id,
+    )
+    db.add(export)
+    db.commit()
+    db.refresh(export)
+    return {"ok": True, "export": _draft_export_record_to_dict(export)}
+
+
 def _create_run(db: Session, inbound_reply_id: str, *, created_by: str) -> AgentFollowupRun:
     return enqueue_followup_run(db, inbound_reply_id, created_by=created_by)
 
@@ -331,7 +531,9 @@ def _find_duplicate_reply(db: Session, **message_fields: str) -> InboundReply | 
 
 
 def _get_or_create_existing_run(db: Session, reply: InboundReply, run_agent: bool) -> dict[str, Any] | None:
-    if not run_agent or reply.processing_status == "ignored":
+    if not run_agent or reply.processing_status in {"ignored", "reviewed"}:
+        return None
+    if is_creator_contact_blocked(db.get(Creator, reply.creator_id)):
         return None
     run = db.scalars(
         select(AgentFollowupRun)
@@ -443,6 +645,48 @@ def _run_to_dict(row: AgentFollowupRun) -> dict[str, Any]:
         "duration_ms": row.duration_ms,
         "prompt_characters": row.prompt_characters,
         "output_characters": row.output_characters,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _human_review_decision_to_dict(row: HumanReviewDecision) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "creator_id": row.creator_id,
+        "inbound_reply_id": row.inbound_reply_id,
+        "agent_followup_run_id": row.agent_followup_run_id,
+        "outcome": row.outcome,
+        "final_draft": row.final_draft,
+        "note": row.note,
+        "actor_id": row.actor_id,
+        "decided_at": row.decided_at.isoformat() if row.decided_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _draft_export_record_to_dict(row: DraftExportRecord) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "human_review_decision_id": row.human_review_decision_id,
+        "creator_id": row.creator_id,
+        "inbound_reply_id": row.inbound_reply_id,
+        "exported_content": row.exported_content,
+        "actor_id": row.actor_id,
+        "exported_at": row.exported_at.isoformat() if row.exported_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "delivery_status": "not_sent_by_system",
+    }
+
+
+def _dnc_confirmation_to_dict(row: DoNotContactConfirmation) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "creator_id": row.creator_id,
+        "inbound_reply_id": row.inbound_reply_id,
+        "reason": row.reason,
+        "status": row.status,
+        "reviewed_by": row.reviewed_by,
+        "reviewed_at": row.reviewed_at.isoformat() if row.reviewed_at else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
