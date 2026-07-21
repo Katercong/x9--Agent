@@ -1880,31 +1880,51 @@ def test_evaluation_defaults_to_v2_for_regression(monkeypatch):
     evaluation = importlib.import_module("app.evaluation")
     prompts = importlib.import_module("app.prompts")
     observed_versions: list[str] = []
+    current_category: str | None = None
     original_builder = prompts.build_prompt_package
+    expected_routes = {
+        "interested": ("send_campaign_details", "pending_followup"),
+        "need_more_info": ("send_campaign_details", "pending_followup"),
+        "negotiation": ("clarify_terms", "pending_followup"),
+        "not_interested": ("acknowledge_and_close", "dropped"),
+        "bounce_or_invalid": ("verify_contact_method", "pending_followup"),
+        "unclear": ("ask_clarifying_question", "pending_followup"),
+    }
 
     def capture_builder(context, *, prompt_version):
+        nonlocal current_category
         observed_versions.append(prompt_version)
+        current_category = context["reply_category"]
         return original_builder(context, prompt_version=prompt_version)
 
-    valid_output = json.dumps(
-        {
-            "reply_category": "interested",
-            "suggested_status": "pending_followup",
-            "next_action": "send_campaign_details",
-            "reply_draft": "Thanks for your interest.",
-            "reasoning_summary": "Synthetic evaluation response.",
-            "requires_human_review": True,
-            "human_review_reason": "Human approval is required before any response is sent.",
-        }
-    )
+    def valid_output(system_prompt, user_prompt):
+        assert current_category is not None
+        next_action, suggested_status = expected_routes[current_category]
+        return json.dumps(
+            {
+                "reply_category": current_category,
+                "suggested_reply": "Synthetic draft for human review.",
+                "next_action": next_action,
+                "suggested_status": suggested_status,
+                "confidence": 0.9,
+                "reasoning_summary": "Synthetic evaluation response.",
+                "requires_human_review": True,
+                "review_reasons": ["Human approval is required before any response is sent."],
+            }
+        )
+
     monkeypatch.setattr(evaluation, "build_prompt_package", capture_builder)
-    monkeypatch.setattr(evaluation, "call_siliconflow_json", lambda system_prompt, user_prompt: valid_output)
+    monkeypatch.setattr(evaluation, "call_siliconflow_json", valid_output)
 
     records, summary = evaluation.run_suite("pilot", live=True)
 
     assert len(records) == 24
     assert observed_versions == ["reply_followup_v2"] * 24
     assert summary["prompt_version"] == "reply_followup_v2"
+    assert summary["pydantic_pass_rate"] == 1.0
+    assert summary["route_exact_rate"] == 1.0
+    assert summary["missed_manual_review_count"] == 0
+    assert all(record["outcome"] == "success" for record in records)
 
 
 def test_explicit_human_review_output_moves_reply_to_manual_review(monkeypatch):
