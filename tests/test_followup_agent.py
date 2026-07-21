@@ -26,7 +26,9 @@ from app.models import (  # noqa: E402
     AgentFollowupRun,
     Creator,
     CreatorOutreachEvent,
+    DraftExportRecord,
     FollowupTask,
+    HumanReviewDecision,
     InboundReply,
 )
 from app import models, services  # noqa: E402
@@ -920,6 +922,101 @@ def test_audited_reply_and_creator_cannot_be_deleted():
     with SessionLocal() as db:
         with pytest.raises(IntegrityError):
             db.execute(delete(Creator).where(Creator.id == creator_id))
+            db.commit()
+        db.rollback()
+
+
+def test_human_review_audit_records_require_existing_run_and_cannot_be_rewritten():
+    """审核决定与导出快照必须受外键和唯一约束保护，保证留痕可追溯。"""
+
+    init_db()
+    client = TestClient(app)
+    creator_id = "creator_human_review_audit"
+    _create_creator(client, creator_id)
+    reply = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": False},
+    )
+    assert reply.status_code == 200, reply.text
+    reply_id = reply.json()["reply"]["id"]
+
+    with SessionLocal() as db:
+        run = AgentFollowupRun(
+            id="afr_human_review_audit",
+            department_code="cross_border",
+            creator_id=creator_id,
+            inbound_reply_id=reply_id,
+            reply_category="interested",
+            llm_status="succeeded",
+            execution_status="succeeded",
+        )
+        db.add(run)
+        db.commit()
+
+        db.add(
+            HumanReviewDecision(
+                id="hrd_missing_run",
+                department_code="cross_border",
+                creator_id=creator_id,
+                inbound_reply_id=reply_id,
+                agent_followup_run_id="missing_run",
+                outcome="approve_draft",
+                final_draft="Thank you for your interest.",
+                actor_id="reviewer_1",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        decision = HumanReviewDecision(
+            id="hrd_human_review_audit",
+            department_code="cross_border",
+            creator_id=creator_id,
+            inbound_reply_id=reply_id,
+            agent_followup_run_id=run.id,
+            outcome="approve_draft",
+            final_draft="Thank you for your interest.",
+            actor_id="reviewer_1",
+        )
+        db.add(decision)
+        db.commit()
+
+        db.add(
+            HumanReviewDecision(
+                id="hrd_duplicate_run",
+                department_code="cross_border",
+                creator_id=creator_id,
+                inbound_reply_id=reply_id,
+                agent_followup_run_id=run.id,
+                outcome="close_without_draft",
+                actor_id="reviewer_2",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+        db.add(
+            DraftExportRecord(
+                id="der_human_review_audit",
+                department_code="cross_border",
+                human_review_decision_id=decision.id,
+                creator_id=creator_id,
+                inbound_reply_id=reply_id,
+                exported_content="Thank you for your interest.",
+                actor_id="operator_1",
+            )
+        )
+        db.commit()
+
+        with pytest.raises(IntegrityError):
+            db.execute(delete(HumanReviewDecision).where(HumanReviewDecision.id == decision.id))
+            db.commit()
+        db.rollback()
+
+        with pytest.raises(IntegrityError):
+            db.execute(delete(AgentFollowupRun).where(AgentFollowupRun.id == run.id))
             db.commit()
         db.rollback()
 

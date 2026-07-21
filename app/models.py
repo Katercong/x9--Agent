@@ -248,3 +248,45 @@ class AgentFollowupRun(Base):
     created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
     updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class HumanReviewDecision(Base):
+    """人工对单次 Agent run 作出的最终决定；只追加，不通过业务接口修改。"""
+
+    __tablename__ = "human_review_decisions"
+    __table_args__ = (
+        # 同一 run 只能被人工完成一次，避免重复确认产生相互矛盾的最终草稿。
+        UniqueConstraint("agent_followup_run_id", name="uq_human_review_decisions_run"),
+        Index("ix_human_review_decisions_department_decided", "department_code", "decided_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    department_code: Mapped[str] = mapped_column(String(40), default="cross_border", index=True)
+    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id"), index=True)
+    inbound_reply_id: Mapped[str] = mapped_column(String(120), ForeignKey("inbound_replies.id"), index=True)
+    agent_followup_run_id: Mapped[str] = mapped_column(String(120), ForeignKey("agent_followup_runs.id"))
+    outcome: Mapped[str] = mapped_column(String(40), index=True)
+    final_draft: Mapped[str | None] = mapped_column(Text, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor_id: Mapped[str] = mapped_column(String(120), index=True)
+    decided_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+class DraftExportRecord(Base):
+    """人工复制或导出草稿时保存的内容快照；记录本身不代表外部消息已发送。"""
+
+    __tablename__ = "draft_export_records"
+    __table_args__ = (Index("ix_draft_export_records_department_exported", "department_code", "exported_at"),)
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    department_code: Mapped[str] = mapped_column(String(40), default="cross_border", index=True)
+    human_review_decision_id: Mapped[str] = mapped_column(
+        String(120), ForeignKey("human_review_decisions.id"), index=True
+    )
+    creator_id: Mapped[str] = mapped_column(String(120), ForeignKey("creators.id"), index=True)
+    inbound_reply_id: Mapped[str] = mapped_column(String(120), ForeignKey("inbound_replies.id"), index=True)
+    exported_content: Mapped[str] = mapped_column(Text)
+    actor_id: Mapped[str] = mapped_column(String(120), index=True)
+    exported_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
