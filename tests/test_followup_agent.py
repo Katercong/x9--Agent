@@ -225,7 +225,7 @@ def test_bounce_reply_is_ignored_without_followup_side_effects():
         ) == 0
 
 
-def test_not_interested_drops_creator_and_cancels_existing_reply_followup_task():
+def test_not_interested_enters_terminal_review_without_dropping_creator_or_cancelling_task():
     client = TestClient(app)
     creator_id = "creator_declined"
     _create_creator(client, creator_id)
@@ -242,26 +242,31 @@ def test_not_interested_drops_creator_and_cancels_existing_reply_followup_task()
     )
     assert rejection.status_code == 200, rejection.text
     assert rejection.json()["run"] is None
+    assert rejection.json()["reply"]["processing_status"] == "need_ai_review"
 
     with SessionLocal() as db:
         creator = db.get(Creator, creator_id)
         assert creator is not None
-        assert creator.current_status == "dropped"
+        assert creator.current_status is None
         assert creator.do_not_contact_status == "none"
         tasks = list(db.scalars(select(FollowupTask).where(FollowupTask.creator_id == creator_id)).all())
         assert len(tasks) == 1
-        assert tasks[0].status == "cancelled"
-        assert "declined" in (tasks[0].reason or "")
+        assert tasks[0].status == "open"
         event_types = list(
             db.scalars(
                 select(CreatorOutreachEvent.event_type).where(CreatorOutreachEvent.creator_id == creator_id)
             ).all()
         )
-        assert event_types.count("creator_declined") == 1
+        assert event_types.count("terminal_review_required") == 1
+
+    queue = client.get("/api/followup-agent/review-queue?review_type=decline")
+    assert queue.status_code == 200, queue.text
+    assert queue.json()["total"] == 1
+    assert queue.json()["items"][0]["decision_available"] is False
 
 
-def test_dropped_creator_reengagement_requires_human_confirmation_before_status_restore():
-    """拒绝后的重新表达意向只能进入确认队列，不能自动恢复达人业务状态。"""
+def test_unconfirmed_decline_does_not_create_reengagement_task_for_later_reply():
+    """拒绝未被终态确认前，后续意向回复仍不能触发 dropped 状态恢复流程。"""
 
     client = TestClient(app)
     creator_id = "creator_reengagement_review"
@@ -281,14 +286,13 @@ def test_dropped_creator_reengagement_requires_human_confirmation_before_status_
     with SessionLocal() as db:
         creator = db.get(Creator, creator_id)
         assert creator is not None
-        assert creator.current_status == "dropped"
+        assert creator.current_status is None
         task = db.scalar(
             select(FollowupTask)
             .where(FollowupTask.creator_id == creator_id)
             .where(FollowupTask.task_type == "reengagement_review")
         )
-        assert task is not None
-        assert task.status == "open"
+        assert task is None
 
 
 def test_campaign_brief_fields_are_available_to_product_context():
@@ -363,7 +367,7 @@ def test_explicit_opt_out_marks_do_not_contact_pending_confirmation():
         confirmation_model = models.DoNotContactConfirmation
         creator = db.get(Creator, creator_id)
         assert creator is not None
-        assert creator.current_status == "dropped"
+        assert creator.current_status is None
         assert creator.do_not_contact_status == "pending_confirmation"
         assert creator.do_not_contact_reason == "explicit_opt_out"
         assert creator.do_not_contact_requested_at is not None
@@ -380,6 +384,11 @@ def test_explicit_opt_out_marks_do_not_contact_pending_confirmation():
         assert confirmations[0].inbound_reply_id is not None
         assert confirmations[0].reviewed_by is None
         assert confirmations[0].reviewed_at is None
+
+    queue = client.get("/api/followup-agent/review-queue?review_type=dnc_confirmation")
+    assert queue.status_code == 200, queue.text
+    assert queue.json()["total"] == 1
+    assert queue.json()["items"][0]["decision_available"] is False
 
 
 def test_repeated_explicit_opt_out_keeps_one_pending_dnc_confirmation():
@@ -411,10 +420,13 @@ def test_repeated_explicit_opt_out_keeps_one_pending_dnc_confirmation():
             ).all()
         )
         assert len(confirmations) == 1
+        replies = list(db.scalars(select(InboundReply).where(InboundReply.creator_id == creator_id)).all())
+        assert sum(reply.processing_status == "need_ai_review" for reply in replies) == 1
+        assert sum(reply.processing_status == "dnc_blocked" for reply in replies) == 1
 
 
-def test_decline_creates_one_simulated_outbound_instruction_but_bounce_creates_none():
-    """拒绝只生成固定模拟确认指令，退信因无法送达不应产生任何出站记录。"""
+def test_decline_and_bounce_do_not_create_simulated_outbound_instruction():
+    """终态待审和退信均不应预先创建可被误解为外发动作的指令。"""
 
     client = TestClient(app)
     _create_creator(client, "creator_simulated_decline")
@@ -426,8 +438,7 @@ def test_decline_creates_one_simulated_outbound_instruction_but_bounce_creates_n
 
     instructions = client.get("/api/followup-agent/outbound-instructions?creator_id=creator_simulated_decline")
     assert instructions.status_code == 200, instructions.text
-    assert instructions.json()["total"] == 2
-    assert all(row["status"] == "simulated" for row in instructions.json()["items"])
+    assert instructions.json()["total"] == 0
     assert client.get("/api/followup-agent/outbound-instructions?creator_id=creator_simulated_bounce").json()["total"] == 0
 
 
@@ -1122,6 +1133,72 @@ def test_standard_human_review_can_close_completed_run_without_draft():
     assert closed.status_code == 201, closed.text
     assert closed.json()["decision"]["final_draft"] is None
     assert closed.json()["reply"]["processing_status"] == "reviewed"
+
+
+def test_approved_draft_export_is_audited_and_dnc_blocks_later_export_and_runs():
+    """导出只产生快照；DNC 待确认后，系统必须停止后续导出和 Agent 运行。"""
+
+    client = TestClient(app)
+    creator_id = "creator_export_and_dnc_block"
+    _create_creator(client, creator_id)
+    simulated = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert simulated.status_code == 200, simulated.text
+    run = _process_response_run(client, simulated)
+    approved = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": run["id"],
+            "outcome": "approve_draft",
+            "final_draft": "Here are the reviewed campaign details.",
+            "actor_id": "reviewer_1",
+        },
+    )
+    assert approved.status_code == 201, approved.text
+    decision_id = approved.json()["decision"]["id"]
+
+    exported = client.post(
+        f"/api/followup-agent/review-decisions/{decision_id}/exports",
+        json={"actor_id": "operator_1"},
+    )
+    assert exported.status_code == 201, exported.text
+    assert exported.json()["export"]["exported_content"] == "Here are the reviewed campaign details."
+    assert exported.json()["export"]["delivery_status"] == "not_sent_by_system"
+
+    decision = client.get(f"/api/followup-agent/review-decisions/{decision_id}")
+    assert decision.status_code == 200, decision.text
+    assert len(decision.json()["exports"]) == 1
+
+    dnc_reply = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Please unsubscribe me.", "run_agent": True},
+    )
+    assert dnc_reply.status_code == 200, dnc_reply.text
+    assert dnc_reply.json()["reply"]["processing_status"] == "need_ai_review"
+
+    blocked_export = client.post(
+        f"/api/followup-agent/review-decisions/{decision_id}/exports",
+        json={"actor_id": "operator_2"},
+    )
+    assert blocked_export.status_code == 409
+    assert blocked_export.json()["detail"] == "do not contact creator cannot export draft"
+
+    later_reply = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Actually, I am interested.", "run_agent": True},
+    )
+    assert later_reply.status_code == 200, later_reply.text
+    assert later_reply.json()["run"] is None
+    assert later_reply.json()["reply"]["processing_status"] == "dnc_blocked"
+
+    blocked_run = client.post(
+        "/api/followup-agent/runs",
+        json={"inbound_reply_id": later_reply.json()["reply"]["id"]},
+    )
+    assert blocked_run.status_code == 409
+    assert blocked_run.json()["detail"] == "do not contact creator cannot run agent"
 
 
 def test_running_an_ignored_reply_returns_conflict():

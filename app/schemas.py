@@ -204,6 +204,12 @@ class HumanReviewDecisionCreateIn(BaseModel):
         return self
 
 
+class DraftExportCreateIn(BaseModel):
+    """记录人工复制/导出动作；不包含渠道、收件人或发送参数。"""
+
+    actor_id: str = Field(min_length=1, max_length=120)
+
+
 class AgentSuggestion(BaseModel):
     reply_category: ReplyCategory
     suggested_reply: str = Field(min_length=1)

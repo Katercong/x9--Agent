@@ -25,7 +25,6 @@ from .models import (
     OutreachEmail,
     Product,
     ReferenceMaterial,
-    SimulatedOutboundInstruction,
 )
 from .prompts import PromptPackage, build_prompt_package
 from .schemas import AgentSuggestion, REPLY_CATEGORIES, ReplyClassification
@@ -302,10 +301,19 @@ def enqueue_followup_run(db: Session, inbound_reply_id: str, *, created_by: str 
 def is_automatic_generation_eligible(db: Session, reply: InboundReply) -> bool:
     """规则先过滤低价值回复，只有合作推进且资料完整时才自动消耗模型额度。"""
 
+    creator = db.get(Creator, reply.creator_id)
+    if is_creator_contact_blocked(creator):
+        return False
     if reply.reply_category not in AUTO_GENERATION_CATEGORIES:
         return False
     context = build_followup_context(db, reply.id)
     return bool(context.get("reference_materials")) and not collect_context_warnings(context)
+
+
+def is_creator_contact_blocked(creator: Creator | None) -> bool:
+    """DNC 待确认即采取保守阻断，防止误判期间继续生成或导出业务草稿。"""
+
+    return creator is not None and creator.do_not_contact_status in {"pending_confirmation", "confirmed"}
 
 
 def claim_next_queued_run(db: Session) -> ClaimedRun | None:
@@ -909,37 +917,24 @@ def _ensure_reengagement_review(db: Session, creator: Creator, reply: InboundRep
 
 
 def handle_creator_declined(db: Session, creator: Creator, reply: InboundReply) -> None:
-    """处理明确拒绝：终止回复跟进，并为明确退订保留人工确认入口。"""
+    """处理明确拒绝：创建只读终态待审项，禁止在规则阶段直接写入 dropped。"""
 
     normalized_reply = "\n".join([reply.subject or "", reply.body]).lower()
     explicit_opt_out = _find_keyword(normalized_reply, EXPLICIT_OPT_OUT_KEYWORDS) is not None
-    creator.current_status = "dropped"
+    reply.processing_status = "need_ai_review"
     if explicit_opt_out:
         creator.do_not_contact_status = "pending_confirmation"
         creator.do_not_contact_reason = "explicit_opt_out"
         creator.do_not_contact_requested_at = datetime.utcnow()
         _ensure_dnc_confirmation(db, creator, reply)
-    _ensure_simulated_decline_instruction(db, creator, reply)
-
-    open_tasks = list(
-        db.scalars(
-            select(FollowupTask)
-            .where(FollowupTask.creator_id == creator.id)
-            .where(FollowupTask.task_type == "reply_followup_1")
-            .where(FollowupTask.status.in_(("open", "pending")))
-        ).all()
-    )
-    for task in open_tasks:
-        task.status = "cancelled"
-        task.reason = f"{task.reason or ''} Cancelled: creator declined collaboration.".strip()
 
     db.add(
         CreatorOutreachEvent(
             id=new_id("oev"),
             department_code=creator.department_code,
             creator_id=creator.id,
-            event_type="creator_declined",
-            note="Creator declined the collaboration.",
+            event_type="terminal_review_required",
+            note="Creator declined the collaboration; human terminal review is required.",
             metadata_json=json.dumps(
                 {
                     "inbound_reply_id": reply.id,
@@ -975,15 +970,6 @@ def _ensure_dnc_confirmation(db: Session, creator: Creator, reply: InboundReply)
             status="pending_confirmation",
         )
     )
-
-
-def _ensure_simulated_decline_instruction(db: Session, creator: Creator, reply: InboundReply) -> None:
-    """为每条明确拒绝创建一条固定确认模板，仅作为未来渠道接入前的内部留痕。"""
-
-    exists = db.scalar(select(SimulatedOutboundInstruction.id).where(SimulatedOutboundInstruction.inbound_reply_id == reply.id).where(SimulatedOutboundInstruction.action_type == "acknowledge_decline"))
-    if exists is not None:
-        return
-    db.add(SimulatedOutboundInstruction(id=new_id("out"), creator_id=creator.id, inbound_reply_id=reply.id, action_type="acknowledge_decline", template_key="decline_acknowledgement_v1", content="Thanks for letting us know. We will not follow up on this collaboration.", status="simulated"))
 
 
 def _fallback_suggestion(category: str) -> AgentSuggestion:
