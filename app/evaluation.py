@@ -59,7 +59,7 @@ def run_suite(
     name: str,
     *,
     live: bool,
-    prompt_version: str = "reply_followup_v1",
+    prompt_version: str = "reply_followup_v2",
     output_dir: Path | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """显式允许后才批量调用 Provider，并可将评测结果写入忽略目录。"""
@@ -166,7 +166,7 @@ def _write_report(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run synthetic LLM evaluation without touching the business database.")
     parser.add_argument("--suite", default="pilot", choices=("pilot", "context_preflight"))
-    parser.add_argument("--prompt-version", default="reply_followup_v1", choices=("reply_followup_v1", "reply_followup_v2"))
+    parser.add_argument("--prompt-version", default="reply_followup_v2", choices=("reply_followup_v1", "reply_followup_v2"))
     parser.add_argument("--live", action="store_true", help="Allow real SiliconFlow requests.")
     parser.add_argument("--output-dir", type=Path, default=Path("evaluation_reports"))
     args = parser.parse_args()

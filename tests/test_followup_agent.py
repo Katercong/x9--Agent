@@ -622,7 +622,7 @@ def test_prompt_package_masks_contact_data_detects_chinese_and_respects_budget()
     }
 
     package = prompts.build_prompt_package(context)
-    assert package.prompt_version == "reply_followup_v1"
+    assert package.prompt_version == "reply_followup_v2"
     assert package.reply_language == "zh"
     assert len(package.rendered_prompt) <= 12000
     assert "[内容已省略]" in package.rendered_prompt
@@ -654,7 +654,7 @@ def test_agent_run_persists_redacted_prompt_package():
     )
     assert response.status_code == 200, response.text
     run = _process_response_run(client, response)
-    assert run["prompt_version"] == "reply_followup_v1"
+    assert run["prompt_version"] == "reply_followup_v2"
     assert run["rendered_prompt"]
     assert "inbound-audit@example.com" not in run["rendered_prompt"]
     assert "creator-audit@example.com" not in run["rendered_prompt"]
@@ -1546,19 +1546,21 @@ def test_v2_prompt_makes_rule_category_and_route_mapping_explicit():
     assert package.prompt_version == "reply_followup_v2"
     assert "Authoritative rule category: negotiation" in package.system_prompt
     assert "negotiation -> clarify_terms / pending_followup / requires_human_review=true" in package.system_prompt
+    assert "requires_human_review must always be true" in package.system_prompt
+    assert "Never set requires_human_review to false." in package.system_prompt
     assert "Campaign detail policy" in package.system_prompt
     assert "Do not invent any other value." in package.system_prompt
 
 
-def test_prompt_package_default_remains_v1_during_evaluation():
-    """正式评测通过前，普通业务调用不能被隐式切换到 v2。"""
+def test_prompt_package_default_uses_validated_v2():
+    """业务默认使用已通过回归评测的 V2 提示词。"""
 
     prompts = importlib.import_module("app.prompts")
     package = prompts.build_prompt_package(
         {"creator": {}, "product": None, "inbound_reply": {"subject": "Hi", "body": "Interested"}}
     )
 
-    assert package.prompt_version == "reply_followup_v1"
+    assert package.prompt_version == "reply_followup_v2"
 
 
 def test_unknown_model_next_action_is_persisted_as_validation_failure(monkeypatch):
@@ -1653,8 +1655,8 @@ def test_siliconflow_provider_error_is_persisted_for_manual_review(monkeypatch):
     assert run["validation_error"] == "provider request failed"
 
 
-def test_siliconflow_client_uses_openai_json_mode(monkeypatch):
-    """硅基流动调用参数应固定为 OpenAI 兼容 JSON Mode。"""
+def test_siliconflow_client_defaults_to_v32_with_thinking_disabled(monkeypatch):
+    """默认模型为 V3.2，关闭 thinking 且不传 V4 Flash 专属参数。"""
 
     captured: dict[str, object] = {}
 
@@ -1669,6 +1671,7 @@ def test_siliconflow_client_uses_openai_json_mode(monkeypatch):
             self.chat = SimpleNamespace(completions=FakeCompletions())
 
     monkeypatch.setenv("SILICONFLOW_API_KEY", "test-key")
+    monkeypatch.delenv("SILICONFLOW_MODEL", raising=False)
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
     llm = importlib.import_module("app.llm")
 
@@ -1680,13 +1683,13 @@ def test_siliconflow_client_uses_openai_json_mode(monkeypatch):
         "max_retries": 0,
     }
     assert captured["request"] == {
-        "model": "deepseek-ai/DeepSeek-V4-Flash",
+        "model": "deepseek-ai/DeepSeek-V3.2",
         "messages": [
             {"role": "system", "content": "system contract"},
             {"role": "user", "content": "user context"},
         ],
         "response_format": {"type": "json_object"},
-        "reasoning_effort": "high",
+        "extra_body": {"enable_thinking": False},
         "temperature": 0.2,
         "max_tokens": 512,
     }
@@ -1719,6 +1722,32 @@ def test_siliconflow_v32_disables_thinking_without_v4_reasoning_parameter(monkey
     assert "reasoning_effort" not in request
 
 
+def test_siliconflow_v4_flash_keeps_its_reasoning_parameter(monkeypatch):
+    """V4 Flash 仅在被显式选择时使用 reasoning_effort=high。"""
+
+    captured: dict[str, object] = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs: object) -> SimpleNamespace:
+            captured["request"] = kwargs
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}'))])
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "test-key")
+    monkeypatch.setenv("SILICONFLOW_MODEL", "deepseek-ai/DeepSeek-V4-Flash")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    llm = importlib.import_module("app.llm")
+
+    assert llm.call_siliconflow_json("system contract", "user context") == '{"ok": true}'
+    request = captured["request"]
+    assert isinstance(request, dict)
+    assert request["reasoning_effort"] == "high"
+    assert "extra_body" not in request
+
+
 def test_env_example_documents_siliconflow_configuration():
     """仓库应提供无密钥的环境变量模板，避免把真实 Key 写进源码。"""
 
@@ -1726,7 +1755,7 @@ def test_env_example_documents_siliconflow_configuration():
     assert example_path.is_file()
     content = example_path.read_text(encoding="utf-8")
     assert "SILICONFLOW_API_KEY=" in content
-    assert "SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V4-Flash" in content
+    assert "SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V3.2" in content
 
 
 def test_evaluation_suite_is_synthetic_and_has_the_planned_pilot_size():
@@ -1845,6 +1874,39 @@ def test_evaluation_can_run_a_named_prompt_version_without_real_provider(monkeyp
     assert observed_versions == ["reply_followup_v2"] * 24
 
 
+def test_evaluation_defaults_to_v2_for_regression(monkeypatch):
+    """回归评测未指定版本时应覆盖生产默认 V2。"""
+
+    evaluation = importlib.import_module("app.evaluation")
+    prompts = importlib.import_module("app.prompts")
+    observed_versions: list[str] = []
+    original_builder = prompts.build_prompt_package
+
+    def capture_builder(context, *, prompt_version):
+        observed_versions.append(prompt_version)
+        return original_builder(context, prompt_version=prompt_version)
+
+    valid_output = json.dumps(
+        {
+            "reply_category": "interested",
+            "suggested_status": "pending_followup",
+            "next_action": "send_campaign_details",
+            "reply_draft": "Thanks for your interest.",
+            "reasoning_summary": "Synthetic evaluation response.",
+            "requires_human_review": True,
+            "human_review_reason": "Human approval is required before any response is sent.",
+        }
+    )
+    monkeypatch.setattr(evaluation, "build_prompt_package", capture_builder)
+    monkeypatch.setattr(evaluation, "call_siliconflow_json", lambda system_prompt, user_prompt: valid_output)
+
+    records, summary = evaluation.run_suite("pilot", live=True)
+
+    assert len(records) == 24
+    assert observed_versions == ["reply_followup_v2"] * 24
+    assert summary["prompt_version"] == "reply_followup_v2"
+
+
 def test_explicit_human_review_output_moves_reply_to_manual_review(monkeypatch):
     """即使置信度和上下文均正常，模型明确要求复核时也必须转人工。"""
 
@@ -1936,6 +1998,7 @@ def test_simulate_reply_queues_run_without_calling_generator(monkeypatch):
 def test_worker_processes_queued_run_and_records_completion(monkeypatch):
     """worker 领取任务后才生成建议，并回写同一条 run 的执行结果。"""
 
+    monkeypatch.delenv("SILICONFLOW_MODEL", raising=False)
     client = TestClient(app)
     creator_id = "creator_async_worker"
     _create_creator(client, creator_id)
@@ -1968,7 +2031,7 @@ def test_worker_processes_queued_run_and_records_completion(monkeypatch):
     run = completed.json()["run"]
     assert run["execution_status"] == "succeeded"
     assert run["llm_status"] == "success"
-    assert run["provider_model"] == "deepseek-ai/DeepSeek-V4-Flash"
+    assert run["provider_model"] == "deepseek-ai/DeepSeek-V3.2"
     assert run["output"]["next_action"] == "send_campaign_details"
     assert run["started_at"] is not None
     assert run["finished_at"] is not None
