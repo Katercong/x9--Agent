@@ -37,6 +37,7 @@ from .schemas import (
     SimulateReplyIn,
 )
 from .services import (
+    build_followup_context,
     classify_reply_result,
     enqueue_followup_run,
     ensure_pending_followup,
@@ -329,9 +330,9 @@ def list_human_review_queue(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """列出普通、拒绝和 DNC 待审项；终态项当前只读，不提供确认写操作。"""
+    """列出普通、模型失败、拒绝和 DNC 待审项。"""
 
-    allowed_review_types = {"standard", "decline", "dnc_confirmation"}
+    allowed_review_types = {"standard", "model_failure", "decline", "dnc_confirmation"}
     if review_type is not None and review_type not in allowed_review_types:
         raise HTTPException(status_code=422, detail="unknown review_type")
     filters = [InboundReply.processing_status == "need_ai_review"]
@@ -346,43 +347,36 @@ def list_human_review_queue(
     )
     items = []
     for reply in replies:
-        latest_run = db.scalars(
-            select(AgentFollowupRun)
-            .where(AgentFollowupRun.inbound_reply_id == reply.id)
-            .order_by(AgentFollowupRun.created_at.desc(), AgentFollowupRun.id.desc())
-            .limit(1)
-        ).first()
-        dnc_confirmation = db.scalars(
-            select(DoNotContactConfirmation)
-            .where(DoNotContactConfirmation.inbound_reply_id == reply.id)
-            .where(DoNotContactConfirmation.status == "pending_confirmation")
-            .limit(1)
-        ).first()
-        if dnc_confirmation is not None:
-            item_review_type = "dnc_confirmation"
-        elif reply.reply_category == "not_interested":
-            item_review_type = "decline"
-        else:
-            item_review_type = "standard"
-        if review_type is not None and item_review_type != review_type:
+        item = _review_queue_item_to_dict(db, reply)
+        if review_type is not None and item["review_type"] != review_type:
             continue
-        # 终态项保留在队列中供审核人查看，但 RBAC 完成前不允许由本接口作出决定。
-        decision_available = (
-            item_review_type == "standard"
-            and latest_run is not None
-            and latest_run.execution_status in {"succeeded", "failed"}
-        )
-        items.append(
-            {
-                "review_type": item_review_type,
-                "decision_available": decision_available,
-                "reply": _reply_to_dict(reply),
-                "run": _run_to_dict(latest_run) if latest_run is not None else None,
-                "dnc_confirmation": _dnc_confirmation_to_dict(dnc_confirmation) if dnc_confirmation else None,
-            }
-        )
+        items.append(item)
     total = len(items)
     return {"ok": True, "total": total, "items": items[offset : offset + limit]}
+
+
+@app.get("/api/followup-agent/review-items/{reply_id}")
+def get_human_review_item(reply_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """读取待审项的当前上下文与完整 Agent run 留痕，不写入业务数据。"""
+
+    reply = db.get(InboundReply, reply_id)
+    if reply is None:
+        raise HTTPException(status_code=404, detail="inbound reply not found")
+    if reply.processing_status != "need_ai_review":
+        raise HTTPException(status_code=409, detail="reply is not pending human review")
+    runs = list(
+        db.scalars(
+            select(AgentFollowupRun)
+            .where(AgentFollowupRun.inbound_reply_id == reply.id)
+            .order_by(AgentFollowupRun.created_at.asc(), AgentFollowupRun.id.asc())
+        ).all()
+    )
+    return {
+        "ok": True,
+        "item": _review_queue_item_to_dict(db, reply),
+        "context": build_followup_context(db, reply.id),
+        "runs": [_run_to_dict(run) for run in runs],
+    }
 
 
 @app.post("/api/followup-agent/review-decisions", status_code=201)
@@ -544,6 +538,43 @@ def _get_or_create_existing_run(db: Session, reply: InboundReply, run_agent: boo
     if run is None and is_automatic_generation_eligible(db, reply):
         run = _create_run(db, reply.id, created_by="automatic")
     return _run_to_dict(run) if run is not None else None
+
+
+def _review_queue_item_to_dict(db: Session, reply: InboundReply) -> dict[str, Any]:
+    """Build the shared queue/detail representation for one pending review reply."""
+
+    latest_run = db.scalars(
+        select(AgentFollowupRun)
+        .where(AgentFollowupRun.inbound_reply_id == reply.id)
+        .order_by(AgentFollowupRun.created_at.desc(), AgentFollowupRun.id.desc())
+        .limit(1)
+    ).first()
+    dnc_confirmation = db.scalars(
+        select(DoNotContactConfirmation)
+        .where(DoNotContactConfirmation.inbound_reply_id == reply.id)
+        .where(DoNotContactConfirmation.status == "pending_confirmation")
+        .limit(1)
+    ).first()
+    if dnc_confirmation is not None:
+        review_type = "dnc_confirmation"
+    elif reply.reply_category == "not_interested":
+        review_type = "decline"
+    elif latest_run is not None and latest_run.execution_status == "failed":
+        review_type = "model_failure"
+    else:
+        review_type = "standard"
+    decision_available = (
+        review_type in {"standard", "model_failure"}
+        and latest_run is not None
+        and latest_run.execution_status in {"succeeded", "failed"}
+    )
+    return {
+        "review_type": review_type,
+        "decision_available": decision_available,
+        "reply": _reply_to_dict(reply),
+        "run": _run_to_dict(latest_run) if latest_run is not None else None,
+        "dnc_confirmation": _dnc_confirmation_to_dict(dnc_confirmation) if dnc_confirmation else None,
+    }
 
 
 def _creator_to_dict(row: Creator) -> dict[str, Any]:

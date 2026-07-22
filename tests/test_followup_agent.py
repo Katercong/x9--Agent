@@ -1172,6 +1172,250 @@ def test_standard_human_review_queue_approves_draft_without_advancing_creator_st
     assert all(row["reply"]["id"] != reply_id for row in queue_after_review.json()["items"])
 
 
+def test_review_queue_separates_model_failures_from_standard_and_terminal_items(monkeypatch):
+    client = TestClient(app)
+
+    standard_creator_id = "creator_review_queue_standard"
+    _create_creator(client, standard_creator_id)
+    standard = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": standard_creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert standard.status_code == 200, standard.text
+    standard_run = _process_response_run(client, standard)
+    assert standard_run["execution_status"] == "succeeded"
+
+    failure_creator_id = "creator_review_queue_model_failure"
+    _create_creator(client, failure_creator_id)
+    invalid_output = json.dumps({"reply_category": "interested", "confidence": 0.9})
+    monkeypatch.setattr(services, "generate_raw_followup_output", lambda context, prompt: (invalid_output, "mocked"))
+    model_failure = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": failure_creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert model_failure.status_code == 200, model_failure.text
+    failure_run = _process_response_run(client, model_failure)
+    assert failure_run["execution_status"] == "failed"
+    assert failure_run["llm_status"] == "validation_failed"
+
+    decline_creator_id = "creator_review_queue_decline"
+    _create_creator(client, decline_creator_id)
+    decline = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": decline_creator_id, "body": "No thanks, not interested.", "run_agent": True},
+    )
+    assert decline.status_code == 200, decline.text
+
+    dnc_creator_id = "creator_review_queue_dnc"
+    _create_creator(client, dnc_creator_id)
+    dnc = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": dnc_creator_id, "body": "Please unsubscribe me.", "run_agent": True},
+    )
+    assert dnc.status_code == 200, dnc.text
+
+    queue = client.get("/api/followup-agent/review-queue")
+    assert queue.status_code == 200, queue.text
+    assert queue.json()["total"] == 4
+    items_by_reply_id = {item["reply"]["id"]: item for item in queue.json()["items"]}
+    assert items_by_reply_id[standard.json()["reply"]["id"]]["review_type"] == "standard"
+    assert items_by_reply_id[standard.json()["reply"]["id"]]["decision_available"] is True
+
+    failure_item = items_by_reply_id[model_failure.json()["reply"]["id"]]
+    assert failure_item["review_type"] == "model_failure"
+    assert failure_item["decision_available"] is True
+    assert failure_item["run"]["execution_status"] == "failed"
+    assert failure_item["run"]["validation_error"]
+    assert failure_item["run"]["output"]["raw_output"] == invalid_output
+
+    decline_item = items_by_reply_id[decline.json()["reply"]["id"]]
+    assert decline_item["review_type"] == "decline"
+    assert decline_item["decision_available"] is False
+    dnc_item = items_by_reply_id[dnc.json()["reply"]["id"]]
+    assert dnc_item["review_type"] == "dnc_confirmation"
+    assert dnc_item["decision_available"] is False
+
+    expected_filter_ids = {
+        "standard": standard.json()["reply"]["id"],
+        "model_failure": model_failure.json()["reply"]["id"],
+        "decline": decline.json()["reply"]["id"],
+        "dnc_confirmation": dnc.json()["reply"]["id"],
+    }
+    for review_type, reply_id in expected_filter_ids.items():
+        filtered = client.get(f"/api/followup-agent/review-queue?review_type={review_type}")
+        assert filtered.status_code == 200, filtered.text
+        assert filtered.json()["total"] == 1
+        assert filtered.json()["items"][0]["reply"]["id"] == reply_id
+
+    invalid_filter = client.get("/api/followup-agent/review-queue?review_type=unknown")
+    assert invalid_filter.status_code == 422
+
+    approved_failure = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": failure_run["id"],
+            "outcome": "approve_draft",
+            "final_draft": "A human-authored draft after the model failure.",
+            "actor_id": "reviewer_1",
+        },
+    )
+    assert approved_failure.status_code == 201, approved_failure.text
+
+
+def test_review_item_detail_aggregates_context_and_does_not_write():
+    client = TestClient(app)
+    creator_id = "creator_review_item_detail"
+    _create_creator(
+        client,
+        creator_id,
+        display_name="Detail Creator",
+        bio="Detailed creator profile.",
+        followers_count=12345,
+        owner_bd="bd_detail",
+    )
+    earlier = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Can you send more details?", "run_agent": False},
+    )
+    assert earlier.status_code == 200, earlier.text
+    current = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert current.status_code == 200, current.text
+    first_run = _process_response_run(client, current)
+    rerun = client.post("/api/followup-agent/runs", json={"inbound_reply_id": current.json()["reply"]["id"]})
+    assert rerun.status_code == 200, rerun.text
+    second_run = _process_response_run(client, rerun)
+
+    with SessionLocal() as db:
+        db.add(
+            models.OutreachEmail(
+                id="email_review_item_detail",
+                department_code="cross_border",
+                creator_id=creator_id,
+                subject="Earlier outreach",
+                body="Synthetic history for detail aggregation.",
+                status="sent",
+                sent_at=datetime.utcnow(),
+            )
+        )
+        db.add(
+            CreatorOutreachEvent(
+                id="event_review_item_detail",
+                department_code="cross_border",
+                creator_id=creator_id,
+                event_type="manual_note",
+                note="Synthetic event for detail aggregation.",
+                event_at=datetime.utcnow(),
+            )
+        )
+        db.commit()
+        before_runs = db.scalar(select(func.count()).select_from(AgentFollowupRun))
+        before_decisions = db.scalar(select(func.count()).select_from(HumanReviewDecision))
+        reply = db.get(InboundReply, current.json()["reply"]["id"])
+        assert reply is not None
+        before_status = reply.processing_status
+
+    detail = client.get(f"/api/followup-agent/review-items/{current.json()['reply']['id']}")
+    assert detail.status_code == 200, detail.text
+    payload = detail.json()
+    assert payload["item"]["review_type"] == "standard"
+    assert payload["item"]["run"]["id"] == second_run["id"]
+    assert [run["id"] for run in payload["runs"]] == [first_run["id"], second_run["id"]]
+    assert payload["context"]["creator"]["id"] == creator_id
+    assert payload["context"]["product"]["product_type"] == "baby care"
+    assert payload["context"]["inbound_reply"]["id"] == current.json()["reply"]["id"]
+    assert [row["id"] for row in payload["context"]["recent_inbound_replies"]] == [earlier.json()["reply"]["id"]]
+    assert payload["context"]["recent_outreach_emails"][0]["id"] == "email_review_item_detail"
+    assert payload["context"]["recent_events"][0]["id"] == "event_review_item_detail"
+    assert payload["context"]["open_followup_tasks"]
+    assert payload["context"]["reference_materials"]
+
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(AgentFollowupRun)) == before_runs
+        assert db.scalar(select(func.count()).select_from(HumanReviewDecision)) == before_decisions
+        reply = db.get(InboundReply, current.json()["reply"]["id"])
+        assert reply is not None
+        assert reply.processing_status == before_status
+
+
+def test_review_item_detail_keeps_terminal_items_read_only_and_rejects_non_pending_replies():
+    client = TestClient(app)
+    decline_creator_id = "creator_review_item_decline"
+    _create_creator(client, decline_creator_id)
+    decline = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": decline_creator_id, "body": "No thanks, not interested.", "run_agent": True},
+    )
+    assert decline.status_code == 200, decline.text
+
+    dnc_creator_id = "creator_review_item_dnc"
+    _create_creator(client, dnc_creator_id)
+    dnc = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": dnc_creator_id, "body": "Please unsubscribe me.", "run_agent": True},
+    )
+    assert dnc.status_code == 200, dnc.text
+
+    for response, expected_review_type in ((decline, "decline"), (dnc, "dnc_confirmation")):
+        reply_id = response.json()["reply"]["id"]
+        detail = client.get(f"/api/followup-agent/review-items/{reply_id}")
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["item"]["review_type"] == expected_review_type
+        assert detail.json()["item"]["decision_available"] is False
+        manual_run = client.post("/api/followup-agent/runs", json={"inbound_reply_id": reply_id})
+        assert manual_run.status_code == 409
+        assert manual_run.json()["detail"] == "terminal reply cannot run agent"
+        terminal_run_id = f"afr_terminal_read_only_{expected_review_type}"
+        with SessionLocal() as db:
+            terminal_run = AgentFollowupRun(
+                id=terminal_run_id,
+                department_code="cross_border",
+                creator_id=response.json()["reply"]["creator_id"],
+                inbound_reply_id=reply_id,
+                llm_status="validation_failed",
+                execution_status="failed",
+                created_at=datetime.utcnow(),
+            )
+            db.add(terminal_run)
+            db.commit()
+        terminal_decision = client.post(
+            "/api/followup-agent/review-decisions",
+            json={
+                "agent_followup_run_id": terminal_run_id,
+                "outcome": "close_without_draft",
+                "actor_id": "reviewer_1",
+            },
+        )
+        assert terminal_decision.status_code == 409
+        assert terminal_decision.json()["detail"] == "terminal reply cannot use standard review decision"
+
+    missing = client.get("/api/followup-agent/review-items/missing_reply")
+    assert missing.status_code == 404
+
+    standard_creator_id = "creator_review_item_reviewed"
+    _create_creator(client, standard_creator_id)
+    standard = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": standard_creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert standard.status_code == 200, standard.text
+    run = _process_response_run(client, standard)
+    reviewed = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": run["id"],
+            "outcome": "close_without_draft",
+            "actor_id": "reviewer_1",
+        },
+    )
+    assert reviewed.status_code == 201, reviewed.text
+    non_pending = client.get(f"/api/followup-agent/review-items/{standard.json()['reply']['id']}")
+    assert non_pending.status_code == 409
+    assert non_pending.json()["detail"] == "reply is not pending human review"
+
+
 def test_standard_human_review_can_close_completed_run_without_draft():
     """人工可以关闭无可用草稿的普通回复，但关闭请求不能混入草稿内容。"""
 
