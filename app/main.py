@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from hashlib import sha256
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -14,8 +16,10 @@ from .database import get_db, init_db
 from .models import (
     AgentFollowupRun,
     Creator,
+    CreatorOutreachEvent,
     DoNotContactConfirmation,
     DraftExportRecord,
+    FollowupTask,
     HumanReviewDecision,
     InboundReply,
     Product,
@@ -26,7 +30,10 @@ from .schemas import (
     CreatorCreateIn,
     CreatorPatchIn,
     CreatorReplaceIn,
+    DncConfirmationApproveIn,
+    DncConfirmationRejectIn,
     DraftExportCreateIn,
+    FailedReviewRetryIn,
     HumanReviewDecisionCreateIn,
     ProductCreateIn,
     ProductPatchIn,
@@ -49,6 +56,13 @@ from .services import (
 
 
 app = FastAPI(title="X9 ReplyChat Agent", version="0.1.0")
+
+OPERATOR_WORKBENCH_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+app.mount(
+    "/operator-workbench",
+    StaticFiles(directory=str(OPERATOR_WORKBENCH_DIST), html=True, check_dir=False),
+    name="operator-workbench",
+)
 
 
 @app.on_event("startup")
@@ -379,6 +393,200 @@ def get_human_review_item(reply_id: str, db: Session = Depends(get_db)) -> dict[
     }
 
 
+@app.post("/api/followup-agent/dnc-confirmations/{confirmation_id}/approve")
+def approve_dnc_confirmation(
+    confirmation_id: str, body: DncConfirmationApproveIn, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """人工确认待审 DNC，并永久阻断该达人后续业务联系；不发送任何消息。"""
+
+    confirmation = db.scalars(
+        select(DoNotContactConfirmation)
+        .where(DoNotContactConfirmation.id == confirmation_id)
+        .with_for_update()
+    ).first()
+    if confirmation is None:
+        raise HTTPException(status_code=404, detail="do not contact confirmation not found")
+    if confirmation.status != "pending_confirmation":
+        raise HTTPException(status_code=409, detail="do not contact confirmation is not pending")
+
+    creator = db.get(Creator, confirmation.creator_id)
+    reply = db.get(InboundReply, confirmation.inbound_reply_id)
+    if creator is None or reply is None:
+        raise HTTPException(status_code=409, detail="do not contact confirmation has incomplete audit references")
+    if reply.processing_status != "need_ai_review":
+        raise HTTPException(status_code=409, detail="reply is not pending human review")
+
+    reviewed_at = datetime.utcnow()
+    confirmation.status = "confirmed"
+    confirmation.reviewed_by = body.actor_id
+    confirmation.reviewed_at = reviewed_at
+    creator.do_not_contact_status = "confirmed"
+    creator.do_not_contact_reason = confirmation.reason
+    creator.do_not_contact_requested_at = creator.do_not_contact_requested_at or confirmation.created_at or reviewed_at
+    reply.processing_status = "reviewed"
+    db.add(
+        CreatorOutreachEvent(
+            id=new_id("oev"),
+            department_code=creator.department_code,
+            creator_id=creator.id,
+            event_type="dnc_confirmed_by_human",
+            note="Do-not-contact request was confirmed by a human reviewer; no outbound message was sent.",
+            metadata_json=json.dumps(
+                {
+                    "actor_id": body.actor_id,
+                    "dnc_confirmation_id": confirmation.id,
+                    "inbound_reply_id": reply.id,
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+    db.refresh(confirmation)
+    db.refresh(creator)
+    db.refresh(reply)
+    return {
+        "ok": True,
+        "confirmation": _dnc_confirmation_to_dict(confirmation),
+        "creator": _creator_to_dict(creator),
+        "reply": _reply_to_dict(reply),
+    }
+
+
+@app.post("/api/followup-agent/dnc-confirmations/{confirmation_id}/reject")
+def reject_dnc_confirmation(
+    confirmation_id: str, body: DncConfirmationRejectIn, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """人工驳回 DNC 判定，将该回复重新入队为普通审核；不发送任何消息。"""
+
+    confirmation = db.scalars(
+        select(DoNotContactConfirmation)
+        .where(DoNotContactConfirmation.id == confirmation_id)
+        .with_for_update()
+    ).first()
+    if confirmation is None:
+        raise HTTPException(status_code=404, detail="do not contact confirmation not found")
+    if confirmation.status != "pending_confirmation":
+        raise HTTPException(status_code=409, detail="do not contact confirmation is not pending")
+
+    creator = db.get(Creator, confirmation.creator_id)
+    reply = db.get(InboundReply, confirmation.inbound_reply_id)
+    if creator is None or reply is None:
+        raise HTTPException(status_code=409, detail="do not contact confirmation has incomplete audit references")
+    if reply.processing_status != "need_ai_review":
+        raise HTTPException(status_code=409, detail="reply is not pending human review")
+
+    original_category = reply.reply_category
+    original_reason = reply.classification_reason
+    reviewed_at = datetime.utcnow()
+    confirmation.status = "rejected"
+    confirmation.reviewed_by = body.actor_id
+    confirmation.reviewed_at = reviewed_at
+    creator.do_not_contact_status = "none"
+    creator.do_not_contact_reason = None
+    creator.do_not_contact_requested_at = None
+    # 保留原始规则命中在 DNC 流水和事件元数据中；当前回复改由人工触发的普通审核重新处理。
+    reply.reply_category = "unclear"
+    reply.classification_confidence = None
+    reply.classification_reason = "human_rejected_dnc_confirmation"
+    reply.classified_at = reviewed_at
+
+    blocked_tasks = list(
+        db.scalars(
+            select(FollowupTask)
+            .where(FollowupTask.creator_id == creator.id)
+            .where(FollowupTask.status == "blocked_dnc_pending")
+        ).all()
+    )
+    for task in blocked_tasks:
+        task.status = "blocked_dnc_rejected"
+        task.reason = "DNC was rejected by a human reviewer; manually reassess before resuming any follow-up."
+
+    run = enqueue_followup_run(db, reply.id, created_by=body.actor_id)
+    db.add(
+        CreatorOutreachEvent(
+            id=new_id("oev"),
+            department_code=creator.department_code,
+            creator_id=creator.id,
+            event_type="dnc_rejected_by_human",
+            note="Do-not-contact classification was rejected by a human reviewer; a new review run was queued without sending a message.",
+            metadata_json=json.dumps(
+                {
+                    "actor_id": body.actor_id,
+                    "dnc_confirmation_id": confirmation.id,
+                    "inbound_reply_id": reply.id,
+                    "original_reply_category": original_category,
+                    "original_classification_reason": original_reason,
+                    "queued_run_id": run.id,
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+    db.refresh(confirmation)
+    db.refresh(creator)
+    db.refresh(reply)
+    db.refresh(run)
+    return {
+        "ok": True,
+        "confirmation": _dnc_confirmation_to_dict(confirmation),
+        "creator": _creator_to_dict(creator),
+        "reply": _reply_to_dict(reply),
+        "run": _run_to_dict(run),
+    }
+
+
+@app.post("/api/followup-agent/review-items/{reply_id}/retry")
+def retry_failed_human_review_item(
+    reply_id: str, body: FailedReviewRetryIn, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """人工重试最新模型失败的待审项；只创建新的 queued run，不发送任何消息。"""
+
+    reply = db.get(InboundReply, reply_id)
+    if reply is None:
+        raise HTTPException(status_code=404, detail="inbound reply not found")
+    if reply.processing_status != "need_ai_review":
+        raise HTTPException(status_code=409, detail="reply is not pending human review")
+
+    item = _review_queue_item_to_dict(db, reply)
+    if item["review_type"] != "model_failure" or item["run"] is None:
+        raise HTTPException(status_code=409, detail="only a model-failure review item can be retried")
+    active_run = db.scalar(
+        select(AgentFollowupRun.id)
+        .where(AgentFollowupRun.inbound_reply_id == reply.id)
+        .where(AgentFollowupRun.execution_status.in_(("queued", "running")))
+        .limit(1)
+    )
+    if active_run is not None:
+        raise HTTPException(status_code=409, detail="agent retry is already queued")
+
+    run = enqueue_followup_run(db, reply.id, created_by=body.actor_id)
+    creator = db.get(Creator, reply.creator_id)
+    if creator is not None:
+        db.add(
+            CreatorOutreachEvent(
+                id=new_id("oev"),
+                department_code=creator.department_code,
+                creator_id=creator.id,
+                event_type="agent_retry_requested_by_human",
+                note="A human reviewer requested another draft generation after a model failure; no outbound message was sent.",
+                metadata_json=json.dumps(
+                    {
+                        "actor_id": body.actor_id,
+                        "inbound_reply_id": reply.id,
+                        "failed_run_id": item["run"]["id"],
+                        "queued_run_id": run.id,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+    db.commit()
+    db.refresh(run)
+    return {"ok": True, "run": _run_to_dict(run), "reply": _reply_to_dict(reply)}
+
+
 @app.post("/api/followup-agent/review-decisions", status_code=201)
 def create_human_review_decision(
     body: HumanReviewDecisionCreateIn, db: Session = Depends(get_db)
@@ -676,6 +884,7 @@ def _run_to_dict(row: AgentFollowupRun) -> dict[str, Any]:
         "duration_ms": row.duration_ms,
         "prompt_characters": row.prompt_characters,
         "output_characters": row.output_characters,
+        "created_by": row.created_by,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 

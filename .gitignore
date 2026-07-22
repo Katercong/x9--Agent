@@ -9,3 +9,6 @@ venv/
 *.sqlite-journal
 data/
 evaluation_reports/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/

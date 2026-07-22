@@ -204,6 +204,24 @@ class HumanReviewDecisionCreateIn(BaseModel):
         return self
 
 
+class DncConfirmationApproveIn(BaseModel):
+    """人工确认明确退订；确认后永久阻断后续业务处理，不涉及任何外发。"""
+
+    actor_id: str = Field(min_length=1, max_length=120)
+
+
+class DncConfirmationRejectIn(BaseModel):
+    """人工驳回 DNC 判定；回复重新进入人工触发的 Agent 审核，不涉及任何外发。"""
+
+    actor_id: str = Field(min_length=1, max_length=120)
+
+
+class FailedReviewRetryIn(BaseModel):
+    """人工重试模型失败的审核项；只入队新的 Agent run。"""
+
+    actor_id: str = Field(min_length=1, max_length=120)
+
+
 class DraftExportCreateIn(BaseModel):
     """记录人工复制/导出动作；不包含渠道、收件人或发送参数。"""
 
