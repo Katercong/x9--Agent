@@ -21,8 +21,8 @@ docker compose --profile demo run --rm demo-seed
 ## 建议演示路径
 
 1. **人工回复草稿**：打开“Alex Demo”，查看历史上下文、AI 建议和可编辑草稿；批准后草稿会锁定为待人工交接。
-2. **模型生成失败**：打开“Blair Demo”，查看校验失败留痕；可从空白草稿人工起草，或在有本机模型 Key 时明确启用 Worker 后重试。
-3. **草稿生成中**：打开“Casey Demo”，查看数据库队列中的待处理 run。基础演示不会启动 Worker。
+2. **模型生成失败**：打开“Blair Demo”，查看校验失败留痕；可从空白草稿人工起草，或明确启用 Worker 后重试。Worker 有模型 Key 时调用 Provider；无 Key 时会生成受限本地 fallback 草稿。
+3. **草稿生成中**：打开“Casey Demo”，查看数据库队列中的待处理 run。基础演示不会启动 Worker；一旦显式启动，Casey 会被处理并离开“草稿生成中”。
 4. **明确拒绝**：打开“Drew Demo”，确认终态项只能查看，不能起草、批准、复制或下载。
 5. **DNC 待确认**：打开“Evan Demo”，确认永久停联或驳回后重新进入人工审核；在待确认期间不会展示可交接草稿。
 6. **已锁定待交接草稿**：打开“Fran Demo”，复制或下载批准后的草稿；动作会写入导出审计快照。
@@ -31,7 +31,7 @@ docker compose --profile demo run --rm demo-seed
 
 - 所有达人、邮件地址、产品和消息内容均为虚构演示数据。
 - 复制或下载只是人工交接，不会发送邮件、创建外发任务或调用任何真实渠道。
-- `worker` 是可选 profile：`docker compose --profile worker up -d worker`。仅在操作者显式启用且本机 `.env` 配置模型 Key 时才会处理 queued run；无论是否启用，都没有外部消息发送能力。
+- `worker` 是可选 profile：`docker compose --profile worker up -d worker`。它只在操作者显式启用后处理 queued run：配置模型 Key 时调用 Provider；未配置 Key 时生成本地受限 fallback，并以 `llm_status=not_configured` 成功进入人工审核。两种路径都会改变 Casey 的“生成中”状态，但都不会发送消息或调用外部渠道。
 
 ## 停止与清理
 

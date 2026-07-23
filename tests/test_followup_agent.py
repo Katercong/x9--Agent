@@ -2728,6 +2728,41 @@ def test_worker_processes_queued_run_and_records_completion(monkeypatch):
     assert run["finished_at"] is not None
 
 
+def test_worker_without_provider_key_uses_local_fallback_and_completes_run(monkeypatch):
+    """无模型 Key 的 Worker 仍应使用受限本地建议，不调用 Provider 或外发。"""
+
+    monkeypatch.delenv("SILICONFLOW_API_KEY", raising=False)
+    monkeypatch.setattr(
+        services,
+        "call_siliconflow_json",
+        lambda *_args, **_kwargs: pytest.fail("worker without a key must not call the provider"),
+    )
+    client = TestClient(app)
+    creator_id = "creator_worker_local_fallback"
+    _create_creator(client, creator_id)
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert queued.status_code == 200, queued.text
+    run_id = queued.json()["run"]["id"]
+
+    with SessionLocal() as db:
+        processed = services.process_next_queued_run(db)
+        assert processed is not None
+        assert processed.id == run_id
+        db.commit()
+
+    completed = client.get(f"/api/followup-agent/runs/{run_id}")
+    assert completed.status_code == 200, completed.text
+    run = completed.json()["run"]
+    assert run["execution_status"] == "succeeded"
+    assert run["llm_status"] == "not_configured"
+    assert run["provider_model"] is None
+    assert run["output"]["suggested_reply"]
+    assert client.get(f"/api/followup-agent/outbound-instructions?creator_id={creator_id}").json()["total"] == 0
+
+
 def test_worker_process_once_returns_processed_run_id(monkeypatch):
     """独立 worker 的单次模式应处理一条任务并返回其 run ID。"""
 

@@ -44,13 +44,15 @@ alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-Worker 默认不随 Compose 启动。只有操作者显式启用且本机 `.env` 配置模型 Key 时，才运行：
+Worker 默认不随 Compose 启动。操作者显式启用后，它会处理 queued run：配置模型 Key 时调用 Provider；未配置 Key 时使用本地受限 fallback，并将 run 以 `llm_status=not_configured` 完成。
 
 ```powershell
 docker compose --profile worker up -d worker
 ```
 
 无论是否启动 Worker，系统都没有外部消息发送能力。
+
+启用 Worker 会消耗 demo seed 中“草稿生成中”的 Casey 项并改变其状态；若需要保留该展示状态，请不要启动 `worker` profile。
 
 ## 日常操作
 

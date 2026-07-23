@@ -9,12 +9,12 @@
 | 数据库与迁移 | Docker Compose PostgreSQL、`.env` 配置、Alembic `ab12cd34ef56` head；SQLite 自动化测试兼容。Compose 默认编排 PostgreSQL、一次性 `migrate` 和 API。 |
 | 数据完整性 | 外部消息 ID 非空与幂等；run 外键非空；审计关联禁止级联删除；每条回复最多一个活跃 run。 |
 | 核心数据 | 达人、产品、参考资料版本、入站回复、Agent run、DNC、待办、事件、人工审核决定、草稿导出记录与历史模拟出站指令。 |
-| AI 与 Worker | PostgreSQL 数据库队列、单 Worker 短事务领取、lease、claim token、过期回收和失败留痕；默认模型为 `reply_followup_v2` + `deepseek-ai/DeepSeek-V3.2`，传 `extra_body={"enable_thinking": false}`。 |
+| AI 与 Worker | PostgreSQL 数据库队列、单 Worker 短事务领取、lease、claim token、过期回收和失败留痕；默认模型为 `reply_followup_v2` + `deepseek-ai/DeepSeek-V3.2`，传 `extra_body={"enable_thinking": false}`。未配置模型 Key 时 Worker 使用本地受限 fallback，仍完成 run 并进入人工审核。 |
 | 人工审核 API | 审核队列支持普通回复、模型失败、生成中、拒绝、DNC、已批准草稿和 `reply_ready` 聚合；`GET /review-items/{reply_id}` 返回上下文与完整 run 留痕。普通项可批准最终草稿或关闭；模型失败可人工重试，活跃 run 冲突返回 `409`。 |
 | DNC 安全边界 | DNC 确认与驳回均需人工显式调用接口。待确认/已确认 DNC 优先阻断新 run、草稿、复制、下载、导出和既有普通待办；同一 DNC 只在源回复上显示为可操作队列项，历史会话标记为 `dnc_blocked`。 |
 | 运营工作台 | React + Vite + TypeScript + Ant Design + TanStack Query 三栏工作台，提供会话上下文、AI 建议、草稿编辑、批准/关闭、DNC 确认或驳回、模型失败重试、复制和 `.txt` 下载审计。没有发送能力。 |
 | 容器化演示 | 当前 `feat/demo-delivery` 提供多阶段镜像、API 静态托管 `/operator-workbench/`、`worker` profile 和显式 `demo-seed` profile。种子使用固定虚构数据且幂等，不调用模型、不创建出站指令。 |
-| 验证 | Python 全量测试为 `82 passed`，前端 Vitest 为 `8 passed`；已验证 Docker 镜像构建、迁移、API 健康检查、静态资源和重复 demo seed。仅有既有 FastAPI `on_event` 弃用警告。 |
+| 验证 | Python 全量测试为 `83 passed`，前端 Vitest 为 `8 passed`；已验证 Docker 镜像构建、迁移、API 健康检查、静态资源和重复 demo seed。仅有既有 FastAPI `on_event` 弃用警告。 |
 
 ## 已实现但与目标仍有差距
 

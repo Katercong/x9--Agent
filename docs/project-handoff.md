@@ -6,7 +6,7 @@
 
 - 远端 `main` 当前基线为 `718e88b Feat/operator workbench export (#4)`，包含 V2/V3.2 默认配置、人工审核读模型、React 工作台、DNC 审核动作和人工导出交接。
 - 当前功能分支为 `feat/demo-delivery`，已推送的 `767aa98 feat: 完成工作台容器化演示交付` 增加 Dockerfile、Compose `migrate`/API/Worker profile、前端静态托管和受控 demo seed；本分支等待 PR review 与合并。
-- 最近验证：`python -m pytest -q` 为 `82 passed`，前端 `npm run test` 为 `8 passed`；Docker 已验证镜像构建、Alembic `ab12cd34ef56 (head)`、`/health`、`/operator-workbench/` 静态资源和重复 seed 幂等性。仅有 FastAPI `on_event` 既有弃用警告。
+- 最近验证：`python -m pytest -q` 为 `83 passed`，前端 `npm run test` 为 `8 passed`；Docker 已验证镜像构建、Alembic `ab12cd34ef56 (head)`、`/health`、`/operator-workbench/` 静态资源和重复 seed 幂等性。仅有 FastAPI `on_event` 既有弃用警告。
 - 本地数据库：Docker Compose 管理 PostgreSQL。默认服务为 PostgreSQL、一次性 `migrate` 和 API；`worker` 与 `demo-seed` 是显式 profile。SQLite 只用于自动化测试和可丢弃的本地 MVP 数据。
 
 ## 当前系统能力
@@ -24,7 +24,7 @@
 - 工作台地址为 `/operator-workbench/`。队列覆盖普通回复、模型失败、生成中、拒绝、DNC 待确认和已锁定待交接草稿；单项详情聚合达人、产品、资料、会话、事件、待办和全部 Agent run。
 - DNC 是最高优先级安全边界：待确认或已确认后隐藏既有 AI 草稿和所有交接入口。DNC 确认永久阻断后续业务处理；驳回会显式新建审核 run，但不会发送消息。明确拒绝仍是只读终态，尚未实现确认 `dropped`。
 - AI 只能提供分类、上下文、草稿和建议；所有非终态推进须人工确认。复制/下载只写导出审计，不会调用真实渠道。没有 Gmail、IMAP、X9 或自动发送能力。
-- 当前 Worker 使用短事务领取、120 秒 lease、claim token 条件回写和过期回收。手动重试的并发活跃 run 会返回业务 `409`。
+- 当前 Worker 使用短事务领取、120 秒 lease、claim token 条件回写和过期回收。手动重试的并发活跃 run 会返回业务 `409`；无模型 Key 时仍使用本地受限 fallback 完成 queued run，配置 Key 后才调用 Provider。
 - `demo-seed` 仅写入固定虚构样例，不调用模型或 Worker，不创建任何出站指令；基础 Docker 演示也不会启动 Worker。
 
 ## 代码定位

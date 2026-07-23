@@ -81,6 +81,7 @@ POST /simulate-reply
 - 明确退订还会在同一事务中把已有 `reply_followup_1` 的 `open/pending` 待办标记为 `blocked_dnc_pending`，避免人工沿历史待办继续联系。
 - 普通回复仅允许最新且没有活跃后继的完成 run 形成最终决定；每条回复在数据库中最多一条决定，`reviewed` 后不可重新排队。
 - 资料不足时，Worker 可以不调用模型而生成受限草稿，记录 `execution_status=succeeded`、`llm_status=skipped` 和 `block_reason=context_insufficient`，仍由人工审核。
+- 未配置 `SILICONFLOW_API_KEY` 时，Worker 仍会处理 queued run：它使用本地受限 fallback，记录 `execution_status=succeeded` 与 `llm_status=not_configured`，不调用 Provider；配置 Key 后才调用真实模型。
 
 ## 核心数据模型
 
