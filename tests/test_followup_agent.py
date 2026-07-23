@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -2440,6 +2441,27 @@ def test_compose_uses_explicit_url_encoded_container_database_url():
     assert "@postgres:5432/" in env_example
     assert compose.count("DATABASE_URL: ${DATABASE_URL_CONTAINER:?Set DATABASE_URL_CONTAINER in .env}") == 4
     assert "DATABASE_URL: postgresql+psycopg://${POSTGRES_USER" not in compose
+
+
+def test_alembic_current_accepts_percent_encoded_database_url(tmp_path):
+    """Alembic 必须接受 .env 中标准的 %xx URL 编码。"""
+    root = Path(__file__).resolve().parents[1]
+    database_path = tmp_path / "review%40safe%3Apass%2F2026.sqlite"
+    encoded_url = f"sqlite:///{database_path.as_posix()}"
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = encoded_url
+
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "current"],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_evaluation_suite_is_synthetic_and_has_the_planned_pilot_size():

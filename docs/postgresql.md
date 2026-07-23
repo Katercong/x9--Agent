@@ -12,7 +12,7 @@ PostgreSQL 由 Docker Compose 管理，数据保存在 Docker 命名卷 `x9-repl
 
 1. 从 `.env.example` 创建本机 `.env`，设置新的原始 `POSTGRES_PASSWORD`，以及两条已编码连接 URL：
    `DATABASE_URL` 供本机 Uvicorn/Alembic 使用，主机为 `127.0.0.1`；`DATABASE_URL_CONTAINER` 供 Compose 的 migrate、API、Worker 和 demo seed 使用，主机为 `postgres`。
-   若用户名或密码含 `@`、`:`、`/` 等 URL 保留字符，必须在两条 URL 中分别进行百分号编码；不要把原始 `POSTGRES_PASSWORD` 直接拼进 URL。
+   若用户名或密码含 `@`、`:`、`/` 等 URL 保留字符，必须在两条 URL 中分别进行百分号编码；不要把原始 `POSTGRES_PASSWORD` 直接拼进 URL。`.env` 中保留标准 `%xx` 编码即可，Alembic 会在内部安全处理 ConfigParser 的转义。
 2. 构建并启动 PostgreSQL、迁移和 API：
 
    ```powershell
