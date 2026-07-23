@@ -22,7 +22,7 @@ pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-编辑未提交的 `.env`，设置本地 `POSTGRES_PASSWORD`、对应的 `DATABASE_URL`，以及需要真实模型调用时的 `SILICONFLOW_API_KEY`。密钥不得写入代码、测试、文档或提交记录。
+编辑未提交的 `.env`，设置原始 `POSTGRES_PASSWORD`、本机 `DATABASE_URL` 和容器 `DATABASE_URL_CONTAINER`，以及需要真实模型调用时的 `SILICONFLOW_API_KEY`。两条 URL 中的用户名/密码必须对 URL 保留字符进行百分号编码；密钥不得写入代码、测试、文档或提交记录。
 
 PostgreSQL 的详细步骤见 [postgresql.md](postgresql.md)。未配置 `DATABASE_URL` 时，应用可使用可丢弃的 SQLite 开发库；生产环境必须使用 PostgreSQL。
 

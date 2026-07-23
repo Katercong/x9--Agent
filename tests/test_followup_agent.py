@@ -2429,6 +2429,19 @@ def test_env_example_documents_siliconflow_configuration():
     assert "SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V3.2" in content
 
 
+def test_compose_uses_explicit_url_encoded_container_database_url():
+    """容器连接不得把原始 POSTGRES_PASSWORD 直接拼入 URL。"""
+
+    root = Path(__file__).resolve().parents[1]
+    env_example = (root / ".env.example").read_text(encoding="utf-8")
+    compose = (root / "compose.yaml").read_text(encoding="utf-8")
+
+    assert "DATABASE_URL_CONTAINER=postgresql+psycopg://" in env_example
+    assert "@postgres:5432/" in env_example
+    assert compose.count("DATABASE_URL: ${DATABASE_URL_CONTAINER:?Set DATABASE_URL_CONTAINER in .env}") == 4
+    assert "DATABASE_URL: postgresql+psycopg://${POSTGRES_USER" not in compose
+
+
 def test_evaluation_suite_is_synthetic_and_has_the_planned_pilot_size():
     """评测样本应为可复现的脱敏合成数据，且开发集固定为 24 条。"""
 

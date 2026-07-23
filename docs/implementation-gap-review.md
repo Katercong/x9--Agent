@@ -14,7 +14,7 @@
 | DNC 安全边界 | DNC 确认与驳回均需人工显式调用接口。待确认/已确认 DNC 优先阻断新 run、草稿、复制、下载、导出和既有普通待办；同一 DNC 只在源回复上显示为可操作队列项，历史会话标记为 `dnc_blocked`。 |
 | 运营工作台 | React + Vite + TypeScript + Ant Design + TanStack Query 三栏工作台，提供会话上下文、AI 建议、草稿编辑、批准/关闭、DNC 确认或驳回、模型失败重试、复制和 `.txt` 下载审计。没有发送能力。 |
 | 容器化演示 | 当前 `feat/demo-delivery` 提供多阶段镜像、API 静态托管 `/operator-workbench/`、`worker` profile 和显式 `demo-seed` profile。种子使用固定虚构数据且幂等，不调用模型、不创建出站指令。 |
-| 验证 | Python 全量测试为 `83 passed`，前端 Vitest 为 `8 passed`；已验证 Docker 镜像构建、迁移、API 健康检查、静态资源和重复 demo seed。仅有既有 FastAPI `on_event` 弃用警告。 |
+| 验证 | Python 全量测试为 `84 passed`，前端 Vitest 为 `8 passed`；已验证 Docker 镜像构建、迁移、API 健康检查、静态资源和重复 demo seed。仅有既有 FastAPI `on_event` 弃用警告。 |
 
 ## 已实现但与目标仍有差距
 
