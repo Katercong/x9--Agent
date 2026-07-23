@@ -9,6 +9,7 @@
 3. [项目交接记录](project-handoff.md)：当前代码基线、模块职责和下一步实施顺序。
 4. [开发与运行指南](development-guide.md)：本地运行、测试、接口、Worker 和数据模型说明。
 5. [PostgreSQL 部署说明](postgresql.md)：Docker Compose、本地环境变量和 Alembic 迁移操作。
+6. [Operator Workbench 四阶段实施计划](operator-workbench-four-pr-plan.md)：当前工作台的 PR 拆分、范围与交付边界。
 
 ## 文档治理
 

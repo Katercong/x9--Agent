@@ -264,7 +264,13 @@ def parse_followup_suggestion(raw_output: str) -> AgentSuggestion:
     return AgentSuggestion.model_validate(json.loads(raw_output))
 
 
-def enqueue_followup_run(db: Session, inbound_reply_id: str, *, created_by: str | None = None) -> AgentFollowupRun:
+def enqueue_followup_run(
+    db: Session,
+    inbound_reply_id: str,
+    *,
+    created_by: str | None = None,
+    reject_if_active: bool = False,
+) -> AgentFollowupRun:
     """创建可持久化的待执行任务；已审核回复不可重新排队。"""
 
     reply = db.get(InboundReply, inbound_reply_id)
@@ -283,6 +289,8 @@ def enqueue_followup_run(db: Session, inbound_reply_id: str, *, created_by: str 
         .limit(1)
     ).first()
     if existing is not None:
+        if reject_if_active:
+            raise HTTPException(status_code=409, detail="agent retry is already queued")
         return existing
 
     # 建议尚未生成也必须进入人工待办视野，不能因后台任务延迟而停留在 new。
