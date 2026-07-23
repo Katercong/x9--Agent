@@ -596,7 +596,20 @@ def retry_failed_human_review_item(
     if active_run is not None:
         raise HTTPException(status_code=409, detail="agent retry is already queued")
 
-    run = enqueue_followup_run(db, reply.id, created_by=body.actor_id)
+    try:
+        run = enqueue_followup_run(
+            db,
+            reply.id,
+            created_by=body.actor_id,
+            reject_if_active=True,
+        )
+    except IntegrityError:
+        # The active-run unique index is the final arbiter under concurrent
+        # requests; expose its conflict as the same business result as the
+        # pre-check rather than leaking a database error as HTTP 500.
+        db.rollback()
+        raise HTTPException(status_code=409, detail="agent retry is already queued")
+
     creator = db.get(Creator, reply.creator_id)
     if creator is not None:
         db.add(

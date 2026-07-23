@@ -581,6 +581,63 @@ def test_human_can_retry_a_model_failure_as_a_new_audited_run():
     assert client.get(f"/api/followup-agent/outbound-instructions?creator_id={creator_id}").json()["total"] == 0
 
 
+def test_human_retry_translates_active_run_unique_conflict_to_409(monkeypatch):
+    """并发重试由唯一索引裁决时，接口必须返回业务冲突而非 500。"""
+
+    client = TestClient(app)
+    creator_id = "creator_retry_unique_conflict"
+    _create_creator(client, creator_id)
+    simulated = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert simulated.status_code == 200, simulated.text
+    reply_id = simulated.json()["reply"]["id"]
+    failed_run_id = simulated.json()["run"]["id"]
+
+    with SessionLocal() as db:
+        failed_run = db.get(AgentFollowupRun, failed_run_id)
+        assert failed_run is not None
+        failed_run.execution_status = "failed"
+        failed_run.llm_status = "validation_failed"
+        failed_run.output_json = json.dumps({"raw_output": "{}"})
+        failed_run.validation_error = "suggested_reply: Field required"
+        failed_run.error_summary = "Synthetic validation failure."
+        failed_run.finished_at = datetime.utcnow()
+        db.commit()
+
+    def raise_active_run_unique_conflict(*args, **kwargs):
+        assert kwargs["reject_if_active"] is True
+        raise IntegrityError(
+            "INSERT INTO agent_followup_runs ...",
+            {},
+            Exception("uq_agent_followup_runs_active_reply"),
+        )
+
+    monkeypatch.setattr(
+        importlib.import_module("app.main"),
+        "enqueue_followup_run",
+        raise_active_run_unique_conflict,
+    )
+    retry = client.post(
+        f"/api/followup-agent/review-items/{reply_id}/retry",
+        json={"actor_id": "demo_operator"},
+    )
+    assert retry.status_code == 409
+    assert retry.json()["detail"] == "agent retry is already queued"
+
+    with SessionLocal() as db:
+        assert db.scalar(
+            select(func.count()).select_from(AgentFollowupRun).where(AgentFollowupRun.inbound_reply_id == reply_id)
+        ) == 1
+        assert db.scalar(
+            select(func.count())
+            .select_from(CreatorOutreachEvent)
+            .where(CreatorOutreachEvent.creator_id == creator_id)
+            .where(CreatorOutreachEvent.event_type == "agent_retry_requested_by_human")
+        ) == 0
+
+
 def test_explicit_opt_out_blocks_existing_normal_followup_task():
     """DNC 进入待确认时，既有普通外联待办必须立即停止，不能继续引导人工联系。"""
 
