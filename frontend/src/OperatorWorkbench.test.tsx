@@ -93,6 +93,11 @@ const dncItem: ReviewQueueItem = {
   dnc_confirmation: { id: "dnc_1", reason: "explicit_opt_out", status: "pending_confirmation", created_at: "2026-07-22T11:00:00" },
 };
 
+const confirmedDncItem: ReviewQueueItem = {
+  ...dncItem,
+  dnc_confirmation: { ...dncItem.dnc_confirmation!, status: "confirmed" },
+};
+
 // This intentionally keeps stale draft data in the mocked response.  The UI
 // must still suppress it whenever the server classifies the creator as DNC.
 const dncBlockedApprovedItem: ReviewQueueItem = {
@@ -281,6 +286,18 @@ describe("OperatorWorkbench", () => {
     await user.click(confirmationButtons.at(-1)!);
     await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith("/dnc-confirmations/dnc_1/approve") && init?.method === "POST")).toBe(true));
     expect(fetchMock.mock.calls.some(([url]) => /send/i.test(String(url)))).toBe(false);
+  });
+
+  it("labels a confirmed DNC distinctly from a pending DNC confirmation", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 1, items: [confirmedDncItem] });
+      if (url.includes("/review-items/reply_dnc")) return jsonResponse(detailFor(confirmedDncItem));
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderWorkbench();
+
+    expect((await screen.findAllByText("DNC 已确认")).length).toBeGreaterThan(0);
   });
 
   it("hides a previously approved draft and every handoff entry after the creator becomes DNC", async () => {

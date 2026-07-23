@@ -167,6 +167,13 @@ function typeColor(reviewType: ReviewType): string {
   return "gold";
 }
 
+function reviewTypeLabel(item: ReviewQueueItem): string {
+  if (item.review_type === "dnc_confirmation") {
+    return item.dnc_confirmation?.status === "confirmed" ? "DNC 已确认" : "DNC 待确认";
+  }
+  return typeLabels[item.review_type];
+}
+
 function buildTimeline(context: ReviewContext): TimelineEntry[] {
   const incoming = context.recent_inbound_replies.map((reply) => ({
     at: reply.message_at,
@@ -249,7 +256,7 @@ function QueueItem({ item, selected, onSelect }: { item: ReviewQueueItem; select
     <button className={`queue-item ${selected ? "queue-item-selected" : ""}`} onClick={onSelect} type="button">
       <div className="queue-item-topline">
         <Text strong ellipsis>{item.reply.from_email || item.reply.creator_id}</Text>
-        <Tag color={typeColor(item.review_type)}>{typeLabels[item.review_type]}</Tag>
+        <Tag color={typeColor(item.review_type)}>{reviewTypeLabel(item)}</Tag>
       </div>
       <Text className="queue-item-subject" ellipsis>{subject}</Text>
       <div className="queue-item-meta">
@@ -481,7 +488,7 @@ export function OperatorWorkbench() {
                 <div className="conversation-title">
                   <Space wrap size={8}>
                     <Title level={4}>{detail.context.creator.display_name || detail.context.creator.handle || detailItem.reply.from_email}</Title>
-                    <Tag color={typeColor(detailItem.review_type)}>{typeLabels[detailItem.review_type]}</Tag>
+                    <Tag color={typeColor(detailItem.review_type)}>{reviewTypeLabel(detailItem)}</Tag>
                   </Space>
                   <Text type="secondary">{detail.context.creator.handle || detailItem.reply.from_email} · {displayTitle}</Text>
                 </div>
