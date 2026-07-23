@@ -410,11 +410,16 @@ def get_human_review_item(reply_id: str, db: Session = Depends(get_db)) -> dict[
             .order_by(AgentFollowupRun.created_at.asc(), AgentFollowupRun.id.asc())
         ).all()
     )
+    item = _review_queue_item_to_dict(db, reply)
+    # DNC is a conservative terminal boundary.  Keep run metadata available for
+    # audit, but never expose a prior AI draft once the creator has requested or
+    # confirmed do-not-contact.
+    dnc_blocked = item["review_type"] == "dnc_confirmation"
     return {
         "ok": True,
-        "item": _review_queue_item_to_dict(db, reply),
+        "item": item,
         "context": build_followup_context(db, reply.id),
-        "runs": [_run_to_dict(run) for run in runs],
+        "runs": [_run_to_dnc_safe_dict(run) if dnc_blocked else _run_to_dict(run) for run in runs],
     }
 
 
@@ -804,28 +809,32 @@ def _get_or_create_existing_run(db: Session, reply: InboundReply, run_agent: boo
 def _review_queue_item_to_dict(db: Session, reply: InboundReply) -> dict[str, Any]:
     """Build the shared queue/detail representation for one workbench reply."""
 
+    creator = db.get(Creator, reply.creator_id)
     latest_run = db.scalars(
         select(AgentFollowupRun)
         .where(AgentFollowupRun.inbound_reply_id == reply.id)
         .order_by(AgentFollowupRun.created_at.desc(), AgentFollowupRun.id.desc())
         .limit(1)
     ).first()
-    dnc_confirmation = db.scalars(
-        select(DoNotContactConfirmation)
-        .where(DoNotContactConfirmation.inbound_reply_id == reply.id)
-        .where(DoNotContactConfirmation.status == "pending_confirmation")
-        .limit(1)
-    ).first()
+    dnc_confirmation = None
+    if is_creator_contact_blocked(creator):
+        dnc_confirmation = db.scalars(
+            select(DoNotContactConfirmation)
+            .where(DoNotContactConfirmation.creator_id == reply.creator_id)
+            .where(DoNotContactConfirmation.status.in_(("pending_confirmation", "confirmed")))
+            .order_by(DoNotContactConfirmation.created_at.desc(), DoNotContactConfirmation.id.desc())
+            .limit(1)
+        ).first()
     decision = db.scalars(
         select(HumanReviewDecision)
         .where(HumanReviewDecision.inbound_reply_id == reply.id)
         .order_by(HumanReviewDecision.decided_at.desc(), HumanReviewDecision.id.desc())
         .limit(1)
     ).first()
-    if decision is not None and decision.outcome == "approve_draft":
-        review_type = "approved_draft"
-    elif dnc_confirmation is not None:
+    if is_creator_contact_blocked(creator):
         review_type = "dnc_confirmation"
+    elif decision is not None and decision.outcome == "approve_draft":
+        review_type = "approved_draft"
     elif reply.reply_category == "not_interested":
         review_type = "decline"
     elif latest_run is not None and latest_run.execution_status in {"queued", "running"}:
@@ -839,14 +848,28 @@ def _review_queue_item_to_dict(db: Session, reply: InboundReply) -> dict[str, An
         and latest_run is not None
         and latest_run.execution_status in {"succeeded", "failed"}
     )
+    dnc_blocked = review_type == "dnc_confirmation"
+    run_payload = _run_to_dict(latest_run) if latest_run is not None else None
+    decision_payload = _human_review_decision_to_dict(decision) if decision is not None else None
+    if dnc_blocked:
+        run_payload = _run_to_dnc_safe_dict(latest_run) if latest_run is not None else None
+        decision_payload = None
     return {
         "review_type": review_type,
         "decision_available": decision_available,
         "reply": _reply_to_dict(reply),
-        "run": _run_to_dict(latest_run) if latest_run is not None else None,
+        "run": run_payload,
         "dnc_confirmation": _dnc_confirmation_to_dict(dnc_confirmation) if dnc_confirmation else None,
-        "decision": _human_review_decision_to_dict(decision) if decision is not None else None,
+        "decision": decision_payload,
     }
+
+
+def _run_to_dnc_safe_dict(row: AgentFollowupRun) -> dict[str, Any]:
+    """Return audit metadata without any AI draft for a DNC-blocked creator."""
+
+    payload = _run_to_dict(row)
+    payload["output"] = None
+    return payload
 
 
 def _creator_to_dict(row: Creator) -> dict[str, Any]:

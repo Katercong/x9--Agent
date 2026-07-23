@@ -93,6 +93,15 @@ const dncItem: ReviewQueueItem = {
   dnc_confirmation: { id: "dnc_1", reason: "explicit_opt_out", status: "pending_confirmation", created_at: "2026-07-22T11:00:00" },
 };
 
+// This intentionally keeps stale draft data in the mocked response.  The UI
+// must still suppress it whenever the server classifies the creator as DNC.
+const dncBlockedApprovedItem: ReviewQueueItem = {
+  ...approvedDraftItem,
+  review_type: "dnc_confirmation",
+  decision_available: false,
+  dnc_confirmation: { id: "dnc_confirmed", reason: "explicit_opt_out", status: "confirmed", created_at: "2026-07-22T12:30:00" },
+};
+
 function detailFor(item: ReviewQueueItem): ReviewItemDetail {
   return {
     ok: true,
@@ -272,6 +281,24 @@ describe("OperatorWorkbench", () => {
     await user.click(confirmationButtons.at(-1)!);
     await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith("/dnc-confirmations/dnc_1/approve") && init?.method === "POST")).toBe(true));
     expect(fetchMock.mock.calls.some(([url]) => /send/i.test(String(url)))).toBe(false);
+  });
+
+  it("hides a previously approved draft and every handoff entry after the creator becomes DNC", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 1, items: [dncBlockedApprovedItem] });
+      if (url.includes("/review-items/reply_approved")) return jsonResponse(detailFor(dncBlockedApprovedItem));
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderWorkbench();
+
+    expect(await screen.findByText("DNC 已确认并阻断")).toBeInTheDocument();
+    expect(screen.queryByText("Approved final draft for manual handoff.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Thank you for your interest.")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("最终草稿")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制草稿" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "下载 .txt" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "发送（暂未接入）" })).not.toBeInTheDocument();
   });
 
   it("starts a model failure from an empty composer and only retries when the operator clicks the action", async () => {

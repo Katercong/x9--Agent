@@ -390,13 +390,14 @@ export function OperatorWorkbench() {
     onError: (error) => messageApi.error(error instanceof Error ? error.message : "重新生成草稿失败"),
   });
 
-  const terminal = detailItem?.review_type === "decline" || detailItem?.review_type === "dnc_confirmation";
+  const dncBlocked = detailItem?.review_type === "dnc_confirmation";
+  const terminal = detailItem?.review_type === "decline" || dncBlocked;
   const modelFailure = detailItem?.review_type === "model_failure";
   const generationPending = detailItem?.review_type === "generation_pending";
-  const approvedDraft = detailItem?.review_type === "approved_draft";
-  const pendingDncConfirmation = detailItem?.review_type === "dnc_confirmation" && detailItem.dnc_confirmation?.status === "pending_confirmation";
+  const approvedDraft = detailItem?.review_type === "approved_draft" && !dncBlocked;
+  const pendingDncConfirmation = dncBlocked && detailItem.dnc_confirmation?.status === "pending_confirmation";
   const canDecide = Boolean(detailItem?.decision_available && detailItem.run && !terminal);
-  const canHandoff = Boolean(approvedDraft && detailItem?.decision?.outcome === "approve_draft" && detailItem.decision.final_draft);
+  const canHandoff = Boolean(!dncBlocked && approvedDraft && detailItem?.decision?.outcome === "approve_draft" && detailItem.decision.final_draft);
   const conversation = useMemo(() => (detail ? buildTimeline(detail.context) : []), [detail]);
   const displayTitle = detailItem?.reply.subject || detailItem?.reply.body.slice(0, 72) || "选择一条待处理回复";
 
@@ -496,6 +497,9 @@ export function OperatorWorkbench() {
               {terminal && detailItem.review_type === "decline" && (
                 <Alert className="conversation-state" type="warning" showIcon message="达人已明确拒绝" description="这是只读终态记录，不可起草、批准、复制或下载。" />
               )}
+              {dncBlocked && !pendingDncConfirmation && (
+                <Alert className="conversation-state" type="error" showIcon message="DNC 已确认并阻断" description="该达人此前的草稿已隐藏，不能复制、下载、交接或发送。" />
+              )}
               {pendingDncConfirmation && (
                 <Card className="terminal-action-card" size="small">
                   <Space direction="vertical" className="full-width">
@@ -584,7 +588,9 @@ export function OperatorWorkbench() {
               </div>
               <Card className="copilot-suggestion-card" size="small" title="AI 草稿与判断">
                 <Space direction="vertical" className="full-width" size="middle">
-                  {modelFailure ? (
+                  {dncBlocked ? (
+                    <Alert type="error" showIcon message="DNC 已阻断草稿" description="为避免误联系，系统不会显示此前的 AI 草稿，也不提供复制、下载、交接或发送入口。" />
+                  ) : modelFailure ? (
                     <>
                       <Alert type="warning" showIcon message="模型未生成可用建议" description={detailItem.run?.validation_error || detailItem.run?.error_summary || "请人工起草或重新生成。"} />
                       <Button icon={<ReloadOutlined />} loading={retryMutation.isPending} onClick={() => retryMutation.mutate(detailItem.reply.id)}>人工重新生成草稿</Button>
