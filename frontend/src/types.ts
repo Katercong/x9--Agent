@@ -1,6 +1,11 @@
-export type ReviewType = "standard" | "model_failure" | "decline" | "dnc_confirmation";
+export type ReviewType = "standard" | "model_failure" | "decline" | "dnc_confirmation" | "generation_pending" | "approved_draft";
 
-export type ReviewFilter = ReviewType | "all";
+/**
+ * `reply_ready` is a workbench-only aggregate: editable pending replies and
+ * approved drafts locked for manual handoff.  Individual API response items
+ * still retain their concrete `review_type`.
+ */
+export type ReviewFilter = ReviewType | "reply_ready" | "all";
 
 export interface InboundReply {
   id: string;
@@ -53,6 +58,7 @@ export interface ReviewQueueItem {
   reply: InboundReply;
   run: AgentRun | null;
   dnc_confirmation: DncConfirmation | null;
+  decision?: HumanReviewDecision | null;
 }
 
 export interface ReviewQueueResponse {
@@ -130,14 +136,40 @@ export interface ReviewItemDetail {
   runs: AgentRun[];
 }
 
+export interface HumanReviewDecision {
+  id: string;
+  creator_id: string;
+  inbound_reply_id: string;
+  agent_followup_run_id: string;
+  outcome: "approve_draft" | "close_without_draft";
+  final_draft: string | null;
+  note: string | null;
+  actor_id: string;
+  decided_at: string | null;
+  created_at: string | null;
+}
+
 export interface ReviewDecisionResponse {
   ok: true;
-  decision: {
-    id: string;
-    outcome: "approve_draft" | "close_without_draft";
-    final_draft: string | null;
-  };
+  decision: HumanReviewDecision;
   reply: InboundReply;
+}
+
+export interface DraftExportRecord {
+  id: string;
+  human_review_decision_id: string;
+  creator_id: string;
+  inbound_reply_id: string;
+  exported_content: string;
+  actor_id: string;
+  exported_at: string | null;
+  created_at: string | null;
+  delivery_status: "not_sent_by_system";
+}
+
+export interface DraftExportResponse {
+  ok: true;
+  export: DraftExportRecord;
 }
 
 export interface DncConfirmationApproveResponse {

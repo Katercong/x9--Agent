@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -344,12 +344,28 @@ def list_human_review_queue(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """列出普通、模型失败、拒绝和 DNC 待审项。"""
+    """列出工作台中的待审、生成中与已批准草稿项。"""
 
-    allowed_review_types = {"standard", "model_failure", "decline", "dnc_confirmation"}
+    allowed_review_types = {
+        "standard",
+        "model_failure",
+        "decline",
+        "dnc_confirmation",
+        "generation_pending",
+        "approved_draft",
+        "reply_ready",
+    }
     if review_type is not None and review_type not in allowed_review_types:
         raise HTTPException(status_code=422, detail="unknown review_type")
-    filters = [InboundReply.processing_status == "need_ai_review"]
+    approved_reply_ids = select(HumanReviewDecision.inbound_reply_id).where(
+        HumanReviewDecision.outcome == "approve_draft"
+    )
+    filters = [
+        or_(
+            InboundReply.processing_status == "need_ai_review",
+            InboundReply.id.in_(approved_reply_ids),
+        )
+    ]
     if department_code:
         filters.append(InboundReply.department_code == department_code)
     replies = list(
@@ -362,7 +378,10 @@ def list_human_review_queue(
     items = []
     for reply in replies:
         item = _review_queue_item_to_dict(db, reply)
-        if review_type is not None and item["review_type"] != review_type:
+        is_reply_ready = item["review_type"] in {"standard", "approved_draft"}
+        if review_type == "reply_ready" and not is_reply_ready:
+            continue
+        if review_type not in {None, "reply_ready"} and item["review_type"] != review_type:
             continue
         items.append(item)
     total = len(items)
@@ -371,13 +390,19 @@ def list_human_review_queue(
 
 @app.get("/api/followup-agent/review-items/{reply_id}")
 def get_human_review_item(reply_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    """读取待审项的当前上下文与完整 Agent run 留痕，不写入业务数据。"""
+    """读取工作台项的当前上下文与完整 Agent run 留痕，不写入业务数据。"""
 
     reply = db.get(InboundReply, reply_id)
     if reply is None:
         raise HTTPException(status_code=404, detail="inbound reply not found")
-    if reply.processing_status != "need_ai_review":
-        raise HTTPException(status_code=409, detail="reply is not pending human review")
+    approved_decision = db.scalar(
+        select(HumanReviewDecision)
+        .where(HumanReviewDecision.inbound_reply_id == reply.id)
+        .where(HumanReviewDecision.outcome == "approve_draft")
+        .limit(1)
+    )
+    if reply.processing_status != "need_ai_review" and approved_decision is None:
+        raise HTTPException(status_code=409, detail="reply is not available in the operator workbench")
     runs = list(
         db.scalars(
             select(AgentFollowupRun)
@@ -670,6 +695,34 @@ def get_human_review_decision(decision_id: str, db: Session = Depends(get_db)) -
     }
 
 
+@app.get("/api/followup-agent/review-decisions/{decision_id}/delivery-capability")
+def get_draft_delivery_capability(decision_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """返回未来渠道交接的能力边界；该预留接口不发送也不写入任何数据。"""
+
+    decision = db.get(HumanReviewDecision, decision_id)
+    if decision is None:
+        raise HTTPException(status_code=404, detail="human review decision not found")
+    if decision.outcome != "approve_draft" or not decision.final_draft:
+        raise HTTPException(status_code=409, detail="human review decision has no approved draft")
+
+    creator = db.get(Creator, decision.creator_id)
+    if is_creator_contact_blocked(creator):
+        return {
+            "ok": True,
+            "delivery_available": False,
+            "delivery_status": "not_sent_by_system",
+            "delivery_mode": "blocked_by_do_not_contact",
+            "reason": "do not contact creator cannot receive a draft handoff",
+        }
+    return {
+        "ok": True,
+        "delivery_available": False,
+        "delivery_status": "not_sent_by_system",
+        "delivery_mode": "manual_copy_or_export_only",
+        "reason": "external delivery channels are not configured",
+    }
+
+
 @app.post("/api/followup-agent/review-decisions/{decision_id}/exports", status_code=201)
 def create_draft_export_record(
     decision_id: str, body: DraftExportCreateIn, db: Session = Depends(get_db)
@@ -749,7 +802,7 @@ def _get_or_create_existing_run(db: Session, reply: InboundReply, run_agent: boo
 
 
 def _review_queue_item_to_dict(db: Session, reply: InboundReply) -> dict[str, Any]:
-    """Build the shared queue/detail representation for one pending review reply."""
+    """Build the shared queue/detail representation for one workbench reply."""
 
     latest_run = db.scalars(
         select(AgentFollowupRun)
@@ -763,10 +816,20 @@ def _review_queue_item_to_dict(db: Session, reply: InboundReply) -> dict[str, An
         .where(DoNotContactConfirmation.status == "pending_confirmation")
         .limit(1)
     ).first()
-    if dnc_confirmation is not None:
+    decision = db.scalars(
+        select(HumanReviewDecision)
+        .where(HumanReviewDecision.inbound_reply_id == reply.id)
+        .order_by(HumanReviewDecision.decided_at.desc(), HumanReviewDecision.id.desc())
+        .limit(1)
+    ).first()
+    if decision is not None and decision.outcome == "approve_draft":
+        review_type = "approved_draft"
+    elif dnc_confirmation is not None:
         review_type = "dnc_confirmation"
     elif reply.reply_category == "not_interested":
         review_type = "decline"
+    elif latest_run is not None and latest_run.execution_status in {"queued", "running"}:
+        review_type = "generation_pending"
     elif latest_run is not None and latest_run.execution_status == "failed":
         review_type = "model_failure"
     else:
@@ -782,6 +845,7 @@ def _review_queue_item_to_dict(db: Session, reply: InboundReply) -> dict[str, An
         "reply": _reply_to_dict(reply),
         "run": _run_to_dict(latest_run) if latest_run is not None else None,
         "dnc_confirmation": _dnc_confirmation_to_dict(dnc_confirmation) if dnc_confirmation else None,
+        "decision": _human_review_decision_to_dict(decision) if decision is not None else None,
     }
 
 

@@ -1,4 +1,4 @@
-import type { DncConfirmationApproveResponse, DncConfirmationRejectResponse, FailedReviewRetryResponse, ReviewDecisionResponse, ReviewItemDetail, ReviewQueueResponse, ReviewType } from "./types";
+import type { DncConfirmationApproveResponse, DncConfirmationRejectResponse, DraftExportResponse, FailedReviewRetryResponse, ReviewDecisionResponse, ReviewFilter, ReviewItemDetail, ReviewQueueResponse } from "./types";
 
 const API_ROOT = "/api/followup-agent";
 const DEMO_ACTOR_ID = "demo_operator";
@@ -22,7 +22,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-export function getReviewQueue(reviewType?: ReviewType): Promise<ReviewQueueResponse> {
+export function getReviewQueue(reviewType?: Exclude<ReviewFilter, "all">): Promise<ReviewQueueResponse> {
   const query = reviewType ? `?review_type=${encodeURIComponent(reviewType)}` : "";
   return request<ReviewQueueResponse>(`/review-queue${query}`);
 }
@@ -44,6 +44,13 @@ export function submitReviewDecision(input: {
       final_draft: input.outcome === "approve_draft" ? input.finalDraft?.trim() : undefined,
       actor_id: DEMO_ACTOR_ID,
     }),
+  });
+}
+
+export function createDraftExportRecord(decisionId: string): Promise<DraftExportResponse> {
+  return request<DraftExportResponse>(`/review-decisions/${encodeURIComponent(decisionId)}/exports`, {
+    method: "POST",
+    body: JSON.stringify({ actor_id: DEMO_ACTOR_ID }),
   });
 }
 

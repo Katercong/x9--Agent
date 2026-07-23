@@ -487,7 +487,7 @@ def test_human_can_reject_pending_dnc_and_requeue_it_for_standard_review():
     assert dnc_queue.json()["total"] == 0
     detail = client.get(f"/api/followup-agent/review-items/{opt_out.json()['reply']['id']}")
     assert detail.status_code == 200, detail.text
-    assert detail.json()["item"]["review_type"] == "standard"
+    assert detail.json()["item"]["review_type"] == "generation_pending"
     assert detail.json()["item"]["decision_available"] is False
     assert detail.json()["runs"][-1]["id"] == payload["run"]["id"]
     assert client.get(f"/api/followup-agent/outbound-instructions?creator_id={creator_id}").json()["total"] == 0
@@ -1359,7 +1359,121 @@ def test_standard_human_review_queue_approves_draft_without_advancing_creator_st
 
     queue_after_review = client.get("/api/followup-agent/review-queue")
     assert queue_after_review.status_code == 200, queue_after_review.text
-    assert all(row["reply"]["id"] != reply_id for row in queue_after_review.json()["items"])
+    approved_item = next(row for row in queue_after_review.json()["items"] if row["reply"]["id"] == reply_id)
+    assert approved_item["review_type"] == "approved_draft"
+    assert approved_item["decision_available"] is False
+    assert approved_item["decision"]["id"] == payload["decision"]["id"]
+
+
+def test_operator_workbench_queue_lists_generation_pending_and_approved_drafts():
+    """工作台应分别展示 Agent 正在生成的回复和可人工交接的已批准草稿。"""
+
+    client = TestClient(app)
+
+    approved_creator_id = "creator_workbench_approved_draft"
+    _create_creator(client, approved_creator_id)
+    approved_source = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": approved_creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert approved_source.status_code == 200, approved_source.text
+    approved_reply_id = approved_source.json()["reply"]["id"]
+    approved_run = _process_response_run(client, approved_source)
+    approved = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": approved_run["id"],
+            "outcome": "approve_draft",
+            "final_draft": "Approved draft for manual handoff only.",
+            "actor_id": "reviewer_workbench",
+        },
+    )
+    assert approved.status_code == 201, approved.text
+    decision_id = approved.json()["decision"]["id"]
+
+    queued_creator_id = "creator_workbench_generation_pending"
+    _create_creator(client, queued_creator_id)
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": queued_creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert queued.status_code == 200, queued.text
+    queued_reply_id = queued.json()["reply"]["id"]
+    assert queued.json()["run"]["execution_status"] == "queued"
+
+    queue = client.get("/api/followup-agent/review-queue")
+    assert queue.status_code == 200, queue.text
+    items_by_reply_id = {item["reply"]["id"]: item for item in queue.json()["items"]}
+    generation_item = items_by_reply_id[queued_reply_id]
+    assert generation_item["review_type"] == "generation_pending"
+    assert generation_item["decision_available"] is False
+    assert generation_item["run"]["execution_status"] == "queued"
+    approved_item = items_by_reply_id[approved_reply_id]
+    assert approved_item["review_type"] == "approved_draft"
+    assert approved_item["decision_available"] is False
+    assert approved_item["decision"]["id"] == decision_id
+    assert approved_item["decision"]["final_draft"] == "Approved draft for manual handoff only."
+
+    for review_type, reply_id in (("generation_pending", queued_reply_id), ("approved_draft", approved_reply_id)):
+        filtered = client.get(f"/api/followup-agent/review-queue?review_type={review_type}")
+        assert filtered.status_code == 200, filtered.text
+        assert filtered.json()["total"] == 1
+        assert filtered.json()["items"][0]["reply"]["id"] == reply_id
+
+    approved_detail = client.get(f"/api/followup-agent/review-items/{approved_reply_id}")
+    assert approved_detail.status_code == 200, approved_detail.text
+    assert approved_detail.json()["item"]["review_type"] == "approved_draft"
+    assert approved_detail.json()["item"]["decision"]["id"] == decision_id
+
+
+def test_operator_workbench_reply_ready_filter_combines_pending_and_locked_drafts():
+    """“人工回复草稿”聚合只读筛选应同时返回待审核项和已锁定的批准草稿。"""
+
+    client = TestClient(app)
+
+    pending_creator_id = "creator_workbench_reply_ready_pending"
+    _create_creator(client, pending_creator_id)
+    pending_source = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": pending_creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert pending_source.status_code == 200, pending_source.text
+    pending_reply_id = pending_source.json()["reply"]["id"]
+    pending_run = _process_response_run(client, pending_source)
+    assert pending_run["execution_status"] == "succeeded"
+
+    approved_creator_id = "creator_workbench_reply_ready_approved"
+    _create_creator(client, approved_creator_id)
+    approved_source = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": approved_creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert approved_source.status_code == 200, approved_source.text
+    approved_reply_id = approved_source.json()["reply"]["id"]
+    approved_run = _process_response_run(client, approved_source)
+    approved = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": approved_run["id"],
+            "outcome": "approve_draft",
+            "final_draft": "Locked draft for manual handoff.",
+            "actor_id": "reviewer_workbench",
+        },
+    )
+    assert approved.status_code == 201, approved.text
+
+    reply_ready = client.get("/api/followup-agent/review-queue?review_type=reply_ready")
+    assert reply_ready.status_code == 200, reply_ready.text
+    assert reply_ready.json()["total"] == 2
+    items_by_reply_id = {item["reply"]["id"]: item for item in reply_ready.json()["items"]}
+    assert items_by_reply_id[pending_reply_id]["review_type"] == "standard"
+    assert items_by_reply_id[pending_reply_id]["decision_available"] is True
+    assert items_by_reply_id[approved_reply_id]["review_type"] == "approved_draft"
+    assert items_by_reply_id[approved_reply_id]["decision_available"] is False
+    assert items_by_reply_id[approved_reply_id]["decision"]["final_draft"] == "Locked draft for manual handoff."
+
+    assert client.get("/api/followup-agent/review-queue?review_type=standard").json()["total"] == 1
+    assert client.get("/api/followup-agent/review-queue?review_type=approved_draft").json()["total"] == 1
 
 
 def test_review_queue_separates_model_failures_from_standard_and_terminal_items(monkeypatch):
@@ -1603,7 +1717,7 @@ def test_review_item_detail_keeps_terminal_items_read_only_and_rejects_non_pendi
     assert reviewed.status_code == 201, reviewed.text
     non_pending = client.get(f"/api/followup-agent/review-items/{standard.json()['reply']['id']}")
     assert non_pending.status_code == 409
-    assert non_pending.json()["detail"] == "reply is not pending human review"
+    assert non_pending.json()["detail"] == "reply is not available in the operator workbench"
 
 
 def test_standard_human_review_can_close_completed_run_without_draft():
@@ -1748,6 +1862,18 @@ def test_approved_draft_export_is_audited_and_dnc_blocks_later_export_and_runs()
     assert exported.json()["export"]["exported_content"] == "Here are the reviewed campaign details."
     assert exported.json()["export"]["delivery_status"] == "not_sent_by_system"
 
+    capability_before_dnc = client.get(
+        f"/api/followup-agent/review-decisions/{decision_id}/delivery-capability"
+    )
+    assert capability_before_dnc.status_code == 200, capability_before_dnc.text
+    assert capability_before_dnc.json() == {
+        "ok": True,
+        "delivery_available": False,
+        "delivery_status": "not_sent_by_system",
+        "delivery_mode": "manual_copy_or_export_only",
+        "reason": "external delivery channels are not configured",
+    }
+
     decision = client.get(f"/api/followup-agent/review-decisions/{decision_id}")
     assert decision.status_code == 200, decision.text
     assert len(decision.json()["exports"]) == 1
@@ -1765,6 +1891,14 @@ def test_approved_draft_export_is_audited_and_dnc_blocks_later_export_and_runs()
     )
     assert blocked_export.status_code == 409
     assert blocked_export.json()["detail"] == "do not contact creator cannot export draft"
+
+    capability_after_dnc = client.get(
+        f"/api/followup-agent/review-decisions/{decision_id}/delivery-capability"
+    )
+    assert capability_after_dnc.status_code == 200, capability_after_dnc.text
+    assert capability_after_dnc.json()["delivery_available"] is False
+    assert capability_after_dnc.json()["delivery_status"] == "not_sent_by_system"
+    assert capability_after_dnc.json()["delivery_mode"] == "blocked_by_do_not_contact"
 
     later_reply = client.post(
         "/api/followup-agent/simulate-reply",

@@ -49,13 +49,23 @@ const standardItem: ReviewQueueItem = {
   dnc_confirmation: null,
 };
 
-const dncItem: ReviewQueueItem = {
+const approvedDraftItem: ReviewQueueItem = {
   ...standardItem,
-  review_type: "dnc_confirmation",
+  review_type: "approved_draft",
   decision_available: false,
-  reply: { ...standardItem.reply, id: "reply_dnc", body: "Please unsubscribe me.", reply_category: "not_interested" },
-  run: null,
-  dnc_confirmation: { id: "dnc_1", reason: "explicit_opt_out", status: "pending_confirmation", created_at: "2026-07-22T11:00:00" },
+  reply: { ...standardItem.reply, id: "reply_approved", body: "Please share the next steps.", processing_status: "reviewed" },
+  decision: {
+    id: "decision_approved",
+    creator_id: "creator_1",
+    inbound_reply_id: "reply_approved",
+    agent_followup_run_id: "run_standard",
+    outcome: "approve_draft",
+    final_draft: "Approved final draft for manual handoff.",
+    note: "Reviewed by demo operator.",
+    actor_id: "demo_operator",
+    decided_at: "2026-07-22T12:00:00",
+    created_at: "2026-07-22T12:00:00",
+  },
 };
 
 const modelFailureItem: ReviewQueueItem = {
@@ -72,6 +82,15 @@ const modelFailureItem: ReviewQueueItem = {
     output: { raw_output: "{invalid model output}" },
     validation_error: "suggested_reply: Field required",
   },
+};
+
+const dncItem: ReviewQueueItem = {
+  ...standardItem,
+  review_type: "dnc_confirmation",
+  decision_available: false,
+  reply: { ...standardItem.reply, id: "reply_dnc", body: "Please unsubscribe me.", reply_category: "not_interested" },
+  run: null,
+  dnc_confirmation: { id: "dnc_1", reason: "explicit_opt_out", status: "pending_confirmation", created_at: "2026-07-22T11:00:00" },
 };
 
 function detailFor(item: ReviewQueueItem): ReviewItemDetail {
@@ -106,8 +125,8 @@ function detailFor(item: ReviewQueueItem): ReviewItemDetail {
         notes: null,
       },
       inbound_reply: item.reply,
-      recent_inbound_replies: [],
-      recent_outreach_emails: [],
+      recent_inbound_replies: [{ id: "inbound_old", subject: "Re: Campaign", body: "What is the budget range?", message_at: "2026-07-21T09:00:00" }],
+      recent_outreach_emails: [{ id: "outbound_old", subject: "Campaign introduction", body: "We would like to explore a collaboration.", sent_at: "2026-07-21T08:00:00" }],
       recent_events: [],
       open_followup_tasks: [],
       reference_materials: [{ reference_key: "policy", title: "Policy", content: "Synthetic policy.", version: 1 }],
@@ -144,199 +163,152 @@ describe("OperatorWorkbench", () => {
     vi.unstubAllGlobals();
   });
 
-  it("edits and submits a human-approved standard draft through the real review API contract", async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+  it("uses the merged reply-ready queue and renders a client conversation timeline with AI kept out of the message stream", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/review-queue")) return jsonResponse({ ok: true, total: 1, items: [standardItem] });
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 2, items: [standardItem, approvedDraftItem] });
       if (url.includes("/review-items/reply_standard")) return jsonResponse(detailFor(standardItem));
-      if (url.endsWith("/review-decisions") && init?.method === "POST") {
-        return jsonResponse({ ok: true, decision: { id: "decision_1", outcome: "approve_draft", final_draft: "Human final draft." }, reply: standardItem.reply });
-      }
       throw new Error(`Unexpected request: ${url}`);
     });
 
+    renderWorkbench();
+
+    expect(await screen.findByText("人工回复草稿")).toBeInTheDocument();
+    await screen.findByLabelText("最终草稿");
+    expect(screen.getAllByText("待审核").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("已锁定待交接").length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/达人回复/)).length).toBe(2);
+    expect(screen.getByText(/历史建联记录/)).toBeInTheDocument();
+    expect(screen.getByText("What is the budget range?")).toBeInTheDocument();
+    expect(screen.getByText("We would like to explore a collaboration.")).toBeInTheDocument();
+    expect(screen.getByText("AI 协作建议")).toBeInTheDocument();
+    expect(screen.getAllByText("Thank you for your interest.").length).toBe(2);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("review_type=reply_ready"))).toBe(true);
+    expect(screen.queryByText("AI 回复")).not.toBeInTheDocument();
+  });
+
+  it("lets an operator edit and lock a draft through the decision API without any sending request", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 1, items: [standardItem] });
+      if (url.includes("/review-items/reply_standard")) return jsonResponse(detailFor(standardItem));
+      if (url.endsWith("/review-decisions") && init?.method === "POST") {
+        return jsonResponse({ ok: true, decision: { ...approvedDraftItem.decision, final_draft: "Human final draft." }, reply: standardItem.reply });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
     const user = userEvent.setup();
     renderWorkbench();
 
     const draft = await screen.findByLabelText("最终草稿");
     await user.clear(draft);
     await user.type(draft, "Human final draft.");
-    await user.click(screen.getByRole("button", { name: /批准草稿/ }));
+    await user.click(screen.getByRole("button", { name: /批准并锁定草稿/ }));
 
     await waitFor(() => {
       const decisionCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith("/review-decisions") && init?.method === "POST");
       expect(decisionCall).toBeDefined();
-      expect(JSON.parse(decisionCall?.[1].body as string)).toEqual({
+      expect(JSON.parse(decisionCall?.[1].body as string)).toMatchObject({
         agent_followup_run_id: "run_standard",
         outcome: "approve_draft",
         final_draft: "Human final draft.",
         actor_id: "demo_operator",
       });
     });
+    expect(fetchMock.mock.calls.some(([url]) => /send/i.test(String(url)))).toBe(false);
   });
 
-  it("renders AI actions, confidence, and review prompts in operator-friendly Chinese", async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+  it("shows an approved draft as locked manual handoff and audits both copy and download actions", async () => {
+    const createObjectUrl = vi.fn(() => "blob:approved-draft");
+    const revokeObjectUrl = vi.fn();
+    const anchorClick = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectUrl });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectUrl });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(anchorClick);
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/review-queue")) return jsonResponse({ ok: true, total: 1, items: [standardItem] });
-      if (url.includes("/review-items/reply_standard")) return jsonResponse(detailFor(standardItem));
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 1, items: [approvedDraftItem] });
+      if (url.includes("/review-items/reply_approved")) return jsonResponse(detailFor(approvedDraftItem));
+      if (url.endsWith("/review-decisions/decision_approved/exports") && init?.method === "POST") {
+        return jsonResponse({ ok: true, export: { id: "export_1", delivery_status: "not_sent_by_system" } });
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
-
-    renderWorkbench();
-
-    expect(await screen.findByText("建议下一步：整理合作资料，待人工确认")).toBeInTheDocument();
-    expect(screen.getByText("判断把握：高（88%）")).toBeInTheDocument();
-    expect(screen.getByText("复核提示：需人工确认后才能继续")).toBeInTheDocument();
-    expect(screen.queryByText("send_campaign_details")).not.toBeInTheDocument();
-    expect(screen.queryByText("human_approval_required")).not.toBeInTheDocument();
-  });
-
-  it("shows complete queue category labels and operational guidance", async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/review-queue")) return jsonResponse({ ok: true, total: 1, items: [standardItem] });
-      if (url.includes("/review-items/reply_standard")) return jsonResponse(detailFor(standardItem));
-      throw new Error(`Unexpected request: ${url}`);
-    });
-
     const user = userEvent.setup();
     renderWorkbench();
 
-    expect(await screen.findByText("查看全部待审项目")).toBeInTheDocument();
-    expect(screen.getByText("AI 已生成草稿，可编辑后决定")).toBeInTheDocument();
-    expect(screen.getByText("AI 未产出有效草稿，需人工起草")).toBeInTheDocument();
-    expect(screen.getByText("终态项目，仅供查看")).toBeInTheDocument();
-    expect(screen.getByText("确认永久停止联系，或驳回后重新审核")).toBeInTheDocument();
+    expect(await screen.findByText("Approved final draft for manual handoff.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("最终草稿")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "发送（暂未接入）" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /复制草稿/ }));
+    await user.click(screen.getByRole("button", { name: /下载 .txt/ }));
 
-    await user.click(screen.getByRole("button", { name: /模型失败.*AI 未产出有效草稿/ }));
-
-    await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("review_type=model_failure"))).toBe(true);
-    });
-    expect(screen.getByRole("button", { name: /模型失败.*AI 未产出有效草稿/ })).toHaveAttribute("aria-pressed", "true");
+    expect(anchorClick).toHaveBeenCalledTimes(1);
+    expect(createObjectUrl).toHaveBeenCalledTimes(1);
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:approved-draft");
+    const exportCalls = fetchMock.mock.calls.filter(([url, init]) => String(url).endsWith("/review-decisions/decision_approved/exports") && init?.method === "POST");
+    expect(exportCalls).toHaveLength(2);
+    expect(fetchMock.mock.calls.some(([url]) => /send/i.test(String(url)))).toBe(false);
   });
 
-  it("renders pending DNC items without draft or sending controls, but with human confirmation and rejection actions", async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+  it("keeps DNC in a terminal review flow with confirmation and rejection, never draft or handoff controls", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/review-queue")) return jsonResponse({ ok: true, total: 1, items: [dncItem] });
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 1, items: [dncItem] });
       if (url.includes("/review-items/reply_dnc")) return jsonResponse(detailFor(dncItem));
+      if (url.endsWith("/dnc-confirmations/dnc_1/approve") && init?.method === "POST") {
+        return jsonResponse({ ok: true, confirmation: { ...dncItem.dnc_confirmation, status: "confirmed" }, creator: { id: "creator_1", do_not_contact_status: "confirmed" }, reply: dncItem.reply });
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
-
+    const user = userEvent.setup();
     renderWorkbench();
 
     expect(await screen.findByText("DNC 待人工确认")).toBeInTheDocument();
     expect(screen.queryByLabelText("最终草稿")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /批准草稿/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "确认 DNC" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "驳回 DNC" })).toBeEnabled();
-    expect(screen.queryByRole("button", { name: /发送/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制草稿" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /确认 DNC/ }));
+    const confirmationButtons = await screen.findAllByRole("button", { name: /确认 DNC/ });
+    await user.click(confirmationButtons.at(-1)!);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith("/dnc-confirmations/dnc_1/approve") && init?.method === "POST")).toBe(true));
+    expect(fetchMock.mock.calls.some(([url]) => /send/i.test(String(url)))).toBe(false);
   });
 
-  it("confirms DNC through the dedicated human-review API without any sending action", async () => {
+  it("starts a model failure from an empty composer and only retries when the operator clicks the action", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/review-queue")) return jsonResponse({ ok: true, total: 1, items: [dncItem] });
-      if (url.includes("/review-items/reply_dnc")) return jsonResponse(detailFor(dncItem));
-      if (url.endsWith("/dnc-confirmations/dnc_1/approve") && init?.method === "POST") {
-        return jsonResponse({
-          ok: true,
-          confirmation: { ...dncItem.dnc_confirmation, status: "confirmed", reviewed_by: "demo_operator", reviewed_at: "2026-07-22T11:05:00" },
-          creator: { id: "creator_1", do_not_contact_status: "confirmed" },
-          reply: { ...dncItem.reply, processing_status: "reviewed" },
-        });
-      }
-      throw new Error(`Unexpected request: ${url}`);
-    });
-
-    const user = userEvent.setup();
-    renderWorkbench();
-
-    await screen.findByText("DNC 待人工确认");
-    await user.click(screen.getByRole("button", { name: "确认 DNC" }));
-    await user.click(await screen.findByRole("button", { name: "确认永久 DNC" }));
-
-    await waitFor(() => {
-      const confirmationCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith("/dnc-confirmations/dnc_1/approve") && init?.method === "POST");
-      expect(confirmationCall).toBeDefined();
-      expect(JSON.parse(confirmationCall?.[1].body as string)).toEqual({ actor_id: "demo_operator" });
-    });
-  });
-
-  it("rejects DNC and queues a new ordinary review without any sending action", async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("/review-queue")) return jsonResponse({ ok: true, total: 1, items: [dncItem] });
-      if (url.includes("/review-items/reply_dnc")) return jsonResponse(detailFor(dncItem));
-      if (url.endsWith("/dnc-confirmations/dnc_1/reject") && init?.method === "POST") {
-        return jsonResponse({
-          ok: true,
-          confirmation: { ...dncItem.dnc_confirmation, status: "rejected", reviewed_by: "demo_operator", reviewed_at: "2026-07-22T11:05:00" },
-          creator: { id: "creator_1", do_not_contact_status: "none" },
-          reply: { ...dncItem.reply, reply_category: "unclear" },
-          run: { ...standardItem.run!, id: "run_dnc_retry", inbound_reply_id: "reply_dnc", execution_status: "queued", llm_status: "pending", created_by: "demo_operator" },
-        });
-      }
-      throw new Error(`Unexpected request: ${url}`);
-    });
-
-    const user = userEvent.setup();
-    renderWorkbench();
-
-    await screen.findByText("DNC 待人工确认");
-    await user.click(screen.getByRole("button", { name: "驳回 DNC" }));
-    await user.click(await screen.findByRole("button", { name: "驳回并重新审核" }));
-
-    await waitFor(() => {
-      const rejectionCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith("/dnc-confirmations/dnc_1/reject") && init?.method === "POST");
-      expect(rejectionCall).toBeDefined();
-      expect(JSON.parse(rejectionCall?.[1].body as string)).toEqual({ actor_id: "demo_operator" });
-    });
-    expect(screen.queryByRole("button", { name: /发送/ })).not.toBeInTheDocument();
-  });
-
-  it("starts a model-failure review with an empty human-authored draft", async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/review-queue")) return jsonResponse({ ok: true, total: 1, items: [modelFailureItem] });
-      if (url.includes("/review-items/reply_failure")) return jsonResponse(detailFor(modelFailureItem));
-      throw new Error(`Unexpected request: ${url}`);
-    });
-
-    renderWorkbench();
-
-    expect(await screen.findByText("模型未生成可用建议")).toBeInTheDocument();
-    expect(await screen.findByLabelText("最终草稿")).toHaveValue("");
-    expect(screen.getByText("suggested_reply: Field required")).toBeInTheDocument();
-  });
-
-  it("queues a new audited run when a human retries a model failure", async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("/review-queue")) return jsonResponse({ ok: true, total: 1, items: [modelFailureItem] });
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 1, items: [modelFailureItem] });
       if (url.includes("/review-items/reply_failure")) return jsonResponse(detailFor(modelFailureItem));
       if (url.endsWith("/review-items/reply_failure/retry") && init?.method === "POST") {
-        return jsonResponse({
-          ok: true,
-          reply: modelFailureItem.reply,
-          run: { ...modelFailureItem.run!, id: "run_failure_retry", execution_status: "queued", llm_status: "pending", created_by: "demo_operator" },
-        });
+        return jsonResponse({ ok: true, reply: modelFailureItem.reply, run: { ...modelFailureItem.run, id: "run_retry", execution_status: "queued" } });
       }
       throw new Error(`Unexpected request: ${url}`);
     });
-
     const user = userEvent.setup();
     renderWorkbench();
 
-    await screen.findByText("模型未生成可用建议");
-    await user.click(screen.getByRole("button", { name: "人工重新生成草稿" }));
+    expect((await screen.findAllByText("模型未生成可用建议")).length).toBe(2);
+    expect(await screen.findByLabelText("最终草稿")).toHaveValue("");
+    expect(screen.getByText("suggested_reply: Field required")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /人工重新生成草稿/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith("/review-items/reply_failure/retry") && init?.method === "POST")).toBe(true));
+  });
 
-    await waitFor(() => {
-      const retryCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith("/review-items/reply_failure/retry") && init?.method === "POST");
-      expect(retryCall).toBeDefined();
-      expect(JSON.parse(retryCall?.[1].body as string)).toEqual({ actor_id: "demo_operator" });
+  it("switches queue categories through the real API filter rather than treating terminal items as reply-ready", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("review_type=model_failure")) return jsonResponse({ ok: true, total: 1, items: [modelFailureItem] });
+      if (url.includes("/review-items/reply_failure")) return jsonResponse(detailFor(modelFailureItem));
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 1, items: [standardItem] });
+      if (url.includes("/review-items/reply_standard")) return jsonResponse(detailFor(standardItem));
+      throw new Error(`Unexpected request: ${url}`);
     });
+    const user = userEvent.setup();
+    renderWorkbench();
+
+    await screen.findByText("人工回复草稿");
+    await user.click(screen.getByRole("button", { name: /模型生成失败.*可人工起草/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("review_type=model_failure"))).toBe(true));
+    expect(screen.getByRole("button", { name: /模型生成失败.*可人工起草/ })).toHaveAttribute("aria-pressed", "true");
   });
 });
