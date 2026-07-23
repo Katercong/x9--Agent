@@ -378,6 +378,11 @@ def list_human_review_queue(
     items = []
     for reply in replies:
         item = _review_queue_item_to_dict(db, reply)
+        # A DNC confirmation is actionable only from the inbound reply that
+        # created it.  Older replies for the same creator remain blocked for
+        # direct audit reads, but must not duplicate the confirmation in queue.
+        if item["review_type"] == "dnc_blocked":
+            continue
         is_reply_ready = item["review_type"] in {"standard", "approved_draft"}
         if review_type == "reply_ready" and not is_reply_ready:
             continue
@@ -414,7 +419,7 @@ def get_human_review_item(reply_id: str, db: Session = Depends(get_db)) -> dict[
     # DNC is a conservative terminal boundary.  Keep run metadata available for
     # audit, but never expose a prior AI draft once the creator has requested or
     # confirmed do-not-contact.
-    dnc_blocked = item["review_type"] == "dnc_confirmation"
+    dnc_blocked = item["review_type"] in {"dnc_confirmation", "dnc_blocked"}
     return {
         "ok": True,
         "item": item,
@@ -832,7 +837,11 @@ def _review_queue_item_to_dict(db: Session, reply: InboundReply) -> dict[str, An
         .limit(1)
     ).first()
     if is_creator_contact_blocked(creator):
-        review_type = "dnc_confirmation"
+        review_type = (
+            "dnc_confirmation"
+            if dnc_confirmation is not None and dnc_confirmation.inbound_reply_id == reply.id
+            else "dnc_blocked"
+        )
     elif decision is not None and decision.outcome == "approve_draft":
         review_type = "approved_draft"
     elif reply.reply_category == "not_interested":
@@ -848,7 +857,7 @@ def _review_queue_item_to_dict(db: Session, reply: InboundReply) -> dict[str, An
         and latest_run is not None
         and latest_run.execution_status in {"succeeded", "failed"}
     )
-    dnc_blocked = review_type == "dnc_confirmation"
+    dnc_blocked = review_type in {"dnc_confirmation", "dnc_blocked"}
     run_payload = _run_to_dict(latest_run) if latest_run is not None else None
     decision_payload = _human_review_decision_to_dict(decision) if decision is not None else None
     if dnc_blocked:
@@ -859,7 +868,9 @@ def _review_queue_item_to_dict(db: Session, reply: InboundReply) -> dict[str, An
         "decision_available": decision_available,
         "reply": _reply_to_dict(reply),
         "run": run_payload,
-        "dnc_confirmation": _dnc_confirmation_to_dict(dnc_confirmation) if dnc_confirmation else None,
+        "dnc_confirmation": _dnc_confirmation_to_dict(dnc_confirmation)
+        if review_type == "dnc_confirmation" and dnc_confirmation
+        else None,
         "decision": decision_payload,
     }
 

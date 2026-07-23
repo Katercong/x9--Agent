@@ -95,6 +95,7 @@ const typeLabels: Record<ReviewType, string> = {
   approved_draft: "已锁定待交接",
   decline: "终态只读",
   dnc_confirmation: "DNC 待确认",
+  dnc_blocked: "DNC 已阻断",
 };
 
 const suggestedActionLabels: Record<string, string> = {
@@ -390,12 +391,12 @@ export function OperatorWorkbench() {
     onError: (error) => messageApi.error(error instanceof Error ? error.message : "重新生成草稿失败"),
   });
 
-  const dncBlocked = detailItem?.review_type === "dnc_confirmation";
+  const dncBlocked = detailItem?.review_type === "dnc_confirmation" || detailItem?.review_type === "dnc_blocked";
   const terminal = detailItem?.review_type === "decline" || dncBlocked;
   const modelFailure = detailItem?.review_type === "model_failure";
   const generationPending = detailItem?.review_type === "generation_pending";
   const approvedDraft = detailItem?.review_type === "approved_draft" && !dncBlocked;
-  const pendingDncConfirmation = dncBlocked && detailItem.dnc_confirmation?.status === "pending_confirmation";
+  const pendingDncConfirmation = detailItem?.review_type === "dnc_confirmation" && detailItem.dnc_confirmation?.status === "pending_confirmation";
   const canDecide = Boolean(detailItem?.decision_available && detailItem.run && !terminal);
   const canHandoff = Boolean(!dncBlocked && approvedDraft && detailItem?.decision?.outcome === "approve_draft" && detailItem.decision.final_draft);
   const conversation = useMemo(() => (detail ? buildTimeline(detail.context) : []), [detail]);

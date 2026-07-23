@@ -1,11 +1,11 @@
-export type ReviewType = "standard" | "model_failure" | "decline" | "dnc_confirmation" | "generation_pending" | "approved_draft";
+export type ReviewType = "standard" | "model_failure" | "decline" | "dnc_confirmation" | "dnc_blocked" | "generation_pending" | "approved_draft";
 
 /**
  * `reply_ready` is a workbench-only aggregate: editable pending replies and
  * approved drafts locked for manual handoff.  Individual API response items
  * still retain their concrete `review_type`.
  */
-export type ReviewFilter = ReviewType | "reply_ready" | "all";
+export type ReviewFilter = Exclude<ReviewType, "dnc_blocked"> | "reply_ready" | "all";
 
 export interface InboundReply {
   id: string;

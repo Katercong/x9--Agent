@@ -97,9 +97,9 @@ const dncItem: ReviewQueueItem = {
 // must still suppress it whenever the server classifies the creator as DNC.
 const dncBlockedApprovedItem: ReviewQueueItem = {
   ...approvedDraftItem,
-  review_type: "dnc_confirmation",
+  review_type: "dnc_blocked",
   decision_available: false,
-  dnc_confirmation: { id: "dnc_confirmed", reason: "explicit_opt_out", status: "confirmed", created_at: "2026-07-22T12:30:00" },
+  dnc_confirmation: null,
 };
 
 function detailFor(item: ReviewQueueItem): ReviewItemDetail {
@@ -299,6 +299,8 @@ describe("OperatorWorkbench", () => {
     expect(screen.queryByRole("button", { name: "复制草稿" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "下载 .txt" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "发送（暂未接入）" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "确认 DNC" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "驳回 DNC" })).not.toBeInTheDocument();
   });
 
   it("starts a model failure from an empty composer and only retries when the operator clicks the action", async () => {

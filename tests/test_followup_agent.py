@@ -1887,19 +1887,17 @@ def test_approved_draft_export_is_audited_and_dnc_blocks_later_export_and_runs()
     assert dnc_reply.json()["reply"]["processing_status"] == "need_ai_review"
 
     # A later opt-out takes precedence over an already approved draft for the
-    # same creator.  The old reply remains auditable, but it must no longer
-    # disclose a draft or expose a handoff path.
+    # same creator.  Only the reply that created the confirmation is actionable
+    # in the DNC queue; the old reply remains blocked for direct audit reads.
     dnc_queue = client.get("/api/followup-agent/review-queue?review_type=dnc_confirmation")
     assert dnc_queue.status_code == 200, dnc_queue.text
-    blocked_approved_item = next(
-        item for item in dnc_queue.json()["items"] if item["reply"]["id"] == approved_reply_id
-    )
-    assert blocked_approved_item["review_type"] == "dnc_confirmation"
-    assert blocked_approved_item["decision_available"] is False
-    assert blocked_approved_item["decision"] is None
-    assert blocked_approved_item["run"]["output"] is None
-    confirmation_id = blocked_approved_item["dnc_confirmation"]["id"]
-    assert blocked_approved_item["dnc_confirmation"]["status"] == "pending_confirmation"
+    assert dnc_queue.json()["total"] == 1
+    dnc_queue_item = dnc_queue.json()["items"][0]
+    assert dnc_queue_item["reply"]["id"] == dnc_reply.json()["reply"]["id"]
+    assert dnc_queue_item["review_type"] == "dnc_confirmation"
+    confirmation_id = dnc_queue_item["dnc_confirmation"]["id"]
+    assert dnc_queue_item["dnc_confirmation"]["status"] == "pending_confirmation"
+    assert approved_reply_id not in {item["reply"]["id"] for item in dnc_queue.json()["items"]}
 
     reply_ready = client.get("/api/followup-agent/review-queue?review_type=reply_ready")
     assert reply_ready.status_code == 200, reply_ready.text
@@ -1907,9 +1905,10 @@ def test_approved_draft_export_is_audited_and_dnc_blocks_later_export_and_runs()
 
     blocked_detail = client.get(f"/api/followup-agent/review-items/{approved_reply_id}")
     assert blocked_detail.status_code == 200, blocked_detail.text
-    assert blocked_detail.json()["item"]["review_type"] == "dnc_confirmation"
+    assert blocked_detail.json()["item"]["review_type"] == "dnc_blocked"
     assert blocked_detail.json()["item"]["decision"] is None
     assert blocked_detail.json()["item"]["run"]["output"] is None
+    assert blocked_detail.json()["item"]["dnc_confirmation"] is None
     assert blocked_detail.json()["runs"]
     assert all(run["output"] is None for run in blocked_detail.json()["runs"])
 
@@ -1922,16 +1921,13 @@ def test_approved_draft_export_is_audited_and_dnc_blocks_later_export_and_runs()
 
     confirmed_queue = client.get("/api/followup-agent/review-queue?review_type=dnc_confirmation")
     assert confirmed_queue.status_code == 200, confirmed_queue.text
-    confirmed_approved_item = next(
-        item for item in confirmed_queue.json()["items"] if item["reply"]["id"] == approved_reply_id
-    )
-    assert confirmed_approved_item["dnc_confirmation"]["status"] == "confirmed"
-    assert confirmed_approved_item["decision"] is None
-    assert confirmed_approved_item["run"]["output"] is None
+    assert confirmed_queue.json()["total"] == 0
 
     confirmed_detail = client.get(f"/api/followup-agent/review-items/{approved_reply_id}")
     assert confirmed_detail.status_code == 200, confirmed_detail.text
+    assert confirmed_detail.json()["item"]["review_type"] == "dnc_blocked"
     assert confirmed_detail.json()["item"]["decision"] is None
+    assert confirmed_detail.json()["item"]["dnc_confirmation"] is None
     assert all(run["output"] is None for run in confirmed_detail.json()["runs"])
 
     blocked_export = client.post(
