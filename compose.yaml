@@ -19,5 +19,64 @@ services:
       retries: 12
       start_period: 10s
 
+  migrate:
+    build:
+      context: .
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?Set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?Set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  worker:
+    build:
+      context: .
+    command: ["python", "-m", "app.worker"]
+    profiles: ["worker"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?Set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+      SILICONFLOW_MODEL: ${SILICONFLOW_MODEL:-deepseek-ai/DeepSeek-V3.2}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  demo-seed:
+    build:
+      context: .
+    command: ["python", "-m", "app.demo_seed"]
+    profiles: ["demo"]
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?Set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
 volumes:
   postgres_data:

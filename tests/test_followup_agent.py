@@ -21,6 +21,7 @@ from sqlalchemy import delete, func, select  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 from app.database import Base, SessionLocal, engine, init_db  # noqa: E402
+from app.demo_seed import seed_demo_data  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
     AgentFollowupRun,
@@ -2987,6 +2988,70 @@ def _process_response_run(client: TestClient, response: object) -> dict[str, obj
     completed = client.get(f"/api/followup-agent/runs/{run['id']}")
     assert completed.status_code == 200, completed.text
     return completed.json()["run"]
+
+
+def test_demo_seed_is_idempotent_and_populates_all_operator_workbench_states(monkeypatch):
+    """演示种子只写入固定本地样例，不能调用模型或创建外发指令。"""
+
+    monkeypatch.setattr(
+        services,
+        "generate_raw_followup_output",
+        lambda *_args, **_kwargs: pytest.fail("demo seed must not call the LLM generator"),
+    )
+
+    with SessionLocal() as db:
+        created = seed_demo_data(db)
+        db.commit()
+    assert created > 0
+
+    client = TestClient(app)
+    queue = client.get("/api/followup-agent/review-queue")
+    assert queue.status_code == 200, queue.text
+    assert {item["review_type"] for item in queue.json()["items"]} == {
+        "standard",
+        "model_failure",
+        "generation_pending",
+        "decline",
+        "dnc_confirmation",
+        "approved_draft",
+    }
+
+    standard_detail = client.get("/api/followup-agent/review-items/demo_reply_standard")
+    assert standard_detail.status_code == 200, standard_detail.text
+    context = standard_detail.json()["context"]
+    assert context["product"]["product_type"] == "demo_audio_accessory"
+    assert context["reference_materials"]
+    assert context["recent_inbound_replies"]
+    assert context["recent_outreach_emails"]
+    assert context["recent_events"]
+    assert context["open_followup_tasks"]
+    AgentSuggestion.model_validate(standard_detail.json()["item"]["run"]["output"])
+
+    failure = client.get("/api/followup-agent/review-items/demo_reply_failure")
+    assert failure.status_code == 200, failure.text
+    assert failure.json()["item"]["run"]["llm_status"] == "validation_failed"
+    assert failure.json()["item"]["run"]["validation_error"] == "suggested_reply and confidence are required"
+
+    with SessionLocal() as db:
+        counts_before = {
+            "creators": db.scalar(select(func.count()).select_from(Creator)),
+            "replies": db.scalar(select(func.count()).select_from(InboundReply)),
+            "runs": db.scalar(select(func.count()).select_from(AgentFollowupRun)),
+            "decisions": db.scalar(select(func.count()).select_from(HumanReviewDecision)),
+        }
+        assert db.scalar(select(func.count()).select_from(models.SimulatedOutboundInstruction)) == 0
+        second_created = seed_demo_data(db)
+        db.commit()
+        counts_after = {
+            "creators": db.scalar(select(func.count()).select_from(Creator)),
+            "replies": db.scalar(select(func.count()).select_from(InboundReply)),
+            "runs": db.scalar(select(func.count()).select_from(AgentFollowupRun)),
+            "decisions": db.scalar(select(func.count()).select_from(HumanReviewDecision)),
+        }
+        assert db.scalar(select(func.count()).select_from(models.SimulatedOutboundInstruction)) == 0
+
+    assert second_created == 0
+    assert counts_after == counts_before
 
 
 def _create_creator(
