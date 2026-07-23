@@ -4,9 +4,11 @@
 
 ## 当前范围
 
-当前系统是 FastAPI + SQLAlchemy + Pydantic 的后端 MVP，具备模拟入站、规则分类、异步 Agent run、LLM 草稿、人工审核状态和审计留痕。
+当前系统由 FastAPI + SQLAlchemy + Pydantic 后端和 React Operator Workbench 组成，具备模拟入站、规则分类、异步 Agent run、LLM 草稿、人工审核、草稿交接和审计留痕。
 
 当前不接入真实外部渠道，也没有自动发送能力。外接渠道尚未选定；模拟出站指令仅表示供人工处理的建议，绝不会实际发出消息。
+
+容器化工作台、受控 demo seed 与启动方式见 [operator-workbench-demo.md](operator-workbench-demo.md) 和 [postgresql.md](postgresql.md)。
 
 ## 本地运行
 
@@ -75,7 +77,7 @@ POST /simulate-reply
 - 模拟消息的幂等键由部门、达人、方向、收发地址、主题和正文确定，并生成可重放的确定性 `external_message_id`。
 - 真实渠道接入时必须使用 `channel + external_message_id`，且外部消息 ID 不能为空；当前没有真实渠道接收接口。
 - 规则分类是权威输入。模型只能生成草稿、建议和审核理由，不得自动写回非终态业务状态。
-- 退信进入 `ignored`，不创建 run 或普通跟进任务；拒绝和明确退订进入只读终态待审，不自动写入 `dropped` 或确认 DNC。待确认/已确认 DNC 会阻断新 run、导出和后续入站的 AI 处理。
+- 退信进入 `ignored`，不创建 run 或普通跟进任务；明确拒绝仍是只读终态待审，不自动写入 `dropped`。DNC 可由人工确认永久阻断，或驳回并显式重新入队；待确认/已确认 DNC 会阻断新 run、草稿、导出和后续入站的 AI 处理。
 - 明确退订还会在同一事务中把已有 `reply_followup_1` 的 `open/pending` 待办标记为 `blocked_dnc_pending`，避免人工沿历史待办继续联系。
 - 普通回复仅允许最新且没有活跃后继的完成 run 形成最终决定；每条回复在数据库中最多一条决定，`reviewed` 后不可重新排队。
 - 资料不足时，Worker 可以不调用模型而生成受限草稿，记录 `execution_status=succeeded`、`llm_status=skipped` 和 `block_reason=context_insufficient`，仍由人工审核。
@@ -122,11 +124,17 @@ POST /simulate-reply
 | `GET /api/followup-agent/replies/{reply_id}` | 查询回复分类和处理状态。 |
 | `GET /api/followup-agent/runs` | 查询 run 列表。 |
 | `GET /api/followup-agent/runs/{run_id}` | 查询单个 run 的审计信息。 |
-| `GET /api/followup-agent/review-queue` | 查询普通回复、拒绝或 DNC 待审队列；终态项只读。 |
+| `GET /api/followup-agent/review-queue` | 查询普通回复、模型失败、生成中、拒绝、DNC 或已批准草稿队列；支持 `reply_ready` 聚合。 |
+| `GET /api/followup-agent/review-items/{reply_id}` | 读取单项队列结构、完整上下文和全部 Agent run 留痕，不写入数据。 |
 | `POST /api/followup-agent/review-decisions` | 对普通回复批准最终草稿或关闭不使用草稿。 |
+| `POST /api/followup-agent/review-items/{reply_id}/retry` | 对模型失败项显式重新入队；活跃 run 冲突返回 `409`。 |
+| `POST /api/followup-agent/dnc-confirmations/{confirmation_id}/approve` | 人工确认 DNC 并永久阻断后续业务处理；不会发送消息。 |
+| `POST /api/followup-agent/dnc-confirmations/{confirmation_id}/reject` | 人工驳回 DNC 并重新创建审核 run；不会发送消息。 |
 | `GET /api/followup-agent/review-decisions/{decision_id}` | 查询人工决定及其草稿导出快照。 |
+| `GET /api/followup-agent/review-decisions/{decision_id}/delivery-capability` | 返回只读交接能力边界，始终不提供系统发送。 |
 | `POST /api/followup-agent/review-decisions/{decision_id}/exports` | 记录人工复制/导出的草稿快照；不会发送消息。 |
 | `GET /api/followup-agent/outbound-instructions` | 查询模拟出站指令，不会触发发送。 |
+| `GET /operator-workbench/` | 提供构建后的 React 人工审核工作台。 |
 | `GET /health` | 健康检查。 |
 
 ## 提示词与模型
@@ -134,7 +142,7 @@ POST /simulate-reply
 - 已验证的主力候选是 `deepseek-ai/DeepSeek-V3.2`，调用时传 `extra_body={"enable_thinking": false}`。
 - V4 Flash 使用 `reasoning_effort=high`；该参数不能无条件传给 V3.2。
 - V2 将规则分类视为权威输入，强制分类、动作、状态和人工审核映射；既有 24 条评测集上路由命中、JSON 和 Pydantic 均为 100%，P95 为 31.11 秒。
-- 当前代码默认值仍需以 [实现缺口复盘](implementation-gap-review.md) 为准，修改默认模型/提示词必须同时补充评测和回归测试。
+- 当前代码默认使用 V2 + DeepSeek V3.2；修改默认模型或提示词必须同时补充评测和回归测试。
 
 ## 变更纪律
 

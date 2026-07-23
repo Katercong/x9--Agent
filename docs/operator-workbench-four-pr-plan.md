@@ -1,6 +1,6 @@
 # Operator Workbench 四阶段实施计划
 
-> 状态：已评审的实施计划；事实完成状态仍以 `project-handoff.md` 与每个 PR 的测试结果为准。
+> 当前状态（2026-07-23）：工作台的读模型、核心审核界面、人工交接与后续安全加固已随 GitHub PR #4 合并到 `main`（`718e88b`）。PR 4 `feat/demo-delivery` 已在当前分支完成并推送（`767aa98`），等待合并。本文记录工作台范围与施工进度；需求基线仍以 `final-requirements.md` 为准。
 
 ## 共同边界
 
@@ -10,14 +10,36 @@
 - 无登录模式下审核审计身份固定为 `demo_operator`。它仅是演示审计字段，不是认证或 RBAC 实现。
 - 每个 PR 完成后运行对应测试并等待 review；未经确认不提交或推送。
 
-## PR 1：`feat/review-read-model-api`
+## 当前施工进度
+
+| 阶段 | 状态 | 已交付或待补齐内容 |
+| --- | --- | --- |
+| PR 1：审核读模型 API | 已完成，随 PR #4 合并 | `model_failure` 队列分类、单项聚合详情、四类队列与终态只读覆盖。 |
+| PR 2：运营工作台核心 | 已完成，随 PR #4 合并 | React 三栏工作台、真实 API 读取、人工批准/关闭、DNC 确认或驳回、模型失败人工重试。 |
+| PR 3：人工交接与导出 | 已完成，随 PR #4 合并 | 已批准草稿的复制与 `.txt` 下载、导出审计、草稿生成中/已批准草稿分类，以及 DNC 阻断。 |
+| PR 4：演示交付 | 已完成，当前分支待合并 | 受控幂等 seed、Docker 交付链路、API 静态托管、可选 Worker profile、演示与简历文档、镜像/健康检查验证。 |
+
+### 已合并后的安全加固
+
+- 已确认或待确认 DNC 优先于已批准草稿：相关会话不暴露草稿、复制、下载或预留发送入口。
+- 每个 DNC 确认仅在其源入站回复上作为可操作队列项出现；同一达人其他历史会话标记为 `dnc_blocked`，不进入可操作队列。
+- DNC 标签按实际状态显示“DNC 待确认”或“DNC 已确认”。
+- 人工重新生成遇到并发活跃 run 时返回业务 `409`，而不是未处理的数据库 `500`。
+
+### 仍需处理的技术缺口
+
+- 审核队列目前仍在应用层完成分页，并逐项读取 run、DNC 与审核决定；队列规模扩大前应另开性能 PR，将筛选、排序、分页和关联预加载下推到 SQL。
+- 容器化演示已覆盖 API 静态托管和受控样例；受管生产部署所需的镜像发布、Secrets、备份恢复、监控和多 Worker 仍未完成。
+- 当前能力是“人工审核与草稿交接”，不是邮件发送工作台。没有外发请求、外部渠道或真实发送记录；任何未来渠道能力都必须在独立需求、认证与安全评审后实施。
+
+## PR 1：`feat/review-read-model-api`（已完成，随 PR #4 合并）
 
 - 在 `review-queue` 中新增 `model_failure` 分类。
 - 新增 `GET /review-items/{reply_id}` 聚合详情接口。
 - 补齐四类队列、详情聚合与终态只读的后端测试。
 - 不新增前端、Docker、演示种子或数据库 schema 变更。
 
-## PR 2：`feat/operator-workbench-core`
+## PR 2：`feat/operator-workbench-core`（已完成，随 PR #4 合并）
 
 - 建立 React + Vite + TypeScript + Ant Design + TanStack Query。
 - 开发态由 Vite 代理 `/api`。
@@ -26,7 +48,7 @@
 - 模型失败项明确显示“模型未生成可用建议”，允许人工从空白草稿起草后批准。
 - 不实现复制、下载、Docker 或生产静态托管。
 
-## PR 3：`feat/operator-workbench-export`
+## PR 3：`feat/operator-workbench-export`（已完成，随 PR #4 合并）
 
 - 审核批准后提供复制与 `.txt` 下载。
 - 每次人工交接动作调用既有导出审计接口。
@@ -34,9 +56,9 @@
 - 补“导出不等于发送”与“DNC 无导出入口”的测试。
 - 为未来渠道集成保留禁用的“发送（暂未接入）”按钮，以及只读 `delivery-capability` 能力接口；二者都不得创建外发任务、写入发送记录或调用外部渠道。
 
-## PR 4：`feat/demo-delivery`
+## PR 4：`feat/demo-delivery`（已完成，当前分支待合并）
 
-- 提供受控 demo seed 脚本。
-- 新增 Dockerfile、Compose `migrate` 服务、API 静态托管与可选 Worker profile。
-- 在 `docs/` 编写演示文档、启动说明与简历项目要点。
-- 验证镜像构建和健康检查。
+- 已提供受控、幂等且无模型调用的 demo seed 脚本。
+- 已新增 Dockerfile、Compose `migrate`/API 服务、API 静态托管与可选 Worker profile。
+- 已在 `docs/` 编写演示文档、启动说明与中文简历项目要点。
+- 已验证镜像构建、迁移、健康检查、静态资源和重复 seed。

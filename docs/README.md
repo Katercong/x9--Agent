@@ -9,7 +9,13 @@
 3. [项目交接记录](project-handoff.md)：当前代码基线、模块职责和下一步实施顺序。
 4. [开发与运行指南](development-guide.md)：本地运行、测试、接口、Worker 和数据模型说明。
 5. [PostgreSQL 部署说明](postgresql.md)：Docker Compose、本地环境变量和 Alembic 迁移操作。
-6. [Operator Workbench 四阶段实施计划](operator-workbench-four-pr-plan.md)：当前工作台的 PR 拆分、范围与交付边界。
+6. [Operator Workbench 四阶段计划与进度](operator-workbench-four-pr-plan.md)：工作台的 PR 拆分、已合并范围、遗留缺口与交付边界。
+7. [Operator Workbench 演示指南](operator-workbench-demo.md)：容器化启动、受控样例数据和人工审核演示路径。
+8. [Operator Workbench 简历要点](operator-workbench-resume-highlights.md)：基于已实现能力的中文项目表述。
+
+## 当前模块进度
+
+Operator Workbench 的读模型、审核闭环和人工交接能力已随 GitHub PR #4 合并到 `main`。受控 demo seed、Docker 交付、API 静态托管和演示材料已在当前 `feat/demo-delivery` 分支完成，等待合并；详细范围与后续顺序见 [Operator Workbench 四阶段计划与进度](operator-workbench-four-pr-plan.md)。
 
 ## 文档治理
 
