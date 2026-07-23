@@ -31,3 +31,12 @@ python -m pytest -q
 ```
 
 本地 PostgreSQL、环境变量和 Alembic 操作见 [PostgreSQL 部署说明](docs/postgresql.md)。真实密钥只可放在未提交的 `.env` 中。
+
+## 容器化工作台演示
+
+```powershell
+docker compose up --build -d
+docker compose --profile demo run --rm demo-seed
+```
+
+随后打开 `http://127.0.0.1:8000/operator-workbench/`。完整的样例说明、演示路径和停止方式见 [运营工作台演示指南](docs/operator-workbench-demo.md)；可直接用于中文简历的项目要点见 [项目简历要点](docs/operator-workbench-resume-highlights.md)。基础演示不会启动 Worker、调用模型或发送任何消息。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -21,6 +22,7 @@ from sqlalchemy import delete, func, select  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 from app.database import Base, SessionLocal, engine, init_db  # noqa: E402
+from app.demo_seed import seed_demo_data  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
     AgentFollowupRun,
@@ -2428,6 +2430,40 @@ def test_env_example_documents_siliconflow_configuration():
     assert "SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V3.2" in content
 
 
+def test_compose_uses_explicit_url_encoded_container_database_url():
+    """容器连接不得把原始 POSTGRES_PASSWORD 直接拼入 URL。"""
+
+    root = Path(__file__).resolve().parents[1]
+    env_example = (root / ".env.example").read_text(encoding="utf-8")
+    compose = (root / "compose.yaml").read_text(encoding="utf-8")
+
+    assert "DATABASE_URL_CONTAINER=postgresql+psycopg://" in env_example
+    assert "@postgres:5432/" in env_example
+    assert compose.count("DATABASE_URL: ${DATABASE_URL_CONTAINER:?Set DATABASE_URL_CONTAINER in .env}") == 4
+    assert "DATABASE_URL: postgresql+psycopg://${POSTGRES_USER" not in compose
+
+
+def test_alembic_current_accepts_percent_encoded_database_url(tmp_path):
+    """Alembic 必须接受 .env 中标准的 %xx URL 编码。"""
+    root = Path(__file__).resolve().parents[1]
+    database_path = tmp_path / "review%40safe%3Apass%2F2026.sqlite"
+    encoded_url = f"sqlite:///{database_path.as_posix()}"
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = encoded_url
+
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "current"],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_evaluation_suite_is_synthetic_and_has_the_planned_pilot_size():
     """评测样本应为可复现的脱敏合成数据，且开发集固定为 24 条。"""
 
@@ -2727,6 +2763,41 @@ def test_worker_processes_queued_run_and_records_completion(monkeypatch):
     assert run["finished_at"] is not None
 
 
+def test_worker_without_provider_key_uses_local_fallback_and_completes_run(monkeypatch):
+    """无模型 Key 的 Worker 仍应使用受限本地建议，不调用 Provider 或外发。"""
+
+    monkeypatch.delenv("SILICONFLOW_API_KEY", raising=False)
+    monkeypatch.setattr(
+        services,
+        "call_siliconflow_json",
+        lambda *_args, **_kwargs: pytest.fail("worker without a key must not call the provider"),
+    )
+    client = TestClient(app)
+    creator_id = "creator_worker_local_fallback"
+    _create_creator(client, creator_id)
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert queued.status_code == 200, queued.text
+    run_id = queued.json()["run"]["id"]
+
+    with SessionLocal() as db:
+        processed = services.process_next_queued_run(db)
+        assert processed is not None
+        assert processed.id == run_id
+        db.commit()
+
+    completed = client.get(f"/api/followup-agent/runs/{run_id}")
+    assert completed.status_code == 200, completed.text
+    run = completed.json()["run"]
+    assert run["execution_status"] == "succeeded"
+    assert run["llm_status"] == "not_configured"
+    assert run["provider_model"] is None
+    assert run["output"]["suggested_reply"]
+    assert client.get(f"/api/followup-agent/outbound-instructions?creator_id={creator_id}").json()["total"] == 0
+
+
 def test_worker_process_once_returns_processed_run_id(monkeypatch):
     """独立 worker 的单次模式应处理一条任务并返回其 run ID。"""
 
@@ -2987,6 +3058,70 @@ def _process_response_run(client: TestClient, response: object) -> dict[str, obj
     completed = client.get(f"/api/followup-agent/runs/{run['id']}")
     assert completed.status_code == 200, completed.text
     return completed.json()["run"]
+
+
+def test_demo_seed_is_idempotent_and_populates_all_operator_workbench_states(monkeypatch):
+    """演示种子只写入固定本地样例，不能调用模型或创建外发指令。"""
+
+    monkeypatch.setattr(
+        services,
+        "generate_raw_followup_output",
+        lambda *_args, **_kwargs: pytest.fail("demo seed must not call the LLM generator"),
+    )
+
+    with SessionLocal() as db:
+        created = seed_demo_data(db)
+        db.commit()
+    assert created > 0
+
+    client = TestClient(app)
+    queue = client.get("/api/followup-agent/review-queue")
+    assert queue.status_code == 200, queue.text
+    assert {item["review_type"] for item in queue.json()["items"]} == {
+        "standard",
+        "model_failure",
+        "generation_pending",
+        "decline",
+        "dnc_confirmation",
+        "approved_draft",
+    }
+
+    standard_detail = client.get("/api/followup-agent/review-items/demo_reply_standard")
+    assert standard_detail.status_code == 200, standard_detail.text
+    context = standard_detail.json()["context"]
+    assert context["product"]["product_type"] == "demo_audio_accessory"
+    assert context["reference_materials"]
+    assert context["recent_inbound_replies"]
+    assert context["recent_outreach_emails"]
+    assert context["recent_events"]
+    assert context["open_followup_tasks"]
+    AgentSuggestion.model_validate(standard_detail.json()["item"]["run"]["output"])
+
+    failure = client.get("/api/followup-agent/review-items/demo_reply_failure")
+    assert failure.status_code == 200, failure.text
+    assert failure.json()["item"]["run"]["llm_status"] == "validation_failed"
+    assert failure.json()["item"]["run"]["validation_error"] == "suggested_reply and confidence are required"
+
+    with SessionLocal() as db:
+        counts_before = {
+            "creators": db.scalar(select(func.count()).select_from(Creator)),
+            "replies": db.scalar(select(func.count()).select_from(InboundReply)),
+            "runs": db.scalar(select(func.count()).select_from(AgentFollowupRun)),
+            "decisions": db.scalar(select(func.count()).select_from(HumanReviewDecision)),
+        }
+        assert db.scalar(select(func.count()).select_from(models.SimulatedOutboundInstruction)) == 0
+        second_created = seed_demo_data(db)
+        db.commit()
+        counts_after = {
+            "creators": db.scalar(select(func.count()).select_from(Creator)),
+            "replies": db.scalar(select(func.count()).select_from(InboundReply)),
+            "runs": db.scalar(select(func.count()).select_from(AgentFollowupRun)),
+            "decisions": db.scalar(select(func.count()).select_from(HumanReviewDecision)),
+        }
+        assert db.scalar(select(func.count()).select_from(models.SimulatedOutboundInstruction)) == 0
+
+    assert second_created == 0
+    assert counts_after == counts_before
 
 
 def _create_creator(
