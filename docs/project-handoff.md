@@ -1,11 +1,11 @@
 # 项目交接记录
 
-> 最后更新：2026-07-23。目标规格见 [final-requirements.md](final-requirements.md)，当前实现范围见 [implementation-gap-review.md](implementation-gap-review.md)。本文只描述已验证的代码基线和接手顺序。
+> 最后更新：2026-07-24。目标规格见 [final-requirements.md](final-requirements.md)，当前实现范围见 [implementation-gap-review.md](implementation-gap-review.md)。本文只描述已验证的代码基线和接手顺序。
 
 ## 代码基线
 
-- 远端 `main` 当前基线为 `718e88b Feat/operator workbench export (#4)`，包含 V2/V3.2 默认配置、人工审核读模型、React 工作台、DNC 审核动作和人工导出交接。
-- 当前功能分支为 `feat/demo-delivery`，已推送的 `767aa98 feat: 完成工作台容器化演示交付` 增加 Dockerfile、Compose `migrate`/API/Worker profile、前端静态托管和受控 demo seed；本分支等待 PR review 与合并。
+- 远端 `main` 当前基线为 `6bb394e feat: 完成工作台容器化演示交付 (#5)`，已包含 V2/V3.2 默认配置、人工审核读模型、React 工作台、DNC 审核动作、人工导出交接，以及 Dockerfile、Compose `migrate`/API/Worker profile、前端静态托管和受控 demo seed。
+- Operator Workbench 四个阶段均已合并；当前没有待合并的工作台功能分支。
 - 最近验证：`python -m pytest -q` 为 `85 passed`，前端 `npm run test` 为 `8 passed`；Docker 已验证镜像构建、Alembic `ab12cd34ef56 (head)`、`/health`、`/operator-workbench/` 静态资源和重复 seed 幂等性。仅有 FastAPI `on_event` 既有弃用警告。
 - 本地数据库：Docker Compose 管理 PostgreSQL。默认服务为 PostgreSQL、一次性 `migrate` 和 API；`worker` 与 `demo-seed` 是显式 profile。SQLite 只用于自动化测试和可丢弃的本地 MVP 数据。
 
@@ -42,7 +42,7 @@
 
 - `fa08293 feat: 切换默认V2提示词与DeepSeek V3.2模型 (#3)`
 - `718e88b Feat/operator workbench export (#4)`
-- `767aa98 feat: 完成工作台容器化演示交付`
+- `6bb394e feat: 完成工作台容器化演示交付 (#5)`
 
 ## 接手时的优先顺序
 

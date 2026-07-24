@@ -15,7 +15,7 @@
 
 ## 当前模块进度
 
-Operator Workbench 的读模型、审核闭环和人工交接能力已随 GitHub PR #4 合并到 `main`。受控 demo seed、Docker 交付、API 静态托管和演示材料已在当前 `feat/demo-delivery` 分支完成，等待合并；详细范围与后续顺序见 [Operator Workbench 四阶段计划与进度](operator-workbench-four-pr-plan.md)。
+Operator Workbench 的四个阶段均已合并到 `main`：GitHub PR #4 交付读模型、审核闭环与人工交接，GitHub PR #5 交付受控 demo seed、Docker、API 静态托管和演示材料。详细范围与后续顺序见 [Operator Workbench 四阶段计划与进度](operator-workbench-four-pr-plan.md)。
 
 ## 文档治理
 

@@ -1,6 +1,6 @@
 # X9 ReplyChat Agent 阶段性实现复盘
 
-> 对照：[最终需求规格](final-requirements.md)。本文记录事实状态，不等同于目标需求。本文截至 2026-07-23，覆盖 `main` 已合并的工作台核心，以及当前 `feat/demo-delivery` 分支中待合并的容器化演示交付。
+> 对照：[最终需求规格](final-requirements.md)。本文记录事实状态，不等同于目标需求。本文截至 2026-07-24，覆盖 `main` 的已合并工作台与容器化演示交付（GitHub PR #5，`6bb394e`）。
 
 ## 已实现
 
@@ -13,7 +13,7 @@
 | 人工审核 API | 审核队列支持普通回复、模型失败、生成中、拒绝、DNC、已批准草稿和 `reply_ready` 聚合；`GET /review-items/{reply_id}` 返回上下文与完整 run 留痕。普通项可批准最终草稿或关闭；模型失败可人工重试，活跃 run 冲突返回 `409`。 |
 | DNC 安全边界 | DNC 确认与驳回均需人工显式调用接口。待确认/已确认 DNC 优先阻断新 run、草稿、复制、下载、导出和既有普通待办；同一 DNC 只在源回复上显示为可操作队列项，历史会话标记为 `dnc_blocked`。 |
 | 运营工作台 | React + Vite + TypeScript + Ant Design + TanStack Query 三栏工作台，提供会话上下文、AI 建议、草稿编辑、批准/关闭、DNC 确认或驳回、模型失败重试、复制和 `.txt` 下载审计。没有发送能力。 |
-| 容器化演示 | 当前 `feat/demo-delivery` 提供多阶段镜像、API 静态托管 `/operator-workbench/`、`worker` profile 和显式 `demo-seed` profile。种子使用固定虚构数据且幂等，不调用模型、不创建出站指令。 |
+| 容器化演示 | `main` 提供多阶段镜像、API 静态托管 `/operator-workbench/`、`worker` profile 和显式 `demo-seed` profile。种子使用固定虚构数据且幂等，不调用模型、不创建出站指令。 |
 | 验证 | Python 全量测试为 `85 passed`，前端 Vitest 为 `8 passed`；已验证 Docker 镜像构建、迁移、API 健康检查、静态资源和重复 demo seed。仅有既有 FastAPI `on_event` 弃用警告。 |
 
 ## 已实现但与目标仍有差距

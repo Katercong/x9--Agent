@@ -1,6 +1,6 @@
 # Operator Workbench 四阶段实施计划
 
-> 当前状态（2026-07-23）：工作台的读模型、核心审核界面、人工交接与后续安全加固已随 GitHub PR #4 合并到 `main`（`718e88b`）。PR 4 `feat/demo-delivery` 已在当前分支完成并推送（`767aa98`），等待合并。本文记录工作台范围与施工进度；需求基线仍以 `final-requirements.md` 为准。
+> 当前状态（2026-07-24）：工作台四个阶段均已合并到 `main`。读模型、核心审核界面、人工交接与安全加固随 GitHub PR #4 合并（`718e88b`）；演示交付随 GitHub PR #5 合并（`6bb394e`）。本文记录工作台范围与施工进度；需求基线仍以 `final-requirements.md` 为准。
 
 ## 共同边界
 
@@ -17,7 +17,7 @@
 | PR 1：审核读模型 API | 已完成，随 PR #4 合并 | `model_failure` 队列分类、单项聚合详情、四类队列与终态只读覆盖。 |
 | PR 2：运营工作台核心 | 已完成，随 PR #4 合并 | React 三栏工作台、真实 API 读取、人工批准/关闭、DNC 确认或驳回、模型失败人工重试。 |
 | PR 3：人工交接与导出 | 已完成，随 PR #4 合并 | 已批准草稿的复制与 `.txt` 下载、导出审计、草稿生成中/已批准草稿分类，以及 DNC 阻断。 |
-| PR 4：演示交付 | 已完成，当前分支待合并 | 受控幂等 seed、Docker 交付链路、API 静态托管、可选 Worker profile、演示与简历文档、镜像/健康检查验证。 |
+| PR 4：演示交付 | 已完成，随 GitHub PR #5 合并 | 受控幂等 seed、Docker 交付链路、API 静态托管、可选 Worker profile、演示与简历文档、镜像/健康检查验证。 |
 
 ### 已合并后的安全加固
 
@@ -56,7 +56,7 @@
 - 补“导出不等于发送”与“DNC 无导出入口”的测试。
 - 为未来渠道集成保留禁用的“发送（暂未接入）”按钮，以及只读 `delivery-capability` 能力接口；二者都不得创建外发任务、写入发送记录或调用外部渠道。
 
-## PR 4：`feat/demo-delivery`（已完成，当前分支待合并）
+## PR 4：演示交付（已完成，随 GitHub PR #5 合并）
 
 - 已提供受控、幂等且无模型调用的 demo seed 脚本。
 - 已新增 Dockerfile、Compose `migrate`/API 服务、API 静态托管与可选 Worker profile。
