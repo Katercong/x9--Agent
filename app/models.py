@@ -37,7 +37,15 @@ class DoNotContactConfirmation(Base):
     """DNC 审核流水：保存待确认和已决议记录，供后续采集与建联拦截审计。"""
 
     __tablename__ = "do_not_contact_confirmations"
-    __table_args__ = (Index("ix_dnc_confirmations_creator_status", "creator_id", "status"),)
+    __table_args__ = (
+        Index("ix_dnc_confirmations_creator_status", "creator_id", "status"),
+        Index(
+            "ix_dnc_confirmations_review_queue_creator_created",
+            "creator_id",
+            text("created_at DESC"),
+            text("id DESC"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(120), primary_key=True)
     department_code: Mapped[str] = mapped_column(String(40), default="cross_border", index=True)
@@ -106,6 +114,19 @@ class InboundReply(Base):
             "channel",
             "external_message_id",
             name="uq_inbound_replies_external_message",
+        ),
+        Index(
+            "ix_inbound_replies_review_queue_status_created",
+            "processing_status",
+            text("created_at DESC"),
+            text("id DESC"),
+        ),
+        Index(
+            "ix_inbound_replies_review_queue_department_status_created",
+            "department_code",
+            "processing_status",
+            text("created_at DESC"),
+            text("id DESC"),
         ),
     )
 
@@ -206,6 +227,12 @@ class AgentFollowupRun(Base):
     __tablename__ = "agent_followup_runs"
     __table_args__ = (
         Index("ix_agent_followup_runs_creator_reply", "creator_id", "inbound_reply_id"),
+        Index(
+            "ix_agent_followup_runs_review_queue_reply_created",
+            "inbound_reply_id",
+            text("created_at DESC"),
+            text("id DESC"),
+        ),
         Index("ix_agent_followup_runs_department_created", "department_code", "created_at"),
         # SQLite MVP 由单 worker 轮询该索引；迁移 PostgreSQL 后可沿用它做并发领取。
         Index("ix_agent_followup_runs_execution_created", "execution_status", "created_at"),
@@ -261,6 +288,12 @@ class HumanReviewDecision(Base):
         # 使用唯一索引而非应用层预查，确保 PostgreSQL 与 SQLite 都能抵御并发写入。
         Index("uq_human_review_decisions_reply", "inbound_reply_id", unique=True),
         Index("ix_human_review_decisions_department_decided", "department_code", "decided_at"),
+        Index(
+            "ix_human_review_decisions_review_queue_outcome_department_reply",
+            "outcome",
+            "department_code",
+            "inbound_reply_id",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(120), primary_key=True)

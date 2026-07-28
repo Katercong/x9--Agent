@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -19,11 +20,12 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 from sqlalchemy import delete, event, func, select  # noqa: E402
+from sqlalchemy.dialects import postgresql, sqlite  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 from app.database import Base, SessionLocal, engine, init_db  # noqa: E402
 from app.demo_seed import seed_demo_data  # noqa: E402
-from app.main import app  # noqa: E402
+from app.main import _apply_review_queue_filters, _review_queue_base_statement, app  # noqa: E402
 from app.models import (  # noqa: E402
     AgentFollowupRun,
     Creator,
@@ -1625,10 +1627,8 @@ def test_review_queue_separates_model_failures_from_standard_and_terminal_items(
     assert approved_failure.status_code == 201, approved_failure.text
 
 
-def test_review_item_detail_aggregates_context_and_does_not_write():
-    client = TestClient(app)
 def test_review_queue_uses_sql_filters_pagination_and_constant_query_count():
-    """?????????????????????????? N+1 ???"""
+    """队列必须在数据库完成筛选和分页，返回项增多也不得产生 N+1 查询。"""
 
     client = TestClient(app)
     with SessionLocal() as db:
@@ -1768,6 +1768,8 @@ def test_review_queue_uses_sql_filters_pagination_and_constant_query_count():
     assert full_page["total"] == 6
 
 
+def test_review_item_detail_aggregates_context_and_does_not_write():
+    client = TestClient(app)
     creator_id = "creator_review_item_detail"
     _create_creator(
         client,
@@ -2603,6 +2605,57 @@ def test_alembic_current_accepts_percent_encoded_database_url(tmp_path):
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_alembic_upgrade_creates_review_queue_query_indexes(tmp_path):
+    """新 revision 必须在实际迁移数据库中创建审核队列所需的复合索引。"""
+
+    root = Path(__file__).resolve().parents[1]
+    database_path = tmp_path / "review_queue_indexes.sqlite"
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = f"sqlite:///{database_path.as_posix()}"
+
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    expected_indexes = {
+        "inbound_replies": {
+            "ix_inbound_replies_review_queue_status_created",
+            "ix_inbound_replies_review_queue_department_status_created",
+        },
+        "agent_followup_runs": {"ix_agent_followup_runs_review_queue_reply_created"},
+        "do_not_contact_confirmations": {"ix_dnc_confirmations_review_queue_creator_created"},
+        "human_review_decisions": {"ix_human_review_decisions_review_queue_outcome_department_reply"},
+    }
+    with sqlite3.connect(database_path) as connection:
+        for table_name, expected_names in expected_indexes.items():
+            actual_names = {row[1] for row in connection.execute(f"PRAGMA index_list('{table_name}')")}
+            assert expected_names <= actual_names
+
+
+def test_review_queue_sql_compiles_for_postgresql_and_sqlite():
+    """集合队列查询必须同时兼容生产 PostgreSQL 与 SQLite 自动化测试。"""
+
+    statement, review_type_expression = _review_queue_base_statement("cross_border")
+    statement = _apply_review_queue_filters(
+        statement,
+        review_type_expression,
+        review_type="reply_ready",
+        include_dnc_blocked=False,
+    )
+
+    for dialect in (postgresql.dialect(), sqlite.dialect()):
+        compiled = str(statement.compile(dialect=dialect))
+        assert "ROW_NUMBER" in compiled.upper()
+        assert "review_candidate_reply_ids" in compiled
 
 
 def test_evaluation_suite_is_synthetic_and_has_the_planned_pilot_size():
