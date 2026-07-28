@@ -18,7 +18,7 @@ os.environ["SILICONFLOW_API_KEY"] = ""
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
-from sqlalchemy import delete, func, select  # noqa: E402
+from sqlalchemy import delete, event, func, select  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 from app.database import Base, SessionLocal, engine, init_db  # noqa: E402
@@ -1627,6 +1627,147 @@ def test_review_queue_separates_model_failures_from_standard_and_terminal_items(
 
 def test_review_item_detail_aggregates_context_and_does_not_write():
     client = TestClient(app)
+def test_review_queue_uses_sql_filters_pagination_and_constant_query_count():
+    """?????????????????????????? N+1 ???"""
+
+    client = TestClient(app)
+    with SessionLocal() as db:
+        assert seed_demo_data(db) > 0
+        base_time = datetime(2026, 7, 25, 9, 0, 0)
+        for offset, reply_id in enumerate(
+            (
+                "demo_reply_standard",
+                "demo_reply_failure",
+                "demo_reply_generation",
+                "demo_reply_decline",
+                "demo_reply_dnc",
+                "demo_reply_approved",
+            )
+        ):
+            reply = db.get(InboundReply, reply_id)
+            assert reply is not None
+            reply.created_at = base_time + timedelta(minutes=offset)
+        db.add(
+            InboundReply(
+                id="demo_reply_dnc_history",
+                department_code="demo_operations",
+                creator_id="demo_creator_dnc",
+                direction="inbound",
+                channel="simulation",
+                external_message_id="review-queue-dnc-history",
+                from_email="casey.demo@example.invalid",
+                to_email="",
+                subject="Earlier conversation",
+                body="Please send more product details.",
+                processing_status="need_ai_review",
+                reply_category="need_more_info",
+                created_at=base_time - timedelta(minutes=1),
+            )
+        )
+        db.commit()
+
+    _create_creator(client, "creator_review_queue_other_department", department_code="other_department")
+    with SessionLocal() as db:
+        db.add(
+            InboundReply(
+                id="reply_review_queue_other_department",
+                department_code="other_department",
+                creator_id="creator_review_queue_other_department",
+                direction="inbound",
+                channel="simulation",
+                external_message_id="review-queue-other-department",
+                from_email="other@example.invalid",
+                to_email="",
+                subject="Other department",
+                body="Sounds interesting.",
+                processing_status="need_ai_review",
+                reply_category="interested",
+                created_at=base_time + timedelta(minutes=10),
+            )
+        )
+        db.flush()
+        db.add(
+            AgentFollowupRun(
+                id="run_review_queue_other_department",
+                department_code="other_department",
+                creator_id="creator_review_queue_other_department",
+                inbound_reply_id="reply_review_queue_other_department",
+                reply_category="interested",
+                llm_status="fallback",
+                execution_status="succeeded",
+                created_at=base_time + timedelta(minutes=10),
+            )
+        )
+        db.commit()
+
+    demo_queue = client.get("/api/followup-agent/review-queue?department_code=demo_operations")
+    assert demo_queue.status_code == 200, demo_queue.text
+    assert demo_queue.json()["total"] == 6
+    assert [item["reply"]["id"] for item in demo_queue.json()["items"]] == [
+        "demo_reply_approved",
+        "demo_reply_dnc",
+        "demo_reply_decline",
+        "demo_reply_generation",
+        "demo_reply_failure",
+        "demo_reply_standard",
+    ]
+    assert "demo_reply_dnc_history" not in {item["reply"]["id"] for item in demo_queue.json()["items"]}
+
+    paged = client.get("/api/followup-agent/review-queue?department_code=demo_operations&limit=2&offset=1")
+    assert paged.status_code == 200, paged.text
+    assert paged.json()["total"] == 6
+    assert [item["reply"]["id"] for item in paged.json()["items"]] == [
+        "demo_reply_dnc",
+        "demo_reply_decline",
+    ]
+
+    expected_by_filter = {
+        "standard": {"demo_reply_standard"},
+        "model_failure": {"demo_reply_failure"},
+        "generation_pending": {"demo_reply_generation"},
+        "decline": {"demo_reply_decline"},
+        "dnc_confirmation": {"demo_reply_dnc"},
+        "approved_draft": {"demo_reply_approved"},
+        "reply_ready": {"demo_reply_standard", "demo_reply_approved"},
+    }
+    for review_type, expected_reply_ids in expected_by_filter.items():
+        response = client.get(
+            f"/api/followup-agent/review-queue?department_code=demo_operations&review_type={review_type}"
+        )
+        assert response.status_code == 200, response.text
+        assert {item["reply"]["id"] for item in response.json()["items"]} == expected_reply_ids
+
+    other_queue = client.get("/api/followup-agent/review-queue?department_code=other_department")
+    assert other_queue.status_code == 200, other_queue.text
+    assert other_queue.json()["total"] == 1
+    assert other_queue.json()["items"][0]["reply"]["id"] == "reply_review_queue_other_department"
+
+    def count_queue_selects(url: str) -> tuple[dict[str, object], int]:
+        statements: list[str] = []
+
+        def before_cursor_execute(_connection, _cursor, statement, _parameters, _context, _executemany):
+            if statement.lstrip().upper().startswith(("SELECT", "WITH")):
+                statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", before_cursor_execute)
+        try:
+            response = client.get(url)
+        finally:
+            event.remove(engine, "before_cursor_execute", before_cursor_execute)
+        assert response.status_code == 200, response.text
+        return response.json(), len(statements)
+
+    small_page, small_page_query_count = count_queue_selects(
+        "/api/followup-agent/review-queue?department_code=demo_operations&limit=1"
+    )
+    full_page, full_page_query_count = count_queue_selects(
+        "/api/followup-agent/review-queue?department_code=demo_operations&limit=50"
+    )
+    assert small_page_query_count == full_page_query_count == 2
+    assert small_page["items"][0]["reply"]["id"] == full_page["items"][0]["reply"]["id"]
+    assert full_page["total"] == 6
+
+
     creator_id = "creator_review_item_detail"
     _create_creator(
         client,

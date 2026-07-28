@@ -8,9 +8,9 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, case, func, or_, select, union
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from .database import get_db, init_db
 from .models import (
@@ -357,40 +357,18 @@ def list_human_review_queue(
     }
     if review_type is not None and review_type not in allowed_review_types:
         raise HTTPException(status_code=422, detail="unknown review_type")
-    approved_reply_ids = select(HumanReviewDecision.inbound_reply_id).where(
-        HumanReviewDecision.outcome == "approve_draft"
+    statement, review_type_expression = _review_queue_base_statement(department_code)
+    filtered_statement = _apply_review_queue_filters(
+        statement,
+        review_type_expression,
+        review_type=review_type,
+        include_dnc_blocked=False,
     )
-    filters = [
-        or_(
-            InboundReply.processing_status == "need_ai_review",
-            InboundReply.id.in_(approved_reply_ids),
-        )
-    ]
-    if department_code:
-        filters.append(InboundReply.department_code == department_code)
-    replies = list(
-        db.scalars(
-            select(InboundReply)
-            .where(*filters)
-            .order_by(InboundReply.created_at.desc(), InboundReply.id.desc())
-        ).all()
-    )
-    items = []
-    for reply in replies:
-        item = _review_queue_item_to_dict(db, reply)
-        # A DNC confirmation is actionable only from the inbound reply that
-        # created it.  Older replies for the same creator remain blocked for
-        # direct audit reads, but must not duplicate the confirmation in queue.
-        if item["review_type"] == "dnc_blocked":
-            continue
-        is_reply_ready = item["review_type"] in {"standard", "approved_draft"}
-        if review_type == "reply_ready" and not is_reply_ready:
-            continue
-        if review_type not in {None, "reply_ready"} and item["review_type"] != review_type:
-            continue
-        items.append(item)
-    total = len(items)
-    return {"ok": True, "total": total, "items": items[offset : offset + limit]}
+    total = int(db.scalar(select(func.count()).select_from(filtered_statement.subquery())) or 0)
+    rows = db.execute(
+        filtered_statement.order_by(InboundReply.created_at.desc(), InboundReply.id.desc()).offset(offset).limit(limit)
+    ).all()
+    return {"ok": True, "total": total, "items": [_review_queue_item_from_row(row) for row in rows]}
 
 
 @app.get("/api/followup-agent/review-items/{reply_id}")
@@ -400,13 +378,8 @@ def get_human_review_item(reply_id: str, db: Session = Depends(get_db)) -> dict[
     reply = db.get(InboundReply, reply_id)
     if reply is None:
         raise HTTPException(status_code=404, detail="inbound reply not found")
-    approved_decision = db.scalar(
-        select(HumanReviewDecision)
-        .where(HumanReviewDecision.inbound_reply_id == reply.id)
-        .where(HumanReviewDecision.outcome == "approve_draft")
-        .limit(1)
-    )
-    if reply.processing_status != "need_ai_review" and approved_decision is None:
+    item = _load_review_queue_item(db, reply_id, include_dnc_blocked=True)
+    if item is None:
         raise HTTPException(status_code=409, detail="reply is not available in the operator workbench")
     runs = list(
         db.scalars(
@@ -415,7 +388,6 @@ def get_human_review_item(reply_id: str, db: Session = Depends(get_db)) -> dict[
             .order_by(AgentFollowupRun.created_at.asc(), AgentFollowupRun.id.asc())
         ).all()
     )
-    item = _review_queue_item_to_dict(db, reply)
     # DNC is a conservative terminal boundary.  Keep run metadata available for
     # audit, but never expose a prior AI draft once the creator has requested or
     # confirmed do-not-contact.
@@ -584,7 +556,9 @@ def retry_failed_human_review_item(
     if reply.processing_status != "need_ai_review":
         raise HTTPException(status_code=409, detail="reply is not pending human review")
 
-    item = _review_queue_item_to_dict(db, reply)
+    item = _load_review_queue_item(db, reply.id, include_dnc_blocked=True)
+    if item is None:
+        raise HTTPException(status_code=409, detail="reply is not available in the operator workbench")
     if item["review_type"] != "model_failure" or item["run"] is None:
         raise HTTPException(status_code=409, detail="only a model-failure review item can be retried")
     active_run = db.scalar(
@@ -824,47 +798,151 @@ def _get_or_create_existing_run(db: Session, reply: InboundReply, run_agent: boo
     return _run_to_dict(run) if run is not None else None
 
 
-def _review_queue_item_to_dict(db: Session, reply: InboundReply) -> dict[str, Any]:
-    """Build the shared queue/detail representation for one workbench reply."""
+def _review_queue_base_statement(department_code: str | None):
+    """Build the shared, set-based read model for queue items and details."""
 
-    creator = db.get(Creator, reply.creator_id)
-    latest_run = db.scalars(
-        select(AgentFollowupRun)
-        .where(AgentFollowupRun.inbound_reply_id == reply.id)
-        .order_by(AgentFollowupRun.created_at.desc(), AgentFollowupRun.id.desc())
-        .limit(1)
-    ).first()
-    dnc_confirmation = None
-    if is_creator_contact_blocked(creator):
-        dnc_confirmation = db.scalars(
-            select(DoNotContactConfirmation)
-            .where(DoNotContactConfirmation.creator_id == reply.creator_id)
-            .where(DoNotContactConfirmation.status.in_(("pending_confirmation", "confirmed")))
-            .order_by(DoNotContactConfirmation.created_at.desc(), DoNotContactConfirmation.id.desc())
-            .limit(1)
-        ).first()
-    decision = db.scalars(
-        select(HumanReviewDecision)
-        .where(HumanReviewDecision.inbound_reply_id == reply.id)
-        .order_by(HumanReviewDecision.decided_at.desc(), HumanReviewDecision.id.desc())
-        .limit(1)
-    ).first()
-    if is_creator_contact_blocked(creator):
-        review_type = (
-            "dnc_confirmation"
-            if dnc_confirmation is not None and dnc_confirmation.inbound_reply_id == reply.id
-            else "dnc_blocked"
+    pending_candidates = select(InboundReply.id.label("reply_id")).where(
+        InboundReply.processing_status == "need_ai_review"
+    )
+    approved_candidates = (
+        select(HumanReviewDecision.inbound_reply_id.label("reply_id"))
+        .join(InboundReply, InboundReply.id == HumanReviewDecision.inbound_reply_id)
+        .where(HumanReviewDecision.outcome == "approve_draft")
+    )
+    if department_code:
+        pending_candidates = pending_candidates.where(InboundReply.department_code == department_code)
+        approved_candidates = approved_candidates.where(InboundReply.department_code == department_code)
+
+    candidate_reply_ids = union(pending_candidates, approved_candidates).cte("review_candidate_reply_ids")
+    ranked_runs = (
+        select(
+            AgentFollowupRun.id.label("run_id"),
+            AgentFollowupRun.inbound_reply_id.label("reply_id"),
+            func.row_number()
+            .over(
+                partition_by=AgentFollowupRun.inbound_reply_id,
+                order_by=(AgentFollowupRun.created_at.desc(), AgentFollowupRun.id.desc()),
+            )
+            .label("rank"),
         )
-    elif decision is not None and decision.outcome == "approve_draft":
-        review_type = "approved_draft"
-    elif reply.reply_category == "not_interested":
-        review_type = "decline"
-    elif latest_run is not None and latest_run.execution_status in {"queued", "running"}:
-        review_type = "generation_pending"
-    elif latest_run is not None and latest_run.execution_status == "failed":
-        review_type = "model_failure"
-    else:
-        review_type = "standard"
+        .join(candidate_reply_ids, candidate_reply_ids.c.reply_id == AgentFollowupRun.inbound_reply_id)
+        .cte("review_ranked_runs")
+    )
+    latest_run_ids = (
+        select(ranked_runs.c.reply_id, ranked_runs.c.run_id)
+        .where(ranked_runs.c.rank == 1)
+        .cte("review_latest_run_ids")
+    )
+    candidate_creator_ids = (
+        select(InboundReply.creator_id.label("creator_id"))
+        .join(candidate_reply_ids, candidate_reply_ids.c.reply_id == InboundReply.id)
+        .distinct()
+        .cte("review_candidate_creator_ids")
+    )
+    ranked_dnc_confirmations = (
+        select(
+            DoNotContactConfirmation.id.label("confirmation_id"),
+            DoNotContactConfirmation.creator_id.label("creator_id"),
+            func.row_number()
+            .over(
+                partition_by=DoNotContactConfirmation.creator_id,
+                order_by=(DoNotContactConfirmation.created_at.desc(), DoNotContactConfirmation.id.desc()),
+            )
+            .label("rank"),
+        )
+        .join(
+            candidate_creator_ids,
+            candidate_creator_ids.c.creator_id == DoNotContactConfirmation.creator_id,
+        )
+        .where(DoNotContactConfirmation.status.in_(("pending_confirmation", "confirmed")))
+        .cte("review_ranked_dnc_confirmations")
+    )
+    latest_dnc_ids = (
+        select(ranked_dnc_confirmations.c.creator_id, ranked_dnc_confirmations.c.confirmation_id)
+        .where(ranked_dnc_confirmations.c.rank == 1)
+        .cte("review_latest_dnc_ids")
+    )
+
+    latest_run = aliased(AgentFollowupRun)
+    latest_dnc_confirmation = aliased(DoNotContactConfirmation)
+    creator_is_dnc_blocked = Creator.do_not_contact_status.in_(("pending_confirmation", "confirmed"))
+    review_type_expression = case(
+        (
+            and_(
+                creator_is_dnc_blocked,
+                latest_dnc_confirmation.inbound_reply_id == InboundReply.id,
+            ),
+            "dnc_confirmation",
+        ),
+        (creator_is_dnc_blocked, "dnc_blocked"),
+        (HumanReviewDecision.outcome == "approve_draft", "approved_draft"),
+        (InboundReply.reply_category == "not_interested", "decline"),
+        (latest_run.execution_status.in_(("queued", "running")), "generation_pending"),
+        (latest_run.execution_status == "failed", "model_failure"),
+        else_="standard",
+    )
+    statement = (
+        select(
+            InboundReply,
+            Creator,
+            latest_run,
+            latest_dnc_confirmation,
+            HumanReviewDecision,
+            review_type_expression.label("review_type"),
+        )
+        .join(candidate_reply_ids, candidate_reply_ids.c.reply_id == InboundReply.id)
+        .join(Creator, Creator.id == InboundReply.creator_id)
+        .outerjoin(latest_run_ids, latest_run_ids.c.reply_id == InboundReply.id)
+        .outerjoin(latest_run, latest_run.id == latest_run_ids.c.run_id)
+        .outerjoin(latest_dnc_ids, latest_dnc_ids.c.creator_id == InboundReply.creator_id)
+        .outerjoin(latest_dnc_confirmation, latest_dnc_confirmation.id == latest_dnc_ids.c.confirmation_id)
+        .outerjoin(HumanReviewDecision, HumanReviewDecision.inbound_reply_id == InboundReply.id)
+    )
+    return statement, review_type_expression
+
+
+def _apply_review_queue_filters(
+    statement,
+    review_type_expression,
+    *,
+    review_type: str | None,
+    include_dnc_blocked: bool,
+):
+    """Apply queue visibility and API filters before counting or paging."""
+
+    if not include_dnc_blocked:
+        statement = statement.where(review_type_expression != "dnc_blocked")
+    if review_type == "reply_ready":
+        return statement.where(review_type_expression.in_(("standard", "approved_draft")))
+    if review_type is not None:
+        return statement.where(review_type_expression == review_type)
+    return statement
+
+
+def _load_review_queue_item(
+    db: Session,
+    reply_id: str,
+    *,
+    include_dnc_blocked: bool,
+) -> dict[str, Any] | None:
+    """Load one candidate through the same SQL read model as the queue."""
+
+    statement, review_type_expression = _review_queue_base_statement(department_code=None)
+    row = db.execute(
+        _apply_review_queue_filters(
+            statement.where(InboundReply.id == reply_id),
+            review_type_expression,
+            review_type=None,
+            include_dnc_blocked=include_dnc_blocked,
+        )
+    ).one_or_none()
+    return _review_queue_item_from_row(row) if row is not None else None
+
+
+def _review_queue_item_from_row(row) -> dict[str, Any]:
+    """Serialize a queue row without issuing any per-item database queries."""
+
+    reply, _creator, latest_run, dnc_confirmation, decision, review_type = row
     decision_available = (
         review_type in {"standard", "model_failure"}
         and latest_run is not None
