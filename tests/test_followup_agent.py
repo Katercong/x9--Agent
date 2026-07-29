@@ -3477,6 +3477,16 @@ def test_postgresql_claim_statement_uses_skip_locked_and_returning():
     assert "ORDER BY agent_followup_runs.created_at ASC, agent_followup_runs.id ASC" in compiled
 
 
+def test_postgresql_expired_recovery_statement_uses_skip_locked():
+    """过期回收也必须跳过另一个 PostgreSQL Worker 已锁定的 run。"""
+
+    statement = services._postgres_expired_running_runs_statement(now=datetime(2026, 7, 29, 12, 0, 0))
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert "FOR UPDATE SKIP LOCKED" in compiled.upper()
+    assert "ORDER BY agent_followup_runs.lease_expires_at ASC" in compiled
+
+
 def test_sqlite_claim_fallback_claims_distinct_queued_runs():
     """SQLite keeps compare-and-swap semantics while PostgreSQL owns the lock-aware path."""
 
@@ -3599,6 +3609,47 @@ def test_stale_worker_claim_cannot_overwrite_current_run_state():
         "claim_result_discarded",
     ]
     assert "claim_token" not in json.dumps(completed.json())
+
+
+def test_expired_worker_claim_is_discarded_without_model_call_or_state_overwrite(monkeypatch):
+    """lease 已过期但尚未回收时，旧 Worker 也绝不能再写入结果。"""
+
+    client = TestClient(app)
+    _create_creator(client, "creator_expired_claim_discard")
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_expired_claim_discard", "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert queued.status_code == 200, queued.text
+    run_id = queued.json()["run"]["id"]
+
+    with SessionLocal() as db:
+        claimed = services.claim_next_queued_run(db, worker_id="worker_expired_discard")
+        assert claimed is not None
+        db.commit()
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, run_id)
+        assert run is not None
+        run.lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
+        db.commit()
+
+    monkeypatch.setattr(
+        services,
+        "generate_raw_followup_output",
+        lambda *_args: pytest.fail("expired claim must not call the model"),
+    )
+    assert services.process_claimed_run(claimed) is None
+
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, run_id)
+        assert run is not None
+        assert run.execution_status == "running"
+        assert run.claim_token == claimed.claim_token
+        assert db.scalar(select(func.count()).select_from(models.SimulatedOutboundInstruction)) == 0
+    completed = client.get(f"/api/followup-agent/runs/{run_id}")
+    assert completed.status_code == 200
+    assert completed.json()["worker_events"][-1]["event_type"] == "claim_result_discarded"
+    assert completed.json()["worker_events"][-1]["metadata"] == {"reason": "lease_expired"}
 
 
 def test_worker_persists_unexpected_context_error_without_waiting_for_lease(monkeypatch):

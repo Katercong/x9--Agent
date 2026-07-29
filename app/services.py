@@ -513,13 +513,12 @@ def recover_expired_runs(db: Session) -> int:
     """将过期 running 任务标为 worker_lost，保留给人工处理且不自动重跑。"""
 
     now = datetime.utcnow()
+    if db.get_bind().dialect.name == "postgresql":
+        statement = _postgres_expired_running_runs_statement(now=now)
+    else:
+        statement = _sqlite_expired_running_runs_statement(now=now)
     runs = list(
-        db.scalars(
-            select(AgentFollowupRun)
-            .where(AgentFollowupRun.execution_status == "running")
-            .where(AgentFollowupRun.lease_expires_at.is_not(None))
-            .where(AgentFollowupRun.lease_expires_at <= now)
-        ).all()
+        db.scalars(statement).all()
     )
     recovered = 0
     for run in runs:
@@ -560,6 +559,26 @@ def recover_expired_runs(db: Session) -> int:
     return recovered
 
 
+def _sqlite_expired_running_runs_statement(*, now: datetime):
+    return (
+        select(AgentFollowupRun)
+        .where(AgentFollowupRun.execution_status == "running")
+        .where(AgentFollowupRun.lease_expires_at.is_not(None))
+        .where(AgentFollowupRun.lease_expires_at <= now)
+        .order_by(
+            AgentFollowupRun.lease_expires_at.asc(),
+            AgentFollowupRun.created_at.asc(),
+            AgentFollowupRun.id.asc(),
+        )
+    )
+
+
+def _postgres_expired_running_runs_statement(*, now: datetime):
+    """Lock only recoverable PostgreSQL rows so concurrent workers skip each other."""
+
+    return _sqlite_expired_running_runs_statement(now=now).with_for_update(skip_locked=True)
+
+
 def process_next_queued_run(db: Session, *, worker_id: str = "manual") -> AgentFollowupRun | None:
     """兼容现有手工调用：提交领取后再由独立会话完成处理。"""
 
@@ -575,11 +594,12 @@ def process_claimed_run(claimed: ClaimedRun) -> AgentFollowupRun | None:
 
     with SessionLocal() as db:
         run = db.get(AgentFollowupRun, claimed.run_id)
-        if not _is_current_claim(run, claimed):
+        discard_reason = _claim_discard_reason(run, claimed, now=datetime.utcnow())
+        if discard_reason is not None:
             _append_claim_result_discarded_event(
                 db,
                 claimed=claimed,
-                reason="claim_not_current_before_processing",
+                reason=discard_reason,
                 event_at=datetime.utcnow(),
             )
             db.commit()
@@ -646,15 +666,27 @@ def process_claimed_run(claimed: ClaimedRun) -> AgentFollowupRun | None:
     )
 
 
-def _is_current_claim(run: AgentFollowupRun | None, claimed: ClaimedRun) -> bool:
-    """确认 run 仍由当前 Worker 持有，避免旧 Worker 覆盖后来状态。"""
+def _claim_discard_reason(
+    run: AgentFollowupRun | None,
+    claimed: ClaimedRun,
+    *,
+    now: datetime,
+) -> str | None:
+    """Explain why a delayed worker result must not mutate the current run."""
 
-    return bool(
-        run
-        and run.execution_status == "running"
-        and run.claim_token == claimed.claim_token
-        and run.inbound_reply_id == claimed.inbound_reply_id
-    )
+    if run is None:
+        return "run_not_found"
+    if run.inbound_reply_id != claimed.inbound_reply_id:
+        return "inbound_reply_not_current"
+    if run.execution_status != "running":
+        return "run_not_running"
+    if run.claim_token != claimed.claim_token:
+        return "claim_not_current"
+    if run.lease_expires_at is None:
+        return "lease_missing"
+    if run.lease_expires_at <= now:
+        return "lease_expired"
+    return None
 
 
 def _complete_claimed_run(
@@ -684,11 +716,12 @@ def _complete_claimed_run(
     now = datetime.utcnow()
     with SessionLocal() as db:
         run = db.get(AgentFollowupRun, claimed.run_id)
-        if not _is_current_claim(run, claimed):
+        discard_reason = _claim_discard_reason(run, claimed, now=now)
+        if discard_reason is not None:
             _append_claim_result_discarded_event(
                 db,
                 claimed=claimed,
-                reason="claim_not_current_before_completion",
+                reason=discard_reason,
                 event_at=now,
             )
             db.commit()
@@ -761,11 +794,12 @@ def persist_unexpected_claim_error(claimed: ClaimedRun, error: Exception) -> Age
     now = datetime.utcnow()
     with SessionLocal() as db:
         run = db.get(AgentFollowupRun, claimed.run_id)
-        if not _is_current_claim(run, claimed):
+        discard_reason = _claim_discard_reason(run, claimed, now=now)
+        if discard_reason is not None:
             _append_claim_result_discarded_event(
                 db,
                 claimed=claimed,
-                reason="claim_not_current_before_unexpected_error",
+                reason=discard_reason,
                 event_at=now,
             )
             db.commit()
