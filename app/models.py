@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
+from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, event, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -364,6 +364,10 @@ class AgentFollowupRun(Base):
     # execution_status 描述任务生命周期；llm_status 只描述模型或校验结果，避免混淆。
     execution_status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
     claim_token: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    # Only populated while execution_status is running.  Terminal history is
+    # recorded in WorkerRunEvent so the mutable run row never becomes an audit
+    # log itself.
+    claimed_by_worker_id: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
     lease_expires_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
     provider_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     started_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
@@ -382,6 +386,42 @@ class AgentFollowupRun(Base):
     created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
     updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class WorkerRunEvent(Base):
+    """Append-only worker claim audit event; it never stores a claim token or message content."""
+
+    __tablename__ = "worker_run_events"
+    __table_args__ = (
+        Index("ix_worker_run_events_run_event_at", "agent_followup_run_id", "event_at"),
+        Index("ix_worker_run_events_department_event_at", "department_code", "event_at"),
+        Index("ix_worker_run_events_type_event_at", "event_type", "event_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    agent_followup_run_id: Mapped[str] = mapped_column(
+        String(120), ForeignKey("agent_followup_runs.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    department_code: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    worker_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    event_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), nullable=False, index=True)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), nullable=False, index=True)
+
+
+@event.listens_for(WorkerRunEvent, "before_update")
+def _prevent_worker_run_event_update(_mapper: object, _connection: object, _target: WorkerRunEvent) -> None:
+    """Keep ORM callers from treating operational events as mutable state."""
+
+    raise ValueError("worker run events are immutable")
+
+
+@event.listens_for(WorkerRunEvent, "before_delete")
+def _prevent_worker_run_event_delete(_mapper: object, _connection: object, _target: WorkerRunEvent) -> None:
+    """The database migration adds the matching persistence-level guard."""
+
+    raise ValueError("worker run events are immutable")
 
 
 class HumanReviewDecision(Base):
