@@ -1,9 +1,94 @@
 from __future__ import annotations
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
+from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
+
+
+class AuthUser(Base):
+    """ReplyChat 内部身份映射；外部身份只以 source + subject 唯一标识。"""
+
+    __tablename__ = "auth_users"
+    __table_args__ = (
+        UniqueConstraint("identity_source", "external_subject", name="uq_auth_users_identity_source_subject"),
+        Index("ix_auth_users_identity_source_active", "identity_source", "is_active"),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    identity_source: Mapped[str] = mapped_column(String(40), nullable=False)
+    external_subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False, index=True)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
+    updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class Department(Base):
+    """授权目录中的部门；现有业务表仍以 department_code 作为归属字段。"""
+
+    __tablename__ = "departments"
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    code: Mapped[str] = mapped_column(String(40), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False, index=True)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
+    updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class UserDepartmentMembership(Base):
+    """用户在单个部门中的 Agent 角色；角色不具有跨部门隐式继承。"""
+
+    __tablename__ = "user_department_memberships"
+    __table_args__ = (
+        UniqueConstraint("auth_user_id", "department_id", name="uq_user_department_memberships_user_department"),
+        CheckConstraint("role IN ('operator', 'reviewer', 'admin')", name="ck_user_department_memberships_role"),
+        Index("ix_user_department_memberships_user_active", "auth_user_id", "is_active"),
+        Index("ix_user_department_memberships_department_active_role", "department_id", "is_active", "role"),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    auth_user_id: Mapped[str] = mapped_column(
+        String(120), ForeignKey("auth_users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    department_id: Mapped[str] = mapped_column(
+        String(120), ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(40), nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False, index=True)
+    authorization_source: Mapped[str] = mapped_column(String(40), default="manual", nullable=False)
+    granted_by_auth_user_id: Mapped[str | None] = mapped_column(
+        String(120), ForeignKey("auth_users.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
+    updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class AuthorizationAuditEvent(Base):
+    """授权目录变更的追加式审计记录，不删除或覆盖既有事件。"""
+
+    __tablename__ = "authorization_audit_events"
+    __table_args__ = (
+        Index("ix_authorization_audit_events_actor_created", "actor_auth_user_id", "created_at"),
+        Index("ix_authorization_audit_events_target_created", "target_auth_user_id", "created_at"),
+        Index("ix_authorization_audit_events_department_created", "department_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    action: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    actor_auth_user_id: Mapped[str | None] = mapped_column(
+        String(120), ForeignKey("auth_users.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    target_auth_user_id: Mapped[str | None] = mapped_column(
+        String(120), ForeignKey("auth_users.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    department_id: Mapped[str | None] = mapped_column(
+        String(120), ForeignKey("departments.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    before_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    after_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
 
 
 class Creator(Base):
