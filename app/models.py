@@ -144,6 +144,28 @@ class DoNotContactConfirmation(Base):
     updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class DeclineConfirmation(Base):
+    """人工确认明确拒绝的不可变审计记录；不依赖也不伪造 Agent run。"""
+
+    __tablename__ = "decline_confirmations"
+    __table_args__ = (
+        UniqueConstraint("inbound_reply_id", name="uq_decline_confirmations_reply"),
+        Index("ix_decline_confirmations_department_confirmed", "department_code", "confirmed_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    department_code: Mapped[str] = mapped_column(String(40), default="cross_border", index=True)
+    creator_id: Mapped[str] = mapped_column(
+        String(120), ForeignKey("creators.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    inbound_reply_id: Mapped[str] = mapped_column(
+        String(120), ForeignKey("inbound_replies.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    confirmed_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), nullable=False, index=True)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), nullable=False, index=True)
+
+
 class Product(Base):
     """产品档案：按产品类型为达人回复建议提供可控的业务上下文。"""
 

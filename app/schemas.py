@@ -228,6 +228,12 @@ class DncConfirmationRejectIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class DeclineConfirmationApproveIn(BaseModel):
+    """人工确认明确拒绝；操作人只从当前 Principal 派生。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class FailedReviewRetryIn(BaseModel):
     """人工重试模型失败的审核项；只入队新的 Agent run。"""
 

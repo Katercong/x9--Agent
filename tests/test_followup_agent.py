@@ -27,18 +27,19 @@ from app.database import Base, SessionLocal, engine, init_db  # noqa: E402
 from app.demo_seed import seed_demo_data  # noqa: E402
 from app.authorization import DepartmentMembership, Role, principal_from_memberships  # noqa: E402
 from app.identity import get_current_principal  # noqa: E402
-from app.main import _apply_review_queue_filters, _review_queue_base_statement, app  # noqa: E402
+from app.main import _apply_review_queue_filters, _decline_confirmation_to_dict, _review_queue_base_statement, app  # noqa: E402
 from app.models import (  # noqa: E402
     AgentFollowupRun,
     Creator,
     CreatorOutreachEvent,
+    DeclineConfirmation,
     DraftExportRecord,
     FollowupTask,
     HumanReviewDecision,
     InboundReply,
 )
 from app import models, services  # noqa: E402
-from app.schemas import AgentSuggestion  # noqa: E402
+from app.schemas import AgentSuggestion, DeclineConfirmationApproveIn  # noqa: E402
 from app.services import classify_reply  # noqa: E402
 
 
@@ -2658,6 +2659,77 @@ def test_alembic_upgrade_creates_review_queue_query_indexes(tmp_path):
         for table_name, expected_names in expected_indexes.items():
             actual_names = {row[1] for row in connection.execute(f"PRAGMA index_list('{table_name}')")}
             assert expected_names <= actual_names
+
+
+def test_decline_confirmation_audit_migration_upgrades_and_downgrades_sqlite(tmp_path):
+    """拒绝确认审计表必须有唯一回复约束和不可级联删除的外键。"""
+
+    root = Path(__file__).resolve().parents[1]
+    database_path = tmp_path / "decline_confirmation_audit.sqlite"
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = f"sqlite:///{database_path.as_posix()}"
+
+    def run_alembic(*args: str) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", *args],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    run_alembic("upgrade", "head")
+    with sqlite3.connect(database_path) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "decline_confirmations" in tables
+        foreign_keys = connection.execute("PRAGMA foreign_key_list('decline_confirmations')").fetchall()
+        assert {(row[3], row[2], row[6]) for row in foreign_keys} == {
+            ("creator_id", "creators", "RESTRICT"),
+            ("inbound_reply_id", "inbound_replies", "RESTRICT"),
+        }
+        indexes = connection.execute("PRAGMA index_list('decline_confirmations')").fetchall()
+        assert "ix_decline_confirmations_department_confirmed" in {row[1] for row in indexes}
+        unique_indexes = [row[1] for row in indexes if row[2]]
+        assert any(
+            [row[2] for row in connection.execute(f"PRAGMA index_info('{index_name}')").fetchall()]
+            == ["inbound_reply_id"]
+            for index_name in unique_indexes
+        )
+
+    run_alembic("downgrade", "2b3c4d5e6f7a")
+    with sqlite3.connect(database_path) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "decline_confirmations" not in tables
+
+
+def test_decline_confirmation_schema_and_serializer_are_audit_only():
+    """阶段 1 的确认请求无客户端主体字段，序列化器只返回审计数据。"""
+
+    assert DeclineConfirmationApproveIn.model_validate({}).model_dump() == {}
+    with pytest.raises(ValidationError):
+        DeclineConfirmationApproveIn.model_validate({"actor_id": "forged"})
+
+    confirmation = DeclineConfirmation(
+        id="decline_confirmation_schema",
+        department_code="cross_border",
+        creator_id="creator_schema",
+        inbound_reply_id="reply_schema",
+        actor_id="auth_user_reviewer",
+        confirmed_at=datetime(2026, 7, 29, 21, 0, 0),
+        created_at=datetime(2026, 7, 29, 21, 0, 0),
+    )
+    assert _decline_confirmation_to_dict(confirmation) == {
+        "id": "decline_confirmation_schema",
+        "department_code": "cross_border",
+        "creator_id": "creator_schema",
+        "inbound_reply_id": "reply_schema",
+        "actor_id": "auth_user_reviewer",
+        "confirmed_at": "2026-07-29T21:00:00",
+        "created_at": "2026-07-29T21:00:00",
+    }
 
 
 def test_review_queue_sql_compiles_for_postgresql_and_sqlite():

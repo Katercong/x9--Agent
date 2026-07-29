@@ -22,6 +22,7 @@ from .models import (
     AuthorizationAuditEvent,
     Creator,
     CreatorOutreachEvent,
+    DeclineConfirmation,
     Department,
     DoNotContactConfirmation,
     DraftExportRecord,
@@ -45,6 +46,7 @@ from .schemas import (
     CreatorCreateIn,
     CreatorPatchIn,
     CreatorReplaceIn,
+    DeclineConfirmationApproveIn,
     DncConfirmationApproveIn,
     DncConfirmationRejectIn,
     DraftExportCreateIn,
@@ -1937,6 +1939,20 @@ def _dnc_confirmation_to_dict(row: DoNotContactConfirmation) -> dict[str, Any]:
         "status": row.status,
         "reviewed_by": row.reviewed_by,
         "reviewed_at": row.reviewed_at.isoformat() if row.reviewed_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _decline_confirmation_to_dict(row: DeclineConfirmation) -> dict[str, Any]:
+    """Serialize the immutable human confirmation without exposing any send capability."""
+
+    return {
+        "id": row.id,
+        "department_code": row.department_code,
+        "creator_id": row.creator_id,
+        "inbound_reply_id": row.inbound_reply_id,
+        "actor_id": row.actor_id,
+        "confirmed_at": row.confirmed_at.isoformat() if row.confirmed_at else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
