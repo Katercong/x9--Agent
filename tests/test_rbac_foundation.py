@@ -22,7 +22,7 @@ from pydantic import ValidationError
 from sqlalchemy import create_engine, delete, func, select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.schema import CreateTable
 
 from app.authorization import Capability, DepartmentMembership, Principal, Role, principal_from_memberships
@@ -943,6 +943,42 @@ def test_access_department_creation_grants_scoped_admin_and_audits(monkeypatch: 
         "access_department_updated",
         "access_membership_created",
     }
+
+
+def test_access_department_creation_maps_concurrent_unique_conflict_to_409(monkeypatch: pytest.MonkeyPatch):
+    """The database unique constraint is the final guard for a create race."""
+
+    _provision_scoped_read_data()
+    _configure_x9_assertion(monkeypatch)
+    client = TestClient(app)
+    admin_headers = _signed_x9_headers(subject_id="x9-cross-admin")
+    original_flush = Session.flush
+
+    def concurrent_department_insert_conflict(session: Session, *args, **kwargs):
+        if any(
+            isinstance(instance, Department) and instance.code == "race department"
+            for instance in session.new
+        ):
+            raise IntegrityError(
+                "INSERT INTO departments",
+                {"code": "race department"},
+                sqlite3.IntegrityError("UNIQUE constraint failed: departments.code"),
+            )
+        return original_flush(session, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "flush", concurrent_department_insert_conflict)
+
+    response = client.post(
+        "/api/followup-agent/access/departments",
+        json={"code": " Race Department ", "name": "Race Department"},
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "department code is already reserved"
+    with SessionLocal() as db:
+        assert db.scalar(select(Department.id).where(Department.code == "race department")) is None
+        assert db.scalar(select(func.count()).select_from(AuthorizationAuditEvent)) == 0
 
 
 def test_access_department_cannot_claim_existing_business_department_code(monkeypatch: pytest.MonkeyPatch):

@@ -146,7 +146,15 @@ def create_access_department(
         is_active=True,
     )
     db.add(department)
-    db.flush()
+    try:
+        # The reservation lookup above improves the common case, but it cannot
+        # make a concurrent insert atomic.  The unique constraint is the final
+        # authority: map that race to the same business result as a pre-existing
+        # code and reset the failed transaction before returning the response.
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="department code is already reserved") from exc
     membership = UserDepartmentMembership(
         id=new_id("membership"),
         auth_user_id=actor.id,
