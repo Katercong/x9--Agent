@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
 
-from .department_codes import normalise_department_code
+from .department_codes import validate_department_code
 
 
 class Role(str, Enum):
@@ -73,9 +73,7 @@ class DepartmentMembership:
     role: Role
 
     def __post_init__(self) -> None:
-        code = normalise_department_code(self.department_code)
-        if not code:
-            raise ValueError("department_code must not be empty")
+        code = validate_department_code(self.department_code)
         object.__setattr__(self, "department_code", code)
         object.__setattr__(self, "role", normalise_role(self.role))
 
@@ -102,7 +100,7 @@ class Principal:
         return frozenset(membership.department_code for membership in self.memberships)
 
     def membership_for(self, department_code: str) -> DepartmentMembership | None:
-        wanted = normalise_department_code(department_code)
+        wanted = validate_department_code(department_code)
         return next((membership for membership in self.memberships if membership.department_code == wanted), None)
 
     def can_access_department(self, department_code: str) -> bool:

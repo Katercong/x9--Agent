@@ -50,6 +50,7 @@
 - `inbound_replies.external_message_id` 非空；`agent_followup_runs.creator_id` 与 `inbound_reply_id` 非空并受外键约束；同一回复在 `queued` 或 `running` 状态最多一条 run。
 - 待建设用户、部门成员关系、渠道连接、同步游标、待匹配消息、人工决定、草稿导出记录、站内通知和不可篡改审计事件。
 - 权限模型至少包含运营、审核、管理员；用户只能访问获授权部门的数据。身份提供方尚未选定，但必须预留企业身份集成边界。
+- 部门码必须使用可跨 SQLite 与 PostgreSQL 重现的 ASCII slug（小写字母、数字、`-`、`_`）；迁移发现历史非 ASCII 或非法部门码时必须失败，不得依赖数据库 Unicode 大小写规则继续运行。
 - 消息正文、AI run 和普通审计默认保留 24 个月，可按部门配置；已确认 DNC 永久保留。
 
 ## 6. 生产架构与可靠性

@@ -5,8 +5,8 @@
 ## 代码基线
 
 - 远端 `main` 当前基线为 `080f886 Feat/review queue sql optimization (#6)`，已包含 V2/V3.2 默认配置、集合 SQL 审核队列、React 工作台、DNC 审核动作、人工导出交接，以及 Dockerfile、Compose `migrate`/API/Worker profile、前端静态托管和受控 demo seed。
-- 当前功能分支为 `feat/rbac-foundation`：已推送 `de227f5`（授权目录与策略）、`5f0f1f1`（身份 Adapter）、`5307480`（读范围）、`3e34752`（写范围）、`3dcfdbb`（管理员授权审计）、`7b4179f`（身份感知工作台、受控 demo 与文档）、`7f44b0e`（Compose demo 身份默认值）、`5b343a3`（部门目录与业务归属边界）、`f2e2ba9`（历史部门码规范化访问范围）和 `83c8463`（并发部门创建冲突）；当前工作区另有 P1 边界空白字符修复，等待 review：制表符/换行包裹的历史部门码会使用与 API 一致的规范化规则并保持授权可访问。
-- 最近验证：后端全量测试为 `126 passed`，前端 `npm run test -- --run` 为 `10 passed`，`npm run build` 通过；仅有 FastAPI `on_event` 既有弃用警告和 Vite 既有的大 bundle 提示。已用独立 Compose 项目完成迁移、API 健康检查、`/operator-workbench/` 静态资源、demo 身份、六类队列和重复 demo seed（第二次新增 `0` 条）的 RBAC Docker 全链路演练；本轮还验证隔离 PostgreSQL 旧库从 `d7e8f9a0b1c2` 升级至当前 P1 head `0a1b2c3d4e5f`，并确认 tab/换行历史部门码可严格匹配。
+- 当前功能分支为 `feat/rbac-foundation`：已推送 `de227f5`（授权目录与策略）、`5f0f1f1`（身份 Adapter）、`5307480`（读范围）、`3e34752`（写范围）、`3dcfdbb`（管理员授权审计）、`7b4179f`（身份感知工作台、受控 demo 与文档）、`7f44b0e`（Compose demo 身份默认值）、`5b343a3`（部门目录与业务归属边界）、`f2e2ba9`（历史部门码规范化访问范围）、`83c8463`（并发部门创建冲突）和 `fcaaffa`（部门码边界空白规范）；当前工作区另有 P1 ASCII slug 修复，等待 review：非 ASCII 历史部门码会被迁移预检安全拒绝，避免目录与业务行因 Unicode 大小写不一致而脱节。
+- 最近验证：后端全量测试为 `131 passed`，前端 `npm run test -- --run` 为 `10 passed`，`npm run build` 通过；仅有 FastAPI `on_event` 既有弃用警告和 Vite 既有的大 bundle 提示。已用独立 Compose 项目完成迁移、API 健康检查、`/operator-workbench/` 静态资源、demo 身份、六类队列和重复 demo seed（第二次新增 `0` 条）的 RBAC Docker 全链路演练；本轮还验证隔离 PostgreSQL 旧库从 `d7e8f9a0b1c2` 升级至当前 P1 head `2b3c4d5e6f7a` 时，带 tab/换行的非 ASCII 大写历史部门码会原子地失败，保留在原 migration revision。
 - 本地数据库：Docker Compose 管理 PostgreSQL。默认服务为 PostgreSQL、一次性 `migrate` 和 API；`worker` 与 `demo-seed` 是显式 profile。`.env.example` 的 Docker 默认值只启用 loopback demo Fake Adapter，且未配置 X9 HMAC 密钥时传入有效空 JSON；生产必须改为 X9 签名断言和受管密钥。SQLite 只用于自动化测试和可丢弃的本地 MVP 数据。
 
 ## 当前系统能力
@@ -24,7 +24,7 @@
 - 工作台地址为 `/operator-workbench/`。队列覆盖普通回复、模型失败、生成中、拒绝、DNC 待确认和已锁定待交接草稿；单项详情聚合达人、产品、资料、会话、事件、待办和全部 Agent run。
 - 除 `/health` 外，业务 API 必须解析当前 Principal。Agent 本地 `AuthUser`、部门和成员关系是授权唯一权威；X9 仅能经短期签名断言提供稳定身份，Agent 不接收 `x9_session` Cookie、不读 X9 数据库。
 - 工作台先读取 `/api/followup-agent/auth/me`，展示当前本地身份与部门角色，并按角色隐藏或禁用审核、DNC、重试和交接操作；服务端继续负责所有实际授权与审计主体。
-- `departments` 是受保护的业务部门码目录：回填迁移会为历史业务码创建无成员关系的启用目录项，后续迁移会规范化目录与全部历史业务行的部门码。规范码为小写，并移除边界处的 ASCII 空格、制表符、换行、回车、垂直制表符和换页符；API、碰撞预检与最新前向迁移使用同一规则。管理员只能创建从未使用的部门码；创建或迁移达人时，目标目录必须存在、启用且调用者在目标范围具备 `creator:manage`，防止管理员认领其他部门的既有业务数据，并保证已授予范围可读取历史数据。并发同名新部门以数据库唯一约束为最终裁决，接口会回滚失败事务并返回 `409`。
+- `departments` 是受保护的业务部门码目录：回填迁移会为历史业务码创建无成员关系的启用目录项，后续迁移会规范化目录与全部历史业务行的部门码。规范码只允许小写 ASCII 字母、数字和 `-`/`_` 分隔的 slug 段；API、授权主体、碰撞预检和最新前向迁移共用该规则。历史非 ASCII 或内部空白部门码会安全阻断迁移，而不会在运行时形成不可访问的授权范围。管理员只能创建从未使用的部门码；创建或迁移达人时，目标目录必须存在、启用且调用者在目标范围具备 `creator:manage`，防止管理员认领其他部门的既有业务数据，并保证已授予范围可读取历史数据。并发同名新部门以数据库唯一约束为最终裁决，接口会回滚失败事务并返回 `409`。
 - DNC 是最高优先级安全边界：待确认或已确认后隐藏既有 AI 草稿和所有交接入口。DNC 确认永久阻断后续业务处理；驳回会显式新建审核 run，但不会发送消息。明确拒绝仍是只读终态，尚未实现确认 `dropped`。
 - AI 只能提供分类、上下文、草稿和建议；所有非终态推进须人工确认。复制/下载只写导出审计，不会调用真实渠道。没有 Gmail、IMAP、X9 或自动发送能力。
 - 当前 Worker 使用短事务领取、120 秒 lease、claim token 条件回写和过期回收。手动重试的并发活跃 run 会返回业务 `409`；无模型 Key 时仍使用本地受限 fallback 完成 queued run，配置 Key 后才调用 Provider。

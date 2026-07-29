@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .department_codes import validate_department_code
+
 
 REPLY_CATEGORIES = {
     "interested",
@@ -49,7 +51,16 @@ class ReplyClassification(BaseModel):
         return value
 
 
-class CreatorCreateIn(BaseModel):
+class DepartmentCodeIn(BaseModel):
+    """Validate request department codes against the portable ASCII namespace."""
+
+    @field_validator("department_code", check_fields=False)
+    @classmethod
+    def validate_department_code_field(cls, value: str | None) -> str | None:
+        return validate_department_code(value) if value is not None else None
+
+
+class CreatorCreateIn(DepartmentCodeIn):
     """创建达人时使用的字段；更新需显式使用 PUT 或 PATCH。"""
 
     id: str
@@ -67,7 +78,7 @@ class CreatorCreateIn(BaseModel):
     owner_bd: str | None = None
 
 
-class CreatorReplaceIn(BaseModel):
+class CreatorReplaceIn(DepartmentCodeIn):
     """PUT 全量档案：所有档案字段必须显式提交。"""
 
     department_code: str
@@ -84,7 +95,7 @@ class CreatorReplaceIn(BaseModel):
     recommended_collab_type: str | None
 
 
-class CreatorPatchIn(BaseModel):
+class CreatorPatchIn(DepartmentCodeIn):
     """PATCH 局部档案：仅写入调用方实际传入的字段。"""
 
     department_code: str | None = None
@@ -265,6 +276,11 @@ class AccessDepartmentCreateIn(BaseModel):
     code: str = Field(min_length=1, max_length=40)
     name: str = Field(min_length=1, max_length=200)
 
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, value: str) -> str:
+        return validate_department_code(value)
+
 
 class AccessDepartmentPatchIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -281,7 +297,7 @@ class AccessDepartmentPatchIn(BaseModel):
         return self
 
 
-class AccessMembershipCreateIn(BaseModel):
+class AccessMembershipCreateIn(DepartmentCodeIn):
     model_config = ConfigDict(extra="forbid")
 
     auth_user_id: str = Field(min_length=1, max_length=120)

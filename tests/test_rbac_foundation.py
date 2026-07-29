@@ -51,6 +51,8 @@ from app.schemas import (
     AccessDepartmentPatchIn,
     AccessMembershipPatchIn,
     AccessUserPatchIn,
+    AccessDepartmentCreateIn,
+    CreatorCreateIn,
     DncConfirmationApproveIn,
     DncConfirmationRejectIn,
     DraftExportCreateIn,
@@ -905,33 +907,33 @@ def test_access_department_creation_grants_scoped_admin_and_audits(monkeypatch: 
 
     response = client.post(
         "/api/followup-agent/access/departments",
-        json={"code": "\tCreator Partnerships\n", "name": "Creator Partnerships"},
+        json={"code": "\tCreator-Partnerships\n", "name": "Creator Partnerships"},
         headers=admin_headers,
     )
     assert response.status_code == 201
-    assert response.json()["department"]["code"] == "creator partnerships"
+    assert response.json()["department"]["code"] == "creator-partnerships"
     assert response.json()["membership"]["role"] == "admin"
     assert response.json()["membership"]["auth_user_id"] == "auth_user_cross_admin"
     assert client.post(
         "/api/followup-agent/access/departments",
-        json={"code": "creator partnerships", "name": "Duplicate"},
+        json={"code": "creator-partnerships", "name": "Duplicate"},
         headers=admin_headers,
     ).status_code == 409
 
     departments = client.get("/api/followup-agent/access/departments", headers=admin_headers)
     assert {department["code"] for department in departments.json()["items"]} == {
         "cross_border",
-        "creator partnerships",
+        "creator-partnerships",
     }
     memberships = client.get(
-        "/api/followup-agent/access/memberships?department_code=creator%20partnerships",
+        "/api/followup-agent/access/memberships?department_code=creator-partnerships",
         headers=admin_headers,
     )
     assert memberships.status_code == 200
     assert len(memberships.json()["items"]) == 1
 
     disabled = client.patch(
-        "/api/followup-agent/access/departments/creator%20partnerships",
+        "/api/followup-agent/access/departments/creator-partnerships",
         json={"is_active": False},
         headers=admin_headers,
     )
@@ -945,6 +947,25 @@ def test_access_department_creation_grants_scoped_admin_and_audits(monkeypatch: 
     }
 
 
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        (AccessDepartmentCreateIn, {"code": "foreign trade", "name": "Foreign Trade"}),
+        (AccessDepartmentCreateIn, {"code": "外贸", "name": "Foreign Trade"}),
+        (CreatorCreateIn, {"id": "creator_invalid_department", "department_code": "ÄPFEL", "handle": "invalid"}),
+    ],
+)
+def test_department_code_schemas_require_portable_ascii_slugs(model, payload):
+    with pytest.raises(ValidationError, match="ASCII slug"):
+        model.model_validate(payload)
+
+
+def test_department_code_schema_canonicalizes_ascii_boundary_whitespace():
+    assert AccessDepartmentCreateIn.model_validate(
+        {"code": "\tFOREIGN_TRADE\n", "name": "Foreign Trade"}
+    ).code == "foreign_trade"
+
+
 def test_access_department_creation_maps_concurrent_unique_conflict_to_409(monkeypatch: pytest.MonkeyPatch):
     """The database unique constraint is the final guard for a create race."""
 
@@ -956,12 +977,12 @@ def test_access_department_creation_maps_concurrent_unique_conflict_to_409(monke
 
     def concurrent_department_insert_conflict(session: Session, *args, **kwargs):
         if any(
-            isinstance(instance, Department) and instance.code == "race department"
+            isinstance(instance, Department) and instance.code == "race-department"
             for instance in session.new
         ):
             raise IntegrityError(
                 "INSERT INTO departments",
-                {"code": "race department"},
+                {"code": "race-department"},
                 sqlite3.IntegrityError("UNIQUE constraint failed: departments.code"),
             )
         return original_flush(session, *args, **kwargs)
@@ -970,14 +991,14 @@ def test_access_department_creation_maps_concurrent_unique_conflict_to_409(monke
 
     response = client.post(
         "/api/followup-agent/access/departments",
-        json={"code": " Race Department ", "name": "Race Department"},
+        json={"code": " Race-Department ", "name": "Race Department"},
         headers=admin_headers,
     )
 
     assert response.status_code == 409
     assert response.json()["detail"] == "department code is already reserved"
     with SessionLocal() as db:
-        assert db.scalar(select(Department.id).where(Department.code == "race department")) is None
+        assert db.scalar(select(Department.id).where(Department.code == "race-department")) is None
         assert db.scalar(select(func.count()).select_from(AuthorizationAuditEvent)) == 0
 
 
@@ -1038,23 +1059,23 @@ def test_new_department_grants_its_creator_scope_for_new_business_data(monkeypat
 
     created_department = client.post(
         "/api/followup-agent/access/departments",
-        json={"code": " New Operations ", "name": "New Operations"},
+        json={"code": " New-Operations ", "name": "New Operations"},
         headers=admin_headers,
     )
     assert created_department.status_code == 201
-    assert created_department.json()["department"]["code"] == "new operations"
+    assert created_department.json()["department"]["code"] == "new-operations"
     assert created_department.json()["membership"]["role"] == "admin"
 
     created_creator = client.post(
         "/api/followup-agent/creators",
-        json={"id": "creator_new_operations", "department_code": " NEW OPERATIONS ", "handle": "new_operations"},
+        json={"id": "creator_new_operations", "department_code": " NEW-OPERATIONS ", "handle": "new_operations"},
         headers=admin_headers,
     )
     assert created_creator.status_code == 201
     with SessionLocal() as db:
         new_creator = db.get(Creator, "creator_new_operations")
         assert new_creator is not None
-        assert new_creator.department_code == "new operations"
+        assert new_creator.department_code == "new-operations"
 
     simulated_reply = client.post(
         "/api/followup-agent/simulate-reply",
@@ -1062,7 +1083,7 @@ def test_new_department_grants_its_creator_scope_for_new_business_data(monkeypat
         headers=admin_headers,
     )
     assert simulated_reply.status_code == 200
-    assert simulated_reply.json()["reply"]["department_code"] == "new operations"
+    assert simulated_reply.json()["reply"]["department_code"] == "new-operations"
 
 
 def test_creator_department_writes_require_an_active_catalog_entry():
@@ -1579,3 +1600,58 @@ def test_department_code_boundary_whitespace_migration_rejects_idempotency_colli
         assert connection.execute(
             "SELECT department_code FROM inbound_replies WHERE id = 'collision_reply_first'"
         ).fetchone()[0] == "\tforeign_trade\n"
+
+
+def test_department_code_ascii_migration_rejects_non_ascii_historical_values(tmp_path: Path):
+    """Do not rely on SQLite/PostgreSQL Unicode LOWER() behavior for scope."""
+
+    root = Path(__file__).resolve().parents[1]
+    db_path = tmp_path / "department_code_non_ascii.sqlite"
+    database_url = f"sqlite:///{db_path.as_posix()}"
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = database_url
+
+    def run_alembic(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "alembic", *args],
+            cwd=root,
+            env=environment,
+            text=True,
+            capture_output=True,
+        )
+
+    result = run_alembic("upgrade", "d7e8f9a0b1c2")
+    assert result.returncode == 0, result.stdout + result.stderr
+    migration_engine = create_engine(database_url)
+    MigrationSession = sessionmaker(bind=migration_engine, future=True)
+    try:
+        with MigrationSession() as db:
+            creator = Creator(id="non_ascii_creator", department_code="\tÄPFEL\n", handle="non_ascii")
+            db.add_all(
+                [
+                    creator,
+                    InboundReply(
+                        id="non_ascii_reply",
+                        department_code=creator.department_code,
+                        creator_id=creator.id,
+                        direction="inbound",
+                        channel="simulation",
+                        external_message_id="non-ascii-reply",
+                        body="Non-ASCII legacy department code.",
+                        processing_status="need_ai_review",
+                    ),
+                ]
+            )
+            db.commit()
+    finally:
+        migration_engine.dispose()
+
+    result = run_alembic("upgrade", "head")
+
+    assert result.returncode != 0
+    assert "department code(s) are not valid ASCII slugs" in result.stdout + result.stderr
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0a1b2c3d4e5f"
+        assert connection.execute(
+            "SELECT department_code FROM inbound_replies WHERE id = 'non_ascii_reply'"
+        ).fetchone()[0] == "Äpfel"

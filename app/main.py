@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from .database import get_db, init_db
-from .department_codes import normalise_department_code, normalised_department_code_expression
+from .department_codes import normalised_department_code_expression, validate_department_code
 from .identity import ensure_capability, get_current_principal
 from .models import (
     AgentFollowupRun,
@@ -814,11 +814,12 @@ def list_human_review_queue(
         raise HTTPException(status_code=422, detail="unknown review_type")
     allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
     scoped_departments: Collection[str]
-    if department_code is not None and department_code not in allowed_departments:
+    requested_department_code = _normalise_department_code(department_code) if department_code is not None else None
+    if requested_department_code is not None and requested_department_code not in allowed_departments:
         # A list endpoint never confirms that another department exists.
         scoped_departments = ()
-    elif department_code is not None:
-        scoped_departments = (department_code,)
+    elif requested_department_code is not None:
+        scoped_departments = (requested_department_code,)
     else:
         scoped_departments = allowed_departments
     statement, review_type_expression = _review_queue_base_statement(scoped_departments)
@@ -1309,10 +1310,10 @@ def _allowed_departments(principal: Principal, capability: Capability) -> frozen
 def _normalise_department_code(value: str) -> str:
     """Normalise an API department code and reject an empty canonical value."""
 
-    code = normalise_department_code(value)
-    if not code:
-        raise HTTPException(status_code=422, detail="department code must not be empty")
-    return code
+    try:
+        return validate_department_code(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _department_code_is_reserved(db: Session, department_code: str) -> bool:
