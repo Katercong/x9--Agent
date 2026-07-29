@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .department_codes import validate_department_code
 
 
 REPLY_CATEGORIES = {
@@ -49,7 +51,16 @@ class ReplyClassification(BaseModel):
         return value
 
 
-class CreatorCreateIn(BaseModel):
+class DepartmentCodeIn(BaseModel):
+    """Validate request department codes against the portable ASCII namespace."""
+
+    @field_validator("department_code", check_fields=False)
+    @classmethod
+    def validate_department_code_field(cls, value: str | None) -> str | None:
+        return validate_department_code(value) if value is not None else None
+
+
+class CreatorCreateIn(DepartmentCodeIn):
     """创建达人时使用的字段；更新需显式使用 PUT 或 PATCH。"""
 
     id: str
@@ -67,7 +78,7 @@ class CreatorCreateIn(BaseModel):
     owner_bd: str | None = None
 
 
-class CreatorReplaceIn(BaseModel):
+class CreatorReplaceIn(DepartmentCodeIn):
     """PUT 全量档案：所有档案字段必须显式提交。"""
 
     department_code: str
@@ -84,7 +95,7 @@ class CreatorReplaceIn(BaseModel):
     recommended_collab_type: str | None
 
 
-class CreatorPatchIn(BaseModel):
+class CreatorPatchIn(DepartmentCodeIn):
     """PATCH 局部档案：仅写入调用方实际传入的字段。"""
 
     department_code: str | None = None
@@ -187,11 +198,12 @@ class RunAgentIn(BaseModel):
 class HumanReviewDecisionCreateIn(BaseModel):
     """普通回复的人工决定；终态 DNC/拒绝不在当前接口范围内。"""
 
+    model_config = ConfigDict(extra="forbid")
+
     agent_followup_run_id: str
     outcome: Literal["approve_draft", "close_without_draft"]
     final_draft: str | None = Field(default=None, max_length=20000)
     note: str | None = Field(default=None, max_length=5000)
-    actor_id: str = Field(min_length=1, max_length=120)
 
     @model_validator(mode="after")
     def validate_final_draft_for_outcome(self) -> "HumanReviewDecisionCreateIn":
@@ -207,25 +219,103 @@ class HumanReviewDecisionCreateIn(BaseModel):
 class DncConfirmationApproveIn(BaseModel):
     """人工确认明确退订；确认后永久阻断后续业务处理，不涉及任何外发。"""
 
-    actor_id: str = Field(min_length=1, max_length=120)
+    model_config = ConfigDict(extra="forbid")
 
 
 class DncConfirmationRejectIn(BaseModel):
     """人工驳回 DNC 判定；回复重新进入人工触发的 Agent 审核，不涉及任何外发。"""
 
-    actor_id: str = Field(min_length=1, max_length=120)
+    model_config = ConfigDict(extra="forbid")
 
 
 class FailedReviewRetryIn(BaseModel):
     """人工重试模型失败的审核项；只入队新的 Agent run。"""
 
-    actor_id: str = Field(min_length=1, max_length=120)
+    model_config = ConfigDict(extra="forbid")
 
 
 class DraftExportCreateIn(BaseModel):
     """记录人工复制/导出动作；不包含渠道、收件人或发送参数。"""
 
-    actor_id: str = Field(min_length=1, max_length=120)
+    model_config = ConfigDict(extra="forbid")
+
+
+AccessRole = Literal["operator", "reviewer", "admin"]
+
+
+class AccessUserCreateIn(BaseModel):
+    """Create an Agent-local mapping for an already authenticated external identity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    identity_source: str = Field(min_length=1, max_length=40)
+    external_subject: str = Field(min_length=1, max_length=200)
+    display_name: str | None = Field(default=None, max_length=200)
+
+
+class AccessUserPatchIn(BaseModel):
+    """Only soft-state and display metadata are editable; mappings are immutable."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = Field(default=None, max_length=200)
+    is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def require_an_update(self) -> "AccessUserPatchIn":
+        if not self.model_fields_set:
+            raise ValueError("at least one user field is required")
+        return self
+
+
+class AccessDepartmentCreateIn(BaseModel):
+    """Create a department and assign the requesting admin as its first admin."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=40)
+    name: str = Field(min_length=1, max_length=200)
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, value: str) -> str:
+        return validate_department_code(value)
+
+
+class AccessDepartmentPatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def require_an_update(self) -> "AccessDepartmentPatchIn":
+        if not self.model_fields_set:
+            raise ValueError("at least one department field is required")
+        if "name" in self.model_fields_set and self.name is None:
+            raise ValueError("department name must not be null")
+        return self
+
+
+class AccessMembershipCreateIn(DepartmentCodeIn):
+    model_config = ConfigDict(extra="forbid")
+
+    auth_user_id: str = Field(min_length=1, max_length=120)
+    department_code: str = Field(min_length=1, max_length=40)
+    role: AccessRole
+
+
+class AccessMembershipPatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: AccessRole | None = None
+    is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def require_an_update(self) -> "AccessMembershipPatchIn":
+        if not self.model_fields_set:
+            raise ValueError("at least one membership field is required")
+        return self
 
 
 class AgentSuggestion(BaseModel):

@@ -34,13 +34,14 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   approveDncConfirmation,
   createDraftExportRecord,
+  getCurrentPrincipal,
   getReviewItem,
   getReviewQueue,
   rejectDncConfirmation,
   retryFailedReviewItem,
   submitReviewDecision,
 } from "./api";
-import type { AgentRun, ReviewContext, ReviewFilter, ReviewQueueItem, ReviewType } from "./types";
+import type { AgentRun, CurrentPrincipal, DepartmentRole, ReviewContext, ReviewFilter, ReviewQueueItem, ReviewType } from "./types";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -123,6 +124,22 @@ const reviewReasonLabels: Record<string, string> = {
 };
 
 type HandoffAction = "copy" | "download";
+
+const roleRank: Record<DepartmentRole, number> = {
+  operator: 1,
+  reviewer: 2,
+  admin: 3,
+};
+
+function hasDepartmentRole(
+  principal: CurrentPrincipal | undefined,
+  departmentCode: string | undefined,
+  minimumRole: DepartmentRole,
+): boolean {
+  if (!principal || !departmentCode) return false;
+  const membership = principal.departments.find((department) => department.code === departmentCode);
+  return membership !== undefined && roleRank[membership.role] >= roleRank[minimumRole];
+}
 
 interface TimelineEntry {
   at: string | null | undefined;
@@ -314,9 +331,17 @@ export function OperatorWorkbench() {
   const [draft, setDraft] = useState("");
   const [messageApi, messageContext] = message.useMessage();
   const queryClient = useQueryClient();
+  const authQuery = useQuery({
+    queryKey: ["current-principal"],
+    queryFn: getCurrentPrincipal,
+    retry: false,
+  });
+  const principal = authQuery.data;
+  const canReadReview = Boolean(principal?.capabilities.includes("review:read"));
   const queueQuery = useQuery({
     queryKey: ["review-queue", filter],
     queryFn: () => getReviewQueue(filter),
+    enabled: canReadReview,
   });
   const queueItems = queueQuery.data?.items ?? [];
 
@@ -404,8 +429,13 @@ export function OperatorWorkbench() {
   const generationPending = detailItem?.review_type === "generation_pending";
   const approvedDraft = detailItem?.review_type === "approved_draft" && !dncBlocked;
   const pendingDncConfirmation = detailItem?.review_type === "dnc_confirmation" && detailItem.dnc_confirmation?.status === "pending_confirmation";
-  const canDecide = Boolean(detailItem?.decision_available && detailItem.run && !terminal);
-  const canHandoff = Boolean(!dncBlocked && approvedDraft && detailItem?.decision?.outcome === "approve_draft" && detailItem.decision.final_draft);
+  const currentDepartmentCode = detailItem?.reply.department_code;
+  const canReviewDecide = hasDepartmentRole(principal, currentDepartmentCode, "reviewer");
+  const canRetryRun = hasDepartmentRole(principal, currentDepartmentCode, "reviewer");
+  const canDecide = Boolean(detailItem?.decision_available && detailItem.run && !terminal && canReviewDecide);
+  const canDncDecide = hasDepartmentRole(principal, currentDepartmentCode, "reviewer");
+  const hasLockedDraft = Boolean(!dncBlocked && approvedDraft && detailItem?.decision?.outcome === "approve_draft" && detailItem.decision.final_draft);
+  const canHandoff = hasLockedDraft && hasDepartmentRole(principal, currentDepartmentCode, "operator");
   const conversation = useMemo(() => (detail ? buildTimeline(detail.context) : []), [detail]);
   const displayTitle = detailItem?.reply.subject || detailItem?.reply.body.slice(0, 72) || "选择一条待处理回复";
 
@@ -430,7 +460,17 @@ export function OperatorWorkbench() {
             <SafetyCertificateOutlined className="header-icon" />
             <Title level={3}>运营审核工作台</Title>
           </Space>
-          <Text type="secondary">会话式人工审核 · 演示审计身份：demo_operator</Text>
+          {authQuery.isLoading && <Text type="secondary">正在验证当前操作身份…</Text>}
+          {principal && (
+            <Space direction="vertical" size={2}>
+              <Text type="secondary">当前操作人：{principal.display_name || principal.user_id}</Text>
+              <Space wrap size={4}>
+                {principal.departments.map((department) => (
+                  <Tag key={department.code}>{department.code} · {department.role}</Tag>
+                ))}
+              </Space>
+            </Space>
+          )}
         </Space>
         <Tag color="blue">仅复制 / 下载交接，不提供发送能力</Tag>
       </header>
@@ -461,9 +501,24 @@ export function OperatorWorkbench() {
               );
             })}
           </div>
-          {queueQuery.isLoading && <Skeleton active paragraph={{ rows: 7 }} />}
-          {queueQuery.isError && <Alert type="error" message="队列加载失败" description="请确认 FastAPI 服务正在运行。" />}
-          {!queueQuery.isLoading && !queueQuery.isError && (
+          {authQuery.isLoading && <Skeleton active paragraph={{ rows: 7 }} />}
+          {authQuery.isError && (
+            <Alert
+              type="error"
+              message="身份或权限验证失败"
+              description="当前身份没有可用的 ReplyChat 授权映射。请联系管理员；页面不会绕过后端权限校验。"
+            />
+          )}
+          {principal && !canReadReview && (
+            <Alert
+              type="warning"
+              message="当前身份仅可查看非审核资源"
+              description="没有审核队列读取权限，因此不加载会话数据。"
+            />
+          )}
+          {canReadReview && queueQuery.isLoading && <Skeleton active paragraph={{ rows: 7 }} />}
+          {canReadReview && queueQuery.isError && <Alert type="error" message="队列加载失败" description="请确认 FastAPI 服务正在运行。" />}
+          {canReadReview && !queueQuery.isLoading && !queueQuery.isError && (
             <List
               className="queue-list"
               dataSource={queueItems}
@@ -513,6 +568,7 @@ export function OperatorWorkbench() {
                   <Space direction="vertical" className="full-width">
                     <Text strong>DNC 待人工确认</Text>
                     <Text type="secondary">确认后永久停止后续处理；驳回后只会重新进入草稿生成队列，不会发送消息。</Text>
+                    {!canDncDecide && <Text type="warning">当前身份没有 DNC 决定权限，仅可查看该终态记录。</Text>}
                     <Space wrap>
                       <Popconfirm
                         title="确认永久 DNC"
@@ -521,7 +577,7 @@ export function OperatorWorkbench() {
                         cancelText="取消"
                         onConfirm={() => detailItem.dnc_confirmation && dncConfirmationMutation.mutate(detailItem.dnc_confirmation.id)}
                       >
-                        <Button danger type="primary" loading={dncConfirmationMutation.isPending}>确认 DNC</Button>
+                        <Button danger type="primary" disabled={!canDncDecide} loading={dncConfirmationMutation.isPending}>确认 DNC</Button>
                       </Popconfirm>
                       <Popconfirm
                         title="驳回并重新审核"
@@ -530,7 +586,7 @@ export function OperatorWorkbench() {
                         cancelText="取消"
                         onConfirm={() => detailItem.dnc_confirmation && dncRejectionMutation.mutate(detailItem.dnc_confirmation.id)}
                       >
-                        <Button loading={dncRejectionMutation.isPending}>驳回 DNC</Button>
+                        <Button disabled={!canDncDecide} loading={dncRejectionMutation.isPending}>驳回 DNC</Button>
                       </Popconfirm>
                     </Space>
                   </Space>
@@ -562,7 +618,16 @@ export function OperatorWorkbench() {
                   </Space>
                 </Card>
               )}
-              {canHandoff && detailItem.decision?.final_draft && (
+              {detailItem.decision_available && !terminal && !canReviewDecide && (
+                <Alert
+                  className="conversation-state"
+                  type="info"
+                  showIcon
+                  message="当前身份仅可查看"
+                  description="该部门的草稿批准和关闭操作需要 reviewer 或 admin 角色；后端仍会再次校验。"
+                />
+              )}
+              {hasLockedDraft && detailItem.decision?.final_draft && (
                 <Card className="locked-draft-card" size="small">
                   <Space direction="vertical" className="full-width" size="middle">
                     <Space wrap>
@@ -573,8 +638,8 @@ export function OperatorWorkbench() {
                     <Paragraph className="locked-draft-content">{detailItem.decision.final_draft}</Paragraph>
                     <Text type="secondary">复制或下载会记录审计快照；系统不会把此草稿发送到任何渠道。</Text>
                     <Space wrap>
-                      <Button icon={<CopyOutlined />} loading={handoffMutation.isPending} onClick={() => handoffMutation.mutate({ action: "copy", content: detailItem.decision!.final_draft!, decisionId: detailItem.decision!.id })}>复制草稿</Button>
-                      <Button icon={<DownloadOutlined />} loading={handoffMutation.isPending} onClick={() => handoffMutation.mutate({ action: "download", content: detailItem.decision!.final_draft!, decisionId: detailItem.decision!.id })}>下载 .txt</Button>
+                      <Button disabled={!canHandoff} icon={<CopyOutlined />} loading={handoffMutation.isPending} onClick={() => handoffMutation.mutate({ action: "copy", content: detailItem.decision!.final_draft!, decisionId: detailItem.decision!.id })}>复制草稿</Button>
+                      <Button disabled={!canHandoff} icon={<DownloadOutlined />} loading={handoffMutation.isPending} onClick={() => handoffMutation.mutate({ action: "download", content: detailItem.decision!.final_draft!, decisionId: detailItem.decision!.id })}>下载 .txt</Button>
                       <Tooltip title="外部发送渠道尚未接入。请复制或下载草稿后，由 BD 在外部沟通工具中手动完成发送。">
                         <span><Button disabled>发送（暂未接入）</Button></span>
                       </Tooltip>
@@ -601,7 +666,7 @@ export function OperatorWorkbench() {
                   ) : modelFailure ? (
                     <>
                       <Alert type="warning" showIcon message="模型未生成可用建议" description={detailItem.run?.validation_error || detailItem.run?.error_summary || "请人工起草或重新生成。"} />
-                      <Button icon={<ReloadOutlined />} loading={retryMutation.isPending} onClick={() => retryMutation.mutate(detailItem.reply.id)}>人工重新生成草稿</Button>
+                      <Button disabled={!canRetryRun} icon={<ReloadOutlined />} loading={retryMutation.isPending} onClick={() => retryMutation.mutate(detailItem.reply.id)}>人工重新生成草稿</Button>
                     </>
                   ) : suggestedReply(detailItem.run) ? (
                     <>

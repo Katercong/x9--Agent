@@ -9,6 +9,7 @@ export type ReviewFilter = Exclude<ReviewType, "dnc_blocked"> | "reply_ready" | 
 
 export interface InboundReply {
   id: string;
+  department_code: string;
   creator_id: string;
   from_email: string;
   to_email: string;
@@ -190,4 +191,16 @@ export interface FailedReviewRetryResponse {
   ok: true;
   run: AgentRun;
   reply: InboundReply;
+}
+
+export type DepartmentRole = "operator" | "reviewer" | "admin";
+
+export interface CurrentPrincipal {
+  user_id: string;
+  display_name: string | null;
+  departments: Array<{
+    code: string;
+    role: DepartmentRole;
+  }>;
+  capabilities: string[];
 }

@@ -12,10 +12,11 @@
 6. [Operator Workbench 四阶段计划与进度](operator-workbench-four-pr-plan.md)：工作台的 PR 拆分、已合并范围、遗留缺口与交付边界。
 7. [Operator Workbench 演示指南](operator-workbench-demo.md)：容器化启动、受控样例数据和人工审核演示路径。
 8. [Operator Workbench 简历要点](operator-workbench-resume-highlights.md)：基于已实现能力的中文项目表述。
+9. [RBAC Foundation 与 X9 身份适配计划](rbac-foundation-plan.md)：本地授权目录、X9 身份断言契约、部门隔离与交付边界。
 
 ## 当前模块进度
 
-Operator Workbench 的四个阶段均已合并到 `main`：GitHub PR #4 交付读模型、审核闭环与人工交接，GitHub PR #5 交付受控 demo seed、Docker、API 静态托管和演示材料。详细范围与后续顺序见 [Operator Workbench 四阶段计划与进度](operator-workbench-four-pr-plan.md)。
+Operator Workbench 的四个阶段均已合并到 `main`：GitHub PR #4 交付读模型、审核闭环与人工交接，GitHub PR #5 交付受控 demo seed、Docker、API 静态托管和演示材料。当前 `feat/rbac-foundation` 已完成本地 RBAC、HMAC Adapter 契约、读写部门隔离、管理员审计与工作台身份展示，等待 review。详细范围分别见 [Operator Workbench 四阶段计划与进度](operator-workbench-four-pr-plan.md) 与 [RBAC Foundation 计划](rbac-foundation-plan.md)。
 
 ## 文档治理
 

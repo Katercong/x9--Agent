@@ -4,6 +4,7 @@ import json
 from hashlib import sha256
 from datetime import datetime
 from pathlib import Path
+from collections.abc import Collection
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -13,20 +14,34 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from .database import get_db, init_db
+from .department_codes import normalised_department_code_expression, validate_department_code
+from .identity import ensure_capability, get_current_principal
 from .models import (
     AgentFollowupRun,
+    AuthUser,
+    AuthorizationAuditEvent,
     Creator,
     CreatorOutreachEvent,
+    Department,
     DoNotContactConfirmation,
     DraftExportRecord,
     FollowupTask,
     HumanReviewDecision,
     InboundReply,
+    OutreachEmail,
     Product,
     ReferenceMaterial,
     SimulatedOutboundInstruction,
+    UserDepartmentMembership,
 )
+from .authorization import Capability, Principal, Role
 from .schemas import (
+    AccessDepartmentCreateIn,
+    AccessDepartmentPatchIn,
+    AccessMembershipCreateIn,
+    AccessMembershipPatchIn,
+    AccessUserCreateIn,
+    AccessUserPatchIn,
     CreatorCreateIn,
     CreatorPatchIn,
     CreatorReplaceIn,
@@ -75,12 +90,376 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "x9-replychat-agent"}
 
 
+@app.get("/api/followup-agent/auth/me")
+def get_auth_me(principal: Principal = Depends(get_current_principal)) -> dict[str, object]:
+    """Expose only Agent-local RBAC scope; never disclose X9 assertions or secrets."""
+
+    return {
+        "user_id": principal.user_id,
+        "display_name": principal.display_name,
+        "departments": [
+            {"code": membership.department_code, "role": membership.role.value}
+            for membership in principal.memberships
+        ],
+        "capabilities": sorted(
+            {
+                capability.value
+                for capability in Capability
+                if principal.allowed_departments_for(capability)
+            }
+        ),
+    }
+
+
+@app.get("/api/followup-agent/access/departments")
+def list_access_departments(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """List only departments the current administrator may manage."""
+
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    departments = db.scalars(
+        select(Department)
+        .where(Department.code.in_(allowed_departments))
+        .order_by(Department.code.asc())
+    ).all()
+    return {"items": [_department_to_dict(department) for department in departments]}
+
+
+@app.post("/api/followup-agent/access/departments", status_code=201)
+def create_access_department(
+    body: AccessDepartmentCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Create a department and grant its creator an active admin membership."""
+
+    _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    code = _normalise_department_code(body.code)
+    if _department_code_is_reserved(db, code):
+        raise HTTPException(status_code=409, detail="department code is already reserved")
+    actor = _current_auth_user_or_503(db, principal)
+    department = Department(
+        id=new_id("department"),
+        code=code,
+        name=body.name.strip(),
+        is_active=True,
+    )
+    db.add(department)
+    try:
+        # The reservation lookup above improves the common case, but it cannot
+        # make a concurrent insert atomic.  The unique constraint is the final
+        # authority: map that race to the same business result as a pre-existing
+        # code and reset the failed transaction before returning the response.
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="department code is already reserved") from exc
+    membership = UserDepartmentMembership(
+        id=new_id("membership"),
+        auth_user_id=actor.id,
+        department_id=department.id,
+        role=Role.ADMIN.value,
+        is_active=True,
+        authorization_source="admin_api_department_creator",
+        granted_by_auth_user_id=actor.id,
+    )
+    db.add(membership)
+    _append_authorization_audit(
+        db,
+        action="access_department_created",
+        actor_auth_user_id=actor.id,
+        department_id=department.id,
+        after=_department_snapshot(department),
+    )
+    _append_authorization_audit(
+        db,
+        action="access_membership_created",
+        actor_auth_user_id=actor.id,
+        target_auth_user_id=actor.id,
+        department_id=department.id,
+        after=_membership_snapshot(membership, department.code),
+    )
+    db.commit()
+    db.refresh(department)
+    db.refresh(membership)
+    return {
+        "ok": True,
+        "department": _department_to_dict(department),
+        "membership": _membership_to_dict(membership, department),
+    }
+
+
+@app.patch("/api/followup-agent/access/departments/{department_code}")
+def patch_access_department(
+    department_code: str,
+    body: AccessDepartmentPatchIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Soft-update a department within the current administrator's scope."""
+
+    department = _managed_department_or_404(db, department_code, principal)
+    actor = _current_auth_user_or_503(db, principal)
+    before = _department_snapshot(department)
+    if "name" in body.model_fields_set and body.name is not None:
+        department.name = body.name.strip()
+    if "is_active" in body.model_fields_set:
+        department.is_active = body.is_active
+    _append_authorization_audit(
+        db,
+        action="access_department_updated",
+        actor_auth_user_id=actor.id,
+        department_id=department.id,
+        before=before,
+        after=_department_snapshot(department),
+    )
+    db.commit()
+    db.refresh(department)
+    return {"ok": True, "department": _department_to_dict(department)}
+
+
+@app.get("/api/followup-agent/access/users")
+def list_access_users(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """List mappings that do not carry memberships outside the administrator's scope."""
+
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    foreign_memberships = (
+        select(UserDepartmentMembership.auth_user_id)
+        .join(Department, Department.id == UserDepartmentMembership.department_id)
+        .where(Department.code.not_in(allowed_departments))
+    )
+    users = db.scalars(
+        select(AuthUser)
+        .join(UserDepartmentMembership, UserDepartmentMembership.auth_user_id == AuthUser.id)
+        .join(Department, Department.id == UserDepartmentMembership.department_id)
+        .where(
+            Department.code.in_(allowed_departments),
+            AuthUser.id.not_in(foreign_memberships),
+        )
+        .distinct()
+        .order_by(AuthUser.created_at.desc(), AuthUser.id.desc())
+    ).all()
+    return {"items": [_auth_user_to_dict(user) for user in users]}
+
+
+@app.post("/api/followup-agent/access/users", status_code=201)
+def create_access_user(
+    body: AccessUserCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Provision an Agent-local identity mapping; it has no access until membership is granted."""
+
+    _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    source = body.identity_source.strip().lower()
+    subject = body.external_subject.strip()
+    if db.scalar(
+        select(AuthUser.id).where(
+            AuthUser.identity_source == source,
+            AuthUser.external_subject == subject,
+        )
+    ) is not None:
+        raise HTTPException(status_code=409, detail="auth user already exists")
+    actor = _current_auth_user_or_503(db, principal)
+    user = AuthUser(
+        id=new_id("auth_user"),
+        identity_source=source,
+        external_subject=subject,
+        display_name=body.display_name.strip() if body.display_name and body.display_name.strip() else None,
+        is_active=True,
+    )
+    db.add(user)
+    _append_authorization_audit(
+        db,
+        action="access_user_created",
+        actor_auth_user_id=actor.id,
+        target_auth_user_id=user.id,
+        after=_auth_user_snapshot(user),
+    )
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="auth user already exists") from exc
+    db.refresh(user)
+    return {"ok": True, "user": _auth_user_to_dict(user)}
+
+
+@app.patch("/api/followup-agent/access/users/{auth_user_id}")
+def patch_access_user(
+    auth_user_id: str,
+    body: AccessUserPatchIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Change local display metadata or immediately revoke a scoped user by soft-disable."""
+
+    user = _managed_auth_user_or_404(db, auth_user_id, principal)
+    actor = _current_auth_user_or_503(db, principal)
+    before = _auth_user_snapshot(user)
+    if "display_name" in body.model_fields_set:
+        user.display_name = body.display_name.strip() if body.display_name and body.display_name.strip() else None
+    if "is_active" in body.model_fields_set:
+        user.is_active = body.is_active
+    _append_authorization_audit(
+        db,
+        action="access_user_updated",
+        actor_auth_user_id=actor.id,
+        target_auth_user_id=user.id,
+        before=before,
+        after=_auth_user_snapshot(user),
+    )
+    db.commit()
+    db.refresh(user)
+    return {"ok": True, "user": _auth_user_to_dict(user)}
+
+
+@app.get("/api/followup-agent/access/memberships")
+def list_access_memberships(
+    department_code: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """List only memberships for departments the current administrator may manage."""
+
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    statement = (
+        select(UserDepartmentMembership, Department)
+        .join(Department, Department.id == UserDepartmentMembership.department_id)
+        .where(Department.code.in_(allowed_departments))
+        .order_by(Department.code.asc(), UserDepartmentMembership.created_at.asc(), UserDepartmentMembership.id.asc())
+    )
+    if department_code is not None:
+        statement = statement.where(Department.code == _normalise_department_code(department_code))
+    rows = db.execute(statement).all()
+    return {"items": [_membership_to_dict(membership, department) for membership, department in rows]}
+
+
+@app.post("/api/followup-agent/access/memberships", status_code=201)
+def create_access_membership(
+    body: AccessMembershipCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Grant one role in one scoped department; existing relations are only reactivated by PATCH."""
+
+    department = _managed_department_or_404(db, body.department_code, principal)
+    user = _managed_auth_user_or_404(db, body.auth_user_id, principal, allow_unassigned=True)
+    existing = db.scalar(
+        select(UserDepartmentMembership).where(
+            UserDepartmentMembership.auth_user_id == user.id,
+            UserDepartmentMembership.department_id == department.id,
+        )
+    )
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="department membership already exists")
+    actor = _current_auth_user_or_503(db, principal)
+    membership = UserDepartmentMembership(
+        id=new_id("membership"),
+        auth_user_id=user.id,
+        department_id=department.id,
+        role=Role(body.role).value,
+        is_active=True,
+        authorization_source="admin_api",
+        granted_by_auth_user_id=actor.id,
+    )
+    db.add(membership)
+    _append_authorization_audit(
+        db,
+        action="access_membership_created",
+        actor_auth_user_id=actor.id,
+        target_auth_user_id=user.id,
+        department_id=department.id,
+        after=_membership_snapshot(membership, department.code),
+    )
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="department membership already exists") from exc
+    db.refresh(membership)
+    return {"ok": True, "membership": _membership_to_dict(membership, department)}
+
+
+@app.patch("/api/followup-agent/access/memberships/{membership_id}")
+def patch_access_membership(
+    membership_id: str,
+    body: AccessMembershipPatchIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Change a scoped membership role or soft-disable it for immediate revocation."""
+
+    membership, department = _managed_membership_or_404(db, membership_id, principal)
+    actor = _current_auth_user_or_503(db, principal)
+    before = _membership_snapshot(membership, department.code)
+    if "role" in body.model_fields_set and body.role is not None:
+        membership.role = Role(body.role).value
+    if "is_active" in body.model_fields_set:
+        membership.is_active = body.is_active
+    _append_authorization_audit(
+        db,
+        action="access_membership_updated",
+        actor_auth_user_id=actor.id,
+        target_auth_user_id=membership.auth_user_id,
+        department_id=department.id,
+        before=before,
+        after=_membership_snapshot(membership, department.code),
+    )
+    db.commit()
+    db.refresh(membership)
+    return {"ok": True, "membership": _membership_to_dict(membership, department)}
+
+
+@app.get("/api/followup-agent/access/audit-events")
+def list_access_audit_events(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Read append-only authorization events without leaking other departments' history."""
+
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    scoped_events = (
+        select(AuthorizationAuditEvent, Department.code.label("department_code"))
+        .outerjoin(Department, Department.id == AuthorizationAuditEvent.department_id)
+        .where(
+            or_(
+                Department.code.in_(allowed_departments),
+                AuthorizationAuditEvent.actor_auth_user_id == principal.user_id,
+            )
+        )
+        .order_by(AuthorizationAuditEvent.created_at.desc(), AuthorizationAuditEvent.id.desc())
+    )
+    total = db.scalar(select(func.count()).select_from(scoped_events.subquery())) or 0
+    rows = db.execute(scoped_events.limit(limit).offset(offset)).all()
+    return {
+        "total": total,
+        "items": [
+            _authorization_audit_event_to_dict(event, department_code)
+            for event, department_code in rows
+        ],
+    }
+
+
 @app.post("/api/followup-agent/creators", status_code=201)
-def create_creator(body: CreatorCreateIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+def create_creator(
+    body: CreatorCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    department_code = _active_creator_department_code(db, principal, body.department_code)
     creator = db.get(Creator, body.id)
     if creator is not None:
         raise HTTPException(status_code=409, detail="creator already exists")
     values = body.model_dump()
+    values["department_code"] = department_code
     creator = Creator(**values)
     db.add(creator)
     db.commit()
@@ -93,11 +472,12 @@ def replace_creator(
     creator_id: str,
     body: CreatorReplaceIn,
     db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
-    creator = db.get(Creator, creator_id)
-    if creator is None:
-        raise HTTPException(status_code=404, detail="creator not found")
-    for key, value in body.model_dump().items():
+    creator = _scoped_creator_or_404(db, creator_id, principal, Capability.CREATOR_MANAGE)
+    values = body.model_dump()
+    values["department_code"] = _active_creator_department_code(db, principal, body.department_code)
+    for key, value in values.items():
         setattr(creator, key, value)
     db.commit()
     db.refresh(creator)
@@ -109,12 +489,16 @@ def patch_creator(
     creator_id: str,
     body: CreatorPatchIn,
     db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
-    creator = db.get(Creator, creator_id)
-    if creator is None:
-        raise HTTPException(status_code=404, detail="creator not found")
+    creator = _scoped_creator_or_404(db, creator_id, principal, Capability.CREATOR_MANAGE)
+    values = body.model_dump(exclude_unset=True)
+    if "department_code" in values:
+        if values["department_code"] is None:
+            raise HTTPException(status_code=422, detail="department code must not be null")
+        values["department_code"] = _active_creator_department_code(db, principal, values["department_code"])
     # exclude_unset 能区分“字段未提供”和“调用方显式传 null”。
-    for key, value in body.model_dump(exclude_unset=True).items():
+    for key, value in values.items():
         setattr(creator, key, value)
     db.commit()
     db.refresh(creator)
@@ -122,7 +506,12 @@ def patch_creator(
 
 
 @app.post("/api/followup-agent/products", status_code=201)
-def create_product(body: ProductCreateIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+def create_product(
+    body: ProductCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    ensure_capability(principal, Capability.CATALOG_MANAGE)
     existing = db.get(Product, body.id)
     duplicate_type = db.scalars(select(Product).where(Product.product_type == body.product_type).limit(1)).first()
     if existing is not None or duplicate_type is not None:
@@ -139,7 +528,9 @@ def replace_product(
     product_id: str,
     body: ProductReplaceIn,
     db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
+    ensure_capability(principal, Capability.CATALOG_MANAGE)
     product = db.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="product not found")
@@ -156,7 +547,9 @@ def patch_product(
     product_id: str,
     body: ProductPatchIn,
     db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
+    ensure_capability(principal, Capability.CATALOG_MANAGE)
     product = db.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="product not found")
@@ -171,9 +564,14 @@ def patch_product(
 
 
 @app.post("/api/followup-agent/reference-materials", status_code=201)
-def create_reference_material(body: ReferenceMaterialCreateIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+def create_reference_material(
+    body: ReferenceMaterialCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
     """创建首个参考资料版本，并将同一资料键的旧活动版本停用。"""
 
+    ensure_capability(principal, Capability.CATALOG_MANAGE)
     version = int(db.scalar(select(func.max(ReferenceMaterial.version)).where(ReferenceMaterial.reference_key == body.reference_key)) or 0) + 1
     db.query(ReferenceMaterial).filter(ReferenceMaterial.reference_key == body.reference_key).update({"is_active": False})
     row = ReferenceMaterial(id=new_id("ref"), version=version, is_active=True, **body.model_dump())
@@ -182,9 +580,15 @@ def create_reference_material(body: ReferenceMaterialCreateIn, db: Session = Dep
 
 
 @app.patch("/api/followup-agent/reference-materials/{reference_key}")
-def version_reference_material(reference_key: str, body: ReferenceMaterialVersionIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+def version_reference_material(
+    reference_key: str,
+    body: ReferenceMaterialVersionIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
     """以新增版本替代当前活动资料，保留旧版本供历史 run 追溯。"""
 
+    ensure_capability(principal, Capability.CATALOG_MANAGE)
     exists = db.scalar(select(ReferenceMaterial.id).where(ReferenceMaterial.reference_key == reference_key).limit(1))
     if exists is None:
         raise HTTPException(status_code=404, detail="reference material not found")
@@ -196,9 +600,16 @@ def version_reference_material(reference_key: str, body: ReferenceMaterialVersio
 
 
 @app.get("/api/followup-agent/reference-materials")
-def list_reference_materials(active_only: bool = Query(default=False), db: Session = Depends(get_db)) -> dict[str, Any]:
+def list_reference_materials(
+    active_only: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
     """按版本列出参考资料，可选择只查看当前启用版本。"""
 
+    # Reference materials are global configuration, but still never public.
+    # Resolving the principal here keeps them available to every active role.
+    del principal
     query = select(ReferenceMaterial)
     if active_only:
         query = query.where(ReferenceMaterial.is_active.is_(True))
@@ -207,10 +618,19 @@ def list_reference_materials(active_only: bool = Query(default=False), db: Sessi
 
 
 @app.get("/api/followup-agent/outbound-instructions")
-def list_outbound_instructions(creator_id: str | None = Query(default=None), db: Session = Depends(get_db)) -> dict[str, Any]:
+def list_outbound_instructions(
+    creator_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
     """查询内部模拟出站指令，当前接口不会触发任何外部渠道发送。"""
 
-    query = select(SimulatedOutboundInstruction)
+    allowed_departments = _allowed_departments(principal, Capability.OUTBOUND_READ)
+    query = (
+        select(SimulatedOutboundInstruction)
+        .join(Creator, Creator.id == SimulatedOutboundInstruction.creator_id)
+        .where(Creator.department_code.in_(allowed_departments))
+    )
     if creator_id:
         query = query.where(SimulatedOutboundInstruction.creator_id == creator_id)
     rows = list(db.scalars(query.order_by(SimulatedOutboundInstruction.created_at.desc())).all())
@@ -218,10 +638,12 @@ def list_outbound_instructions(creator_id: str | None = Query(default=None), db:
 
 
 @app.post("/api/followup-agent/simulate-reply")
-def simulate_reply(body: SimulateReplyIn, db: Session = Depends(get_db)) -> dict[str, Any]:
-    creator = db.get(Creator, body.creator_id)
-    if creator is None:
-        raise HTTPException(status_code=404, detail="creator not found")
+def simulate_reply(
+    body: SimulateReplyIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    creator = _scoped_creator_or_404(db, body.creator_id, principal, Capability.SIMULATION_WRITE)
     message_fields = _normalized_message_fields(creator, body)
     existing_reply = _find_duplicate_reply(db, **message_fields)
     if existing_reply is not None:
@@ -276,8 +698,18 @@ def simulate_reply(body: SimulateReplyIn, db: Session = Depends(get_db)) -> dict
 
 
 @app.post("/api/followup-agent/runs")
-def run_agent(body: RunAgentIn, db: Session = Depends(get_db)) -> dict[str, Any]:
-    reply = db.get(InboundReply, body.inbound_reply_id)
+def run_agent(
+    body: RunAgentIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    allowed_departments = _allowed_departments(principal, Capability.RUN_ENQUEUE)
+    reply = db.scalar(
+        select(InboundReply).where(
+            InboundReply.id == body.inbound_reply_id,
+            InboundReply.department_code.in_(allowed_departments),
+        )
+    )
     if reply is None:
         raise HTTPException(status_code=404, detail="inbound reply not found")
     if reply.processing_status == "ignored":
@@ -289,22 +721,42 @@ def run_agent(body: RunAgentIn, db: Session = Depends(get_db)) -> dict[str, Any]
     creator = db.get(Creator, reply.creator_id)
     if is_creator_contact_blocked(creator):
         raise HTTPException(status_code=409, detail="do not contact creator cannot run agent")
-    run = _create_run(db, body.inbound_reply_id, created_by="manual")
+    run = _create_run(db, body.inbound_reply_id, created_by=principal.user_id)
     db.commit()
     return {"ok": True, "run": _run_to_dict(run)}
 
 
 @app.get("/api/followup-agent/replies/{reply_id}")
-def get_reply(reply_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    reply = db.get(InboundReply, reply_id)
+def get_reply(
+    reply_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    reply = db.scalar(
+        select(InboundReply).where(
+            InboundReply.id == reply_id,
+            InboundReply.department_code.in_(allowed_departments),
+        )
+    )
     if reply is None:
         raise HTTPException(status_code=404, detail="inbound reply not found")
     return {"ok": True, "reply": _reply_to_dict(reply)}
 
 
 @app.get("/api/followup-agent/runs/{run_id}")
-def get_run(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    run = db.get(AgentFollowupRun, run_id)
+def get_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    run = db.scalar(
+        select(AgentFollowupRun).where(
+            AgentFollowupRun.id == run_id,
+            AgentFollowupRun.department_code.in_(allowed_departments),
+        )
+    )
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
     return {"ok": True, "run": _run_to_dict(run)}
@@ -317,8 +769,10 @@ def list_runs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
-    filters = []
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    filters = [AgentFollowupRun.department_code.in_(allowed_departments)]
     if creator_id:
         filters.append(AgentFollowupRun.creator_id == creator_id)
     if inbound_reply_id:
@@ -343,6 +797,7 @@ def list_human_review_queue(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """列出工作台中的待审、生成中与已批准草稿项。"""
 
@@ -357,7 +812,17 @@ def list_human_review_queue(
     }
     if review_type is not None and review_type not in allowed_review_types:
         raise HTTPException(status_code=422, detail="unknown review_type")
-    statement, review_type_expression = _review_queue_base_statement(department_code)
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    scoped_departments: Collection[str]
+    requested_department_code = _normalise_department_code(department_code) if department_code is not None else None
+    if requested_department_code is not None and requested_department_code not in allowed_departments:
+        # A list endpoint never confirms that another department exists.
+        scoped_departments = ()
+    elif requested_department_code is not None:
+        scoped_departments = (requested_department_code,)
+    else:
+        scoped_departments = allowed_departments
+    statement, review_type_expression = _review_queue_base_statement(scoped_departments)
     filtered_statement = _apply_review_queue_filters(
         statement,
         review_type_expression,
@@ -372,13 +837,28 @@ def list_human_review_queue(
 
 
 @app.get("/api/followup-agent/review-items/{reply_id}")
-def get_human_review_item(reply_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_human_review_item(
+    reply_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
     """读取工作台项的当前上下文与完整 Agent run 留痕，不写入业务数据。"""
 
-    reply = db.get(InboundReply, reply_id)
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    reply = db.scalar(
+        select(InboundReply).where(
+            InboundReply.id == reply_id,
+            InboundReply.department_code.in_(allowed_departments),
+        )
+    )
     if reply is None:
         raise HTTPException(status_code=404, detail="inbound reply not found")
-    item = _load_review_queue_item(db, reply_id, include_dnc_blocked=True)
+    item = _load_review_queue_item(
+        db,
+        reply_id,
+        include_dnc_blocked=True,
+        department_codes=allowed_departments,
+    )
     if item is None:
         raise HTTPException(status_code=409, detail="reply is not available in the operator workbench")
     runs = list(
@@ -402,13 +882,21 @@ def get_human_review_item(reply_id: str, db: Session = Depends(get_db)) -> dict[
 
 @app.post("/api/followup-agent/dnc-confirmations/{confirmation_id}/approve")
 def approve_dnc_confirmation(
-    confirmation_id: str, body: DncConfirmationApproveIn, db: Session = Depends(get_db)
+    confirmation_id: str,
+    body: DncConfirmationApproveIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """人工确认待审 DNC，并永久阻断该达人后续业务联系；不发送任何消息。"""
 
+    allowed_departments = _allowed_departments(principal, Capability.DNC_DECIDE)
     confirmation = db.scalars(
         select(DoNotContactConfirmation)
-        .where(DoNotContactConfirmation.id == confirmation_id)
+        .join(Creator, Creator.id == DoNotContactConfirmation.creator_id)
+        .where(
+            DoNotContactConfirmation.id == confirmation_id,
+            Creator.department_code.in_(allowed_departments),
+        )
         .with_for_update()
     ).first()
     if confirmation is None:
@@ -425,7 +913,7 @@ def approve_dnc_confirmation(
 
     reviewed_at = datetime.utcnow()
     confirmation.status = "confirmed"
-    confirmation.reviewed_by = body.actor_id
+    confirmation.reviewed_by = principal.user_id
     confirmation.reviewed_at = reviewed_at
     creator.do_not_contact_status = "confirmed"
     creator.do_not_contact_reason = confirmation.reason
@@ -440,7 +928,7 @@ def approve_dnc_confirmation(
             note="Do-not-contact request was confirmed by a human reviewer; no outbound message was sent.",
             metadata_json=json.dumps(
                 {
-                    "actor_id": body.actor_id,
+                    "actor_id": principal.user_id,
                     "dnc_confirmation_id": confirmation.id,
                     "inbound_reply_id": reply.id,
                 },
@@ -462,13 +950,21 @@ def approve_dnc_confirmation(
 
 @app.post("/api/followup-agent/dnc-confirmations/{confirmation_id}/reject")
 def reject_dnc_confirmation(
-    confirmation_id: str, body: DncConfirmationRejectIn, db: Session = Depends(get_db)
+    confirmation_id: str,
+    body: DncConfirmationRejectIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """人工驳回 DNC 判定，将该回复重新入队为普通审核；不发送任何消息。"""
 
+    allowed_departments = _allowed_departments(principal, Capability.DNC_DECIDE)
     confirmation = db.scalars(
         select(DoNotContactConfirmation)
-        .where(DoNotContactConfirmation.id == confirmation_id)
+        .join(Creator, Creator.id == DoNotContactConfirmation.creator_id)
+        .where(
+            DoNotContactConfirmation.id == confirmation_id,
+            Creator.department_code.in_(allowed_departments),
+        )
         .with_for_update()
     ).first()
     if confirmation is None:
@@ -487,7 +983,7 @@ def reject_dnc_confirmation(
     original_reason = reply.classification_reason
     reviewed_at = datetime.utcnow()
     confirmation.status = "rejected"
-    confirmation.reviewed_by = body.actor_id
+    confirmation.reviewed_by = principal.user_id
     confirmation.reviewed_at = reviewed_at
     creator.do_not_contact_status = "none"
     creator.do_not_contact_reason = None
@@ -509,7 +1005,7 @@ def reject_dnc_confirmation(
         task.status = "blocked_dnc_rejected"
         task.reason = "DNC was rejected by a human reviewer; manually reassess before resuming any follow-up."
 
-    run = enqueue_followup_run(db, reply.id, created_by=body.actor_id)
+    run = enqueue_followup_run(db, reply.id, created_by=principal.user_id)
     db.add(
         CreatorOutreachEvent(
             id=new_id("oev"),
@@ -519,7 +1015,7 @@ def reject_dnc_confirmation(
             note="Do-not-contact classification was rejected by a human reviewer; a new review run was queued without sending a message.",
             metadata_json=json.dumps(
                 {
-                    "actor_id": body.actor_id,
+                    "actor_id": principal.user_id,
                     "dnc_confirmation_id": confirmation.id,
                     "inbound_reply_id": reply.id,
                     "original_reply_category": original_category,
@@ -546,17 +1042,31 @@ def reject_dnc_confirmation(
 
 @app.post("/api/followup-agent/review-items/{reply_id}/retry")
 def retry_failed_human_review_item(
-    reply_id: str, body: FailedReviewRetryIn, db: Session = Depends(get_db)
+    reply_id: str,
+    body: FailedReviewRetryIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """人工重试最新模型失败的待审项；只创建新的 queued run，不发送任何消息。"""
 
-    reply = db.get(InboundReply, reply_id)
+    allowed_departments = _allowed_departments(principal, Capability.RUN_RETRY)
+    reply = db.scalar(
+        select(InboundReply).where(
+            InboundReply.id == reply_id,
+            InboundReply.department_code.in_(allowed_departments),
+        )
+    )
     if reply is None:
         raise HTTPException(status_code=404, detail="inbound reply not found")
     if reply.processing_status != "need_ai_review":
         raise HTTPException(status_code=409, detail="reply is not pending human review")
 
-    item = _load_review_queue_item(db, reply.id, include_dnc_blocked=True)
+    item = _load_review_queue_item(
+        db,
+        reply.id,
+        include_dnc_blocked=True,
+        department_codes=allowed_departments,
+    )
     if item is None:
         raise HTTPException(status_code=409, detail="reply is not available in the operator workbench")
     if item["review_type"] != "model_failure" or item["run"] is None:
@@ -574,7 +1084,7 @@ def retry_failed_human_review_item(
         run = enqueue_followup_run(
             db,
             reply.id,
-            created_by=body.actor_id,
+            created_by=principal.user_id,
             reject_if_active=True,
         )
     except IntegrityError:
@@ -595,7 +1105,7 @@ def retry_failed_human_review_item(
                 note="A human reviewer requested another draft generation after a model failure; no outbound message was sent.",
                 metadata_json=json.dumps(
                     {
-                        "actor_id": body.actor_id,
+                        "actor_id": principal.user_id,
                         "inbound_reply_id": reply.id,
                         "failed_run_id": item["run"]["id"],
                         "queued_run_id": run.id,
@@ -611,11 +1121,19 @@ def retry_failed_human_review_item(
 
 @app.post("/api/followup-agent/review-decisions", status_code=201)
 def create_human_review_decision(
-    body: HumanReviewDecisionCreateIn, db: Session = Depends(get_db)
+    body: HumanReviewDecisionCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """保存普通回复的最终人工决定，不自动推进达人业务状态。"""
 
-    run = db.get(AgentFollowupRun, body.agent_followup_run_id)
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_DECIDE)
+    run = db.scalar(
+        select(AgentFollowupRun).where(
+            AgentFollowupRun.id == body.agent_followup_run_id,
+            AgentFollowupRun.department_code.in_(allowed_departments),
+        )
+    )
     if run is None:
         raise HTTPException(status_code=404, detail="agent followup run not found")
     if run.execution_status not in {"succeeded", "failed"}:
@@ -646,7 +1164,6 @@ def create_human_review_decision(
     if db.scalar(select(HumanReviewDecision.id).where(HumanReviewDecision.agent_followup_run_id == run.id)) is not None:
         raise HTTPException(status_code=409, detail="agent followup run already has a human review decision")
 
-    # actor_id 当前仅是审计归属；正式身份认证与角色授权将在后续 RBAC 模块接管。
     decision = HumanReviewDecision(
         id=new_id("hrd"),
         department_code=reply.department_code,
@@ -656,7 +1173,7 @@ def create_human_review_decision(
         outcome=body.outcome,
         final_draft=body.final_draft.strip() if body.final_draft is not None else None,
         note=body.note,
-        actor_id=body.actor_id,
+        actor_id=principal.user_id,
     )
     db.add(decision)
     # 人工审核完成只结束本次回复的审核，不采纳模型 suggested_status，也不修改达人业务状态。
@@ -672,10 +1189,20 @@ def create_human_review_decision(
 
 
 @app.get("/api/followup-agent/review-decisions/{decision_id}")
-def get_human_review_decision(decision_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_human_review_decision(
+    decision_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
     """读取不可变审核决定及其导出审计，不触发复制、导出或发送。"""
 
-    decision = db.get(HumanReviewDecision, decision_id)
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    decision = db.scalar(
+        select(HumanReviewDecision).where(
+            HumanReviewDecision.id == decision_id,
+            HumanReviewDecision.department_code.in_(allowed_departments),
+        )
+    )
     if decision is None:
         raise HTTPException(status_code=404, detail="human review decision not found")
     exports = list(
@@ -693,10 +1220,20 @@ def get_human_review_decision(decision_id: str, db: Session = Depends(get_db)) -
 
 
 @app.get("/api/followup-agent/review-decisions/{decision_id}/delivery-capability")
-def get_draft_delivery_capability(decision_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_draft_delivery_capability(
+    decision_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
     """返回未来渠道交接的能力边界；该预留接口不发送也不写入任何数据。"""
 
-    decision = db.get(HumanReviewDecision, decision_id)
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    decision = db.scalar(
+        select(HumanReviewDecision).where(
+            HumanReviewDecision.id == decision_id,
+            HumanReviewDecision.department_code.in_(allowed_departments),
+        )
+    )
     if decision is None:
         raise HTTPException(status_code=404, detail="human review decision not found")
     if decision.outcome != "approve_draft" or not decision.final_draft:
@@ -722,11 +1259,20 @@ def get_draft_delivery_capability(decision_id: str, db: Session = Depends(get_db
 
 @app.post("/api/followup-agent/review-decisions/{decision_id}/exports", status_code=201)
 def create_draft_export_record(
-    decision_id: str, body: DraftExportCreateIn, db: Session = Depends(get_db)
+    decision_id: str,
+    body: DraftExportCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """记录人工导出草稿的快照；该接口绝不调用外部渠道。"""
 
-    decision = db.get(HumanReviewDecision, decision_id)
+    allowed_departments = _allowed_departments(principal, Capability.DRAFT_EXPORT)
+    decision = db.scalar(
+        select(HumanReviewDecision).where(
+            HumanReviewDecision.id == decision_id,
+            HumanReviewDecision.department_code.in_(allowed_departments),
+        )
+    )
     if decision is None:
         raise HTTPException(status_code=404, detail="human review decision not found")
     if decision.outcome != "approve_draft" or not decision.final_draft:
@@ -742,7 +1288,7 @@ def create_draft_export_record(
         creator_id=decision.creator_id,
         inbound_reply_id=decision.inbound_reply_id,
         exported_content=decision.final_draft,
-        actor_id=body.actor_id,
+        actor_id=principal.user_id,
     )
     db.add(export)
     db.commit()
@@ -752,6 +1298,193 @@ def create_draft_export_record(
 
 def _create_run(db: Session, inbound_reply_id: str, *, created_by: str) -> AgentFollowupRun:
     return enqueue_followup_run(db, inbound_reply_id, created_by=created_by)
+
+
+def _allowed_departments(principal: Principal, capability: Capability) -> frozenset[str]:
+    """Return only departments where this principal has the requested ability."""
+
+    ensure_capability(principal, capability)
+    return principal.allowed_departments_for(capability)
+
+
+def _normalise_department_code(value: str) -> str:
+    """Normalise an API department code and reject an empty canonical value."""
+
+    try:
+        return validate_department_code(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _department_code_is_reserved(db: Session, department_code: str) -> bool:
+    """Return whether a canonical code already names catalog or business data.
+
+    The authorization catalog is the protected namespace for every existing
+    business ``department_code``.  A newly created department may grant its
+    creator a role only when the code has never been used by either namespace.
+    """
+
+    sources = (
+        (Department, Department.code),
+        (Creator, Creator.department_code),
+        (DoNotContactConfirmation, DoNotContactConfirmation.department_code),
+        (InboundReply, InboundReply.department_code),
+        (OutreachEmail, OutreachEmail.department_code),
+        (CreatorOutreachEvent, CreatorOutreachEvent.department_code),
+        (FollowupTask, FollowupTask.department_code),
+        (AgentFollowupRun, AgentFollowupRun.department_code),
+        (HumanReviewDecision, HumanReviewDecision.department_code),
+        (DraftExportRecord, DraftExportRecord.department_code),
+    )
+    dialect_name = db.get_bind().dialect.name
+    matches = union(
+        *(
+            select(model.id.label("record_id")).where(
+                normalised_department_code_expression(column, dialect_name=dialect_name) == department_code
+            )
+            for model, column in sources
+        )
+    ).subquery()
+    return db.scalar(select(matches.c.record_id).limit(1)) is not None
+
+
+def _active_creator_department_code(db: Session, principal: Principal, department_code: str) -> str:
+    """Validate target scope before assigning a creator to a protected department."""
+
+    code = _normalise_department_code(department_code)
+    # Authorization comes first so a caller never gets to create or migrate
+    # business records into an ungranted department merely because it exists.
+    _require_department_capability(principal, Capability.CREATOR_MANAGE, code)
+    department = db.scalar(
+        select(Department).where(
+            Department.code == code,
+            Department.is_active.is_(True),
+        )
+    )
+    if department is None:
+        raise HTTPException(status_code=409, detail="target department is unavailable")
+    return department.code
+
+
+def _current_auth_user_or_503(db: Session, principal: Principal) -> AuthUser:
+    """Defend against a concurrent local revocation after identity resolution."""
+
+    user = db.get(AuthUser, principal.user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=503, detail="current authorization mapping is unavailable")
+    return user
+
+
+def _managed_department_or_404(db: Session, department_code: str, principal: Principal) -> Department:
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    department = db.scalar(
+        select(Department).where(
+            Department.code == _normalise_department_code(department_code),
+            Department.code.in_(allowed_departments),
+        )
+    )
+    if department is None:
+        raise HTTPException(status_code=404, detail="department not found")
+    return department
+
+
+def _managed_auth_user_or_404(
+    db: Session,
+    auth_user_id: str,
+    principal: Principal,
+    *,
+    allow_unassigned: bool = False,
+) -> AuthUser:
+    """Return a user only when every existing department relationship is manageable."""
+
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    user = db.get(AuthUser, auth_user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="auth user not found")
+    membership_departments = db.scalars(
+        select(Department.code)
+        .join(UserDepartmentMembership, UserDepartmentMembership.department_id == Department.id)
+        .where(UserDepartmentMembership.auth_user_id == user.id)
+    ).all()
+    if any(code not in allowed_departments for code in membership_departments):
+        raise HTTPException(status_code=404, detail="auth user not found")
+    if not membership_departments and not allow_unassigned:
+        raise HTTPException(status_code=404, detail="auth user not found")
+    return user
+
+
+def _managed_membership_or_404(
+    db: Session,
+    membership_id: str,
+    principal: Principal,
+) -> tuple[UserDepartmentMembership, Department]:
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    row = db.execute(
+        select(UserDepartmentMembership, Department)
+        .join(Department, Department.id == UserDepartmentMembership.department_id)
+        .where(
+            UserDepartmentMembership.id == membership_id,
+            Department.code.in_(allowed_departments),
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="department membership not found")
+    return row
+
+
+def _append_authorization_audit(
+    db: Session,
+    *,
+    action: str,
+    actor_auth_user_id: str | None,
+    target_auth_user_id: str | None = None,
+    department_id: str | None = None,
+    before: dict[str, object] | None = None,
+    after: dict[str, object] | None = None,
+) -> AuthorizationAuditEvent:
+    """Append a change record; this module never updates or deletes audit rows."""
+
+    event = AuthorizationAuditEvent(
+        id=new_id("auth_audit"),
+        action=action,
+        actor_auth_user_id=actor_auth_user_id,
+        target_auth_user_id=target_auth_user_id,
+        department_id=department_id,
+        before_json=json.dumps(before, ensure_ascii=False, sort_keys=True) if before is not None else None,
+        after_json=json.dumps(after, ensure_ascii=False, sort_keys=True) if after is not None else None,
+    )
+    db.add(event)
+    return event
+
+
+def _require_department_capability(
+    principal: Principal,
+    capability: Capability,
+    department_code: str,
+) -> None:
+    """Require a write capability in one explicit target department."""
+
+    ensure_capability(principal, capability, department_code=department_code)
+
+
+def _scoped_creator_or_404(
+    db: Session,
+    creator_id: str,
+    principal: Principal,
+    capability: Capability,
+) -> Creator:
+    """Load a creator only from a department manageable by this principal."""
+
+    allowed_departments = _allowed_departments(principal, capability)
+    creator = db.scalar(
+        select(Creator).where(
+            Creator.id == creator_id,
+            Creator.department_code.in_(allowed_departments),
+        )
+    )
+    if creator is None:
+        raise HTTPException(status_code=404, detail="creator not found")
+    return creator
 
 
 def _normalized_message_fields(creator: Creator, body: SimulateReplyIn) -> dict[str, str]:
@@ -798,8 +1531,15 @@ def _get_or_create_existing_run(db: Session, reply: InboundReply, run_agent: boo
     return _run_to_dict(run) if run is not None else None
 
 
-def _review_queue_base_statement(department_code: str | None):
+def _review_queue_base_statement(department_codes: str | Collection[str] | None):
     """Build the shared, set-based read model for queue items and details."""
+
+    if isinstance(department_codes, str):
+        scoped_departments: tuple[str, ...] | None = (department_codes,)
+    elif department_codes is None:
+        scoped_departments = None
+    else:
+        scoped_departments = tuple(department_codes)
 
     pending_candidates = select(InboundReply.id.label("reply_id")).where(
         InboundReply.processing_status == "need_ai_review"
@@ -809,9 +1549,9 @@ def _review_queue_base_statement(department_code: str | None):
         .join(InboundReply, InboundReply.id == HumanReviewDecision.inbound_reply_id)
         .where(HumanReviewDecision.outcome == "approve_draft")
     )
-    if department_code:
-        pending_candidates = pending_candidates.where(InboundReply.department_code == department_code)
-        approved_candidates = approved_candidates.where(InboundReply.department_code == department_code)
+    if scoped_departments is not None:
+        pending_candidates = pending_candidates.where(InboundReply.department_code.in_(scoped_departments))
+        approved_candidates = approved_candidates.where(InboundReply.department_code.in_(scoped_departments))
 
     candidate_reply_ids = union(pending_candidates, approved_candidates).cte("review_candidate_reply_ids")
     ranked_runs = (
@@ -924,10 +1664,11 @@ def _load_review_queue_item(
     reply_id: str,
     *,
     include_dnc_blocked: bool,
+    department_codes: Collection[str] | None = None,
 ) -> dict[str, Any] | None:
     """Load one candidate through the same SQL read model as the queue."""
 
-    statement, review_type_expression = _review_queue_base_statement(department_code=None)
+    statement, review_type_expression = _review_queue_base_statement(department_codes=department_codes)
     row = db.execute(
         _apply_review_queue_filters(
             statement.where(InboundReply.id == reply_id),
@@ -972,6 +1713,85 @@ def _run_to_dnc_safe_dict(row: AgentFollowupRun) -> dict[str, Any]:
     payload = _run_to_dict(row)
     payload["output"] = None
     return payload
+
+
+def _auth_user_snapshot(row: AuthUser) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "identity_source": row.identity_source,
+        "external_subject": row.external_subject,
+        "display_name": row.display_name,
+        "is_active": bool(row.is_active),
+    }
+
+
+def _auth_user_to_dict(row: AuthUser) -> dict[str, object]:
+    return {
+        **_auth_user_snapshot(row),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _department_snapshot(row: Department) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "code": row.code,
+        "name": row.name,
+        "is_active": bool(row.is_active),
+    }
+
+
+def _department_to_dict(row: Department) -> dict[str, object]:
+    return {
+        **_department_snapshot(row),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _membership_snapshot(
+    row: UserDepartmentMembership,
+    department_code: str,
+) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "auth_user_id": row.auth_user_id,
+        "department_code": department_code,
+        "role": row.role,
+        "is_active": bool(row.is_active),
+        "authorization_source": row.authorization_source,
+        "granted_by_auth_user_id": row.granted_by_auth_user_id,
+    }
+
+
+def _membership_to_dict(
+    row: UserDepartmentMembership,
+    department: Department,
+) -> dict[str, object]:
+    return {
+        **_membership_snapshot(row, department.code),
+        "department_name": department.name,
+        "department_is_active": bool(department.is_active),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _authorization_audit_event_to_dict(
+    row: AuthorizationAuditEvent,
+    department_code: str | None,
+) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "action": row.action,
+        "actor_auth_user_id": row.actor_auth_user_id,
+        "target_auth_user_id": row.target_auth_user_id,
+        "department_code": department_code,
+        "before": _load_json(row.before_json),
+        "after": _load_json(row.after_json),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
 
 
 def _creator_to_dict(row: Creator) -> dict[str, Any]:
@@ -1030,6 +1850,7 @@ def _load_json_list(value: str | None) -> list[str]:
 def _reply_to_dict(row: InboundReply) -> dict[str, Any]:
     return {
         "id": row.id,
+        "department_code": row.department_code,
         "creator_id": row.creator_id,
         "direction": row.direction,
         "channel": row.channel,
