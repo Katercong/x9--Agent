@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
 
+from .department_codes import normalise_department_code
+
 
 class Role(str, Enum):
     OPERATOR = "operator"
@@ -71,7 +73,7 @@ class DepartmentMembership:
     role: Role
 
     def __post_init__(self) -> None:
-        code = self.department_code.strip()
+        code = normalise_department_code(self.department_code)
         if not code:
             raise ValueError("department_code must not be empty")
         object.__setattr__(self, "department_code", code)
@@ -100,7 +102,7 @@ class Principal:
         return frozenset(membership.department_code for membership in self.memberships)
 
     def membership_for(self, department_code: str) -> DepartmentMembership | None:
-        wanted = department_code.strip()
+        wanted = normalise_department_code(department_code)
         return next((membership for membership in self.memberships if membership.department_code == wanted), None)
 
     def can_access_department(self, department_code: str) -> bool:

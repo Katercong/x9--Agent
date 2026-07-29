@@ -905,7 +905,7 @@ def test_access_department_creation_grants_scoped_admin_and_audits(monkeypatch: 
 
     response = client.post(
         "/api/followup-agent/access/departments",
-        json={"code": " Creator Partnerships ", "name": "Creator Partnerships"},
+        json={"code": "\tCreator Partnerships\n", "name": "Creator Partnerships"},
         headers=admin_headers,
     )
     assert response.status_code == 201
@@ -1337,10 +1337,10 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
     MigrationSession = sessionmaker(bind=migration_engine, future=True)
     try:
         with MigrationSession() as db:
-            creator = Creator(id="backfill_creator", department_code=" Dept_Creators ", handle="backfill_creator")
+            creator = Creator(id="backfill_creator", department_code="\tDept_Creators\n", handle="backfill_creator")
             reply = InboundReply(
                 id="backfill_reply",
-                department_code="DEPT_REPLIES",
+                department_code="\tDEPT_REPLIES\n",
                 creator_id=creator.id,
                 direction="inbound",
                 channel="simulation",
@@ -1350,7 +1350,7 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
             )
             run = AgentFollowupRun(
                 id="backfill_run",
-                department_code=" DEPT_RUNS ",
+                department_code="\tDEPT_RUNS\n",
                 creator_id=creator.id,
                 inbound_reply_id=reply.id,
                 execution_status="succeeded",
@@ -1370,24 +1370,24 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
                     reply,
                     DoNotContactConfirmation(
                         id="backfill_dnc",
-                        department_code=" Dept_Dnc ",
+                        department_code="\tDept_Dnc\n",
                         creator_id=creator.id,
                         inbound_reply_id=reply.id,
                     ),
                     OutreachEmail(
                         id="backfill_outreach",
-                        department_code="DEPT_OUTREACH",
+                        department_code="\tDEPT_OUTREACH\n",
                         creator_id=creator.id,
                     ),
                     CreatorOutreachEvent(
                         id="backfill_event",
-                        department_code="dept_events ",
+                        department_code="\tdept_events\n",
                         creator_id=creator.id,
                         event_type="backfill",
                     ),
                     FollowupTask(
                         id="backfill_task",
-                        department_code="dept_tasks",
+                        department_code="\tdept_tasks\n",
                         creator_id=creator.id,
                         task_type="backfill",
                     ),
@@ -1395,7 +1395,7 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
                     decision,
                     DraftExportRecord(
                         id="backfill_export",
-                        department_code="dept_exports",
+                        department_code="\tdept_exports\n",
                         human_review_decision_id=decision.id,
                         creator_id=creator.id,
                         inbound_reply_id=reply.id,
@@ -1419,18 +1419,25 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
         "dept_decisions",
         "dept_exports",
     }
-    # The first P1 revision registered the canonical directory namespace but
-    # intentionally did not rewrite legacy business rows.  The follow-up
-    # revision must close that read-scope gap without changing memberships.
+    # The catalog backfill follows the same canonical convention, but the
+    # original row-normalization revision only trimmed ordinary spaces.  Keep
+    # the tab/newline row through that historical migration to reproduce the
+    # strict-scope gap before the forward repair is applied.
     run_alembic("upgrade", "e8f9a0b1c2d3")
     with sqlite3.connect(db_path) as connection:
         catalog_codes = {row[0] for row in connection.execute("SELECT code FROM departments")}
         assert catalog_codes == expected_codes
         assert connection.execute(
             "SELECT department_code FROM inbound_replies WHERE id = 'backfill_reply'"
-        ).fetchone()[0] == "DEPT_REPLIES"
+        ).fetchone()[0] == "\tDEPT_REPLIES\n"
         assert connection.execute("SELECT COUNT(*) FROM user_department_memberships").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM authorization_audit_events").fetchone()[0] == 0
+
+    run_alembic("upgrade", "f9a0b1c2d3e4")
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT department_code FROM inbound_replies WHERE id = 'backfill_reply'"
+        ).fetchone()[0] == "\tdept_replies\n"
 
     run_alembic("upgrade", "head")
     expected_codes_by_table = {
@@ -1505,3 +1512,70 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
     run_alembic("upgrade", "head")
     with sqlite3.connect(db_path) as connection:
         assert {row[0] for row in connection.execute("SELECT code FROM departments")} == expected_codes
+
+
+def test_department_code_boundary_whitespace_migration_rejects_idempotency_collision(tmp_path: Path):
+    """Tab/newline variants must be checked before a canonical scope rewrite."""
+
+    root = Path(__file__).resolve().parents[1]
+    db_path = tmp_path / "department_code_collision.sqlite"
+    database_url = f"sqlite:///{db_path.as_posix()}"
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = database_url
+
+    def run_alembic(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "alembic", *args],
+            cwd=root,
+            env=environment,
+            text=True,
+            capture_output=True,
+        )
+
+    result = run_alembic("upgrade", "d7e8f9a0b1c2")
+    assert result.returncode == 0, result.stdout + result.stderr
+    migration_engine = create_engine(database_url)
+    MigrationSession = sessionmaker(bind=migration_engine, future=True)
+    try:
+        with MigrationSession() as db:
+            first_creator = Creator(id="collision_creator_first", department_code="\tforeign_trade\n", handle="first")
+            second_creator = Creator(id="collision_creator_second", department_code="\nforeign_trade\t", handle="second")
+            db.add_all(
+                [
+                    first_creator,
+                    second_creator,
+                    InboundReply(
+                        id="collision_reply_first",
+                        department_code=first_creator.department_code,
+                        creator_id=first_creator.id,
+                        direction="inbound",
+                        channel="simulation",
+                        external_message_id="same-external-message",
+                        body="first",
+                        processing_status="need_ai_review",
+                    ),
+                    InboundReply(
+                        id="collision_reply_second",
+                        department_code=second_creator.department_code,
+                        creator_id=second_creator.id,
+                        direction="inbound",
+                        channel="simulation",
+                        external_message_id="same-external-message",
+                        body="second",
+                        processing_status="need_ai_review",
+                    ),
+                ]
+            )
+            db.commit()
+    finally:
+        migration_engine.dispose()
+
+    result = run_alembic("upgrade", "head")
+
+    assert result.returncode != 0
+    assert "cannot normalize inbound_replies: idempotency key collision" in result.stdout + result.stderr
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "f9a0b1c2d3e4"
+        assert connection.execute(
+            "SELECT department_code FROM inbound_replies WHERE id = 'collision_reply_first'"
+        ).fetchone()[0] == "\tforeign_trade\n"

@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from .database import get_db, init_db
+from .department_codes import normalise_department_code, normalised_department_code_expression
 from .identity import ensure_capability, get_current_principal
 from .models import (
     AgentFollowupRun,
@@ -1306,7 +1307,9 @@ def _allowed_departments(principal: Principal, capability: Capability) -> frozen
 
 
 def _normalise_department_code(value: str) -> str:
-    code = value.strip().lower()
+    """Normalise an API department code and reject an empty canonical value."""
+
+    code = normalise_department_code(value)
     if not code:
         raise HTTPException(status_code=422, detail="department code must not be empty")
     return code
@@ -1332,9 +1335,12 @@ def _department_code_is_reserved(db: Session, department_code: str) -> bool:
         (HumanReviewDecision, HumanReviewDecision.department_code),
         (DraftExportRecord, DraftExportRecord.department_code),
     )
+    dialect_name = db.get_bind().dialect.name
     matches = union(
         *(
-            select(model.id.label("record_id")).where(func.lower(func.trim(column)) == department_code)
+            select(model.id.label("record_id")).where(
+                normalised_department_code_expression(column, dialect_name=dialect_name) == department_code
+            )
             for model, column in sources
         )
     ).subquery()

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from .authorization import Role
 from .database import SessionLocal
+from .department_codes import normalise_department_code
 from .models import AuthUser, AuthorizationAuditEvent, Department, UserDepartmentMembership
 from .services import new_id
 
@@ -37,7 +38,7 @@ def bootstrap_admin(
 
     source = identity_source.strip().lower()
     subject = external_subject.strip()
-    code = department_code.strip().lower()
+    code = normalise_department_code(department_code)
     if not source or not subject or not code:
         raise ValueError("identity source, external subject and department code are required")
 
