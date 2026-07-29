@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, TypeVar
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .database import SessionLocal, init_db
@@ -160,6 +161,24 @@ def seed_demo_data(db: Session) -> int:
         nonlocal created
         created += int(_add_if_missing(db, model, record_id, **values))
 
+    # A legacy database may already have a protected catalog entry created by
+    # the RBAC backfill migration.  Reuse it by department code instead of
+    # trying to replace it with the seed's fixed ID: operators' directory
+    # records must remain untouched by an idempotent demo seed.
+    existing_department = db.scalar(select(Department).where(Department.code == DEMO_DEPARTMENT))
+    if existing_department is not None:
+        demo_department_id = existing_department.id
+    else:
+        demo_department_id = DEMO_DEPARTMENT_ID
+        add(
+            Department,
+            demo_department_id,
+            code=DEMO_DEPARTMENT,
+            name="Demo Operations",
+            is_active=True,
+            created_at=DEMO_NOW,
+        )
+
     # The Docker demo uses explicit Agent-owned mappings for each supported
     # role; all are active and scoped to fictional data only.
     for user_id, external_subject, display_name, _role in DEMO_ACCESS_USERS:
@@ -172,20 +191,12 @@ def seed_demo_data(db: Session) -> int:
             is_active=True,
             created_at=DEMO_NOW,
         )
-    add(
-        Department,
-        DEMO_DEPARTMENT_ID,
-        code=DEMO_DEPARTMENT,
-        name="Demo Operations",
-        is_active=True,
-        created_at=DEMO_NOW,
-    )
     for user_id, _external_subject, _display_name, role in DEMO_ACCESS_USERS:
         add(
             UserDepartmentMembership,
             f"demo_membership_{role}",
             auth_user_id=user_id,
-            department_id=DEMO_DEPARTMENT_ID,
+            department_id=demo_department_id,
             role=role,
             is_active=True,
             authorization_source="demo_seed",
@@ -200,7 +211,7 @@ def seed_demo_data(db: Session) -> int:
             f"demo_auth_audit_{role}_provisioned",
             action="demo_seed_access_provisioned",
             target_auth_user_id=user_id,
-            department_id=DEMO_DEPARTMENT_ID,
+            department_id=demo_department_id,
             after_json=json.dumps(
                 {
                     "identity_source": DEMO_IDENTITY_SOURCE,

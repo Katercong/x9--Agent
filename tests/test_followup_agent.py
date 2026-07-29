@@ -3567,6 +3567,39 @@ def test_demo_seed_is_idempotent_and_populates_all_operator_workbench_states(mon
     assert counts_after == counts_before
 
 
+def test_demo_seed_reuses_existing_protected_demo_department_without_overwriting_it():
+    """RBAC backfill may have created the demo code before the demo seed runs."""
+
+    legacy_department_id = "legacy_department_demo_operations"
+    with SessionLocal() as db:
+        db.add(
+            models.Department(
+                id=legacy_department_id,
+                code="demo_operations",
+                name="Legacy protected directory entry",
+                is_active=True,
+            )
+        )
+        db.commit()
+
+    with SessionLocal() as db:
+        created = seed_demo_data(db)
+        db.commit()
+        department = db.scalar(select(models.Department).where(models.Department.code == "demo_operations"))
+        memberships = db.scalars(select(models.UserDepartmentMembership)).all()
+
+    assert created > 0
+    assert department is not None
+    assert department.id == legacy_department_id
+    assert department.name == "Legacy protected directory entry"
+    assert len(memberships) == 3
+    assert {membership.department_id for membership in memberships} == {legacy_department_id}
+
+    with SessionLocal() as db:
+        assert seed_demo_data(db) == 0
+        db.commit()
+
+
 def _create_creator(
     client: TestClient,
     creator_id: str,
