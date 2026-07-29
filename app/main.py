@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from .database import get_db, init_db
+from .identity import get_current_principal
 from .models import (
     AgentFollowupRun,
     Creator,
@@ -26,6 +27,7 @@ from .models import (
     ReferenceMaterial,
     SimulatedOutboundInstruction,
 )
+from .authorization import Capability, Principal
 from .schemas import (
     CreatorCreateIn,
     CreatorPatchIn,
@@ -73,6 +75,27 @@ def startup() -> None:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "x9-replychat-agent"}
+
+
+@app.get("/api/followup-agent/auth/me")
+def get_auth_me(principal: Principal = Depends(get_current_principal)) -> dict[str, object]:
+    """Expose only Agent-local RBAC scope; never disclose X9 assertions or secrets."""
+
+    return {
+        "user_id": principal.user_id,
+        "display_name": principal.display_name,
+        "departments": [
+            {"code": membership.department_code, "role": membership.role.value}
+            for membership in principal.memberships
+        ],
+        "capabilities": sorted(
+            {
+                capability.value
+                for capability in Capability
+                if principal.allowed_departments_for(capability)
+            }
+        ),
+    }
 
 
 @app.post("/api/followup-agent/creators", status_code=201)
