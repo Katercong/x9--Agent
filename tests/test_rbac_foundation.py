@@ -26,6 +26,7 @@ from sqlalchemy.schema import CreateTable
 
 from app.authorization import Capability, DepartmentMembership, Principal, Role, principal_from_memberships
 from app.database import Base, SessionLocal, engine
+from app.demo_seed import DEMO_ACCESS_USERS, DEMO_DEPARTMENT, DEMO_REVIEWER_AUTH_USER_ID, seed_demo_data
 from app.identity import ensure_capability
 from app.main import app
 from app.models import (
@@ -491,6 +492,29 @@ def test_demo_identity_is_explicit_and_never_enabled_outside_demo_or_test(monkey
     demo_response = TestClient(app).get("/api/followup-agent/auth/me")
     assert demo_response.status_code == 200
     assert demo_response.json()["display_name"] == "Local Reviewer"
+
+
+def test_demo_seed_provisions_the_fictional_local_admin_for_the_demo_adapter(monkeypatch: pytest.MonkeyPatch):
+    with SessionLocal() as db:
+        assert seed_demo_data(db) > 0
+        db.commit()
+        assert db.get(AuthUser, DEMO_REVIEWER_AUTH_USER_ID) is not None
+        assert db.scalar(select(Department).where(Department.code == DEMO_DEPARTMENT)) is not None
+        memberships = db.scalars(select(UserDepartmentMembership)).all()
+        assert {membership.role for membership in memberships} == {"operator", "reviewer", "admin"}
+        assert db.scalar(select(func.count()).select_from(AuthorizationAuditEvent)) == len(DEMO_ACCESS_USERS)
+
+    monkeypatch.setenv("RBAC_AUTH_MODE", "demo")
+    monkeypatch.setenv("APP_ENV", "demo")
+    monkeypatch.setenv("RBAC_DEMO_IDENTITY_SOURCE", "demo")
+    monkeypatch.setenv("RBAC_DEMO_EXTERNAL_SUBJECT", "demo_reviewer")
+
+    response = TestClient(app).get("/api/followup-agent/auth/me")
+
+    assert response.status_code == 200
+    assert response.json()["user_id"] == DEMO_REVIEWER_AUTH_USER_ID
+    assert response.json()["departments"] == [{"code": DEMO_DEPARTMENT, "role": "reviewer"}]
+    assert "review:decide" in response.json()["capabilities"]
 
 
 def test_unconfigured_identity_and_capability_dependency_fail_closed(monkeypatch: pytest.MonkeyPatch):

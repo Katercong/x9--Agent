@@ -1,5 +1,7 @@
 # RBAC Foundation 与 X9 身份适配计划
 
+> 当前进度（2026-07-29）：PR1 至 PR5 已完成并推送；PR6 已完成工作台身份展示、受控 demo 身份与文档更新，等待 review 后进行最终提交。真实 X9 签名断言出口仍是外部前置条件。
+
 ## 目标与固定决策
 
 ReplyChat Agent 建立按部门隔离、可审计的 `operator`、`reviewer`、`admin` 权限体系，并保留安全接入 X9 身份的边界。

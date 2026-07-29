@@ -8,6 +8,8 @@ PostgreSQL 由 Docker Compose 管理，数据保存在 Docker 命名卷 `x9-repl
 
 服务只绑定 `127.0.0.1`，不会直接暴露到局域网。`.env` 已被 Git 忽略，真实密码、数据库 URL 和模型密钥不得写入代码或文档。
 
+`.env.example` 的 `APP_ENV=demo` 与 `RBAC_AUTH_MODE=demo` 仅服务于本机 loopback 演示：API 使用虚构本地身份，不接收 X9 Cookie。受管部署必须显式配置 X9 的短期签名断言 Adapter；不能把 demo 配置带入生产。
+
 ## 首次启动
 
 1. 从 `.env.example` 创建本机 `.env`，设置新的原始 `POSTGRES_PASSWORD`，以及两条已编码连接 URL：
@@ -32,7 +34,7 @@ PostgreSQL 由 Docker Compose 管理，数据保存在 Docker 命名卷 `x9-repl
    docker compose --profile demo run --rm demo-seed
    ```
 
-   seed 可重复执行，只补齐固定 demo 数据，不调用模型、不启动 Worker，也不创建外发任务。
+   seed 可重复执行，只补齐固定 demo 数据，以及虚构 `demo_operator`、`demo_reviewer`、`demo_admin` 在 `demo_operations` 的成员关系；不调用模型、不启动 Worker，也不创建外发任务。
 
 ### 本地源码调试
 
@@ -69,7 +71,7 @@ python -m pytest -q
 
 所有 schema 修改必须先新增 Alembic migration，再执行 `alembic upgrade head`。应用启动不会自动建表或修改 PostgreSQL schema。
 
-## 初始迁移的完整性约束
+## 当前迁移的完整性约束
 
 当前初始迁移已与 ORM 对齐，并在 PostgreSQL 与 SQLite 验证以下约束：
 
@@ -77,6 +79,8 @@ python -m pytest -q
 - `agent_followup_runs.creator_id`、`inbound_reply_id` 必填且受外键约束；孤儿 run 被拒绝。
 - 同一 `inbound_reply_id` 在 `execution_status IN ('queued', 'running')` 时最多一条 run。
 - DNC、入站回复、人工待办、模拟出站指令等审计关联不使用 `ON DELETE CASCADE`；删除已有审计关联的 reply 或 creator 会被拒绝。
+- `auth_users` 的 `identity_source + external_subject` 唯一；成员关系的用户/部门组合唯一，角色只允许 `operator`、`reviewer`、`admin`。
+- 授权目录和 `authorization_audit_events` 的全部外键使用 `RESTRICT`；撤权只能通过软停用，不能删除审计链路。
 
 由于初始 migration 已存在，环境需要重新初始化时只可对可丢弃的本地库执行：
 

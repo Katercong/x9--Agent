@@ -4,13 +4,21 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OperatorWorkbench } from "./OperatorWorkbench";
-import type { ReviewItemDetail, ReviewQueueItem } from "./types";
+import type { CurrentPrincipal, ReviewItemDetail, ReviewQueueItem } from "./types";
+
+const adminPrincipal: CurrentPrincipal = {
+  user_id: "auth_user_demo_admin",
+  display_name: "Demo Admin",
+  departments: [{ code: "cross_border", role: "admin" }],
+  capabilities: ["review:read", "review:decide", "run:retry", "dnc:decide", "draft:export"],
+};
 
 const standardItem: ReviewQueueItem = {
   review_type: "standard",
   decision_available: true,
   reply: {
     id: "reply_standard",
+    department_code: "cross_border",
     creator_id: "creator_1",
     from_email: "creator@example.test",
     to_email: "",
@@ -62,7 +70,7 @@ const approvedDraftItem: ReviewQueueItem = {
     outcome: "approve_draft",
     final_draft: "Approved final draft for manual handoff.",
     note: "Reviewed by demo operator.",
-    actor_id: "demo_operator",
+    actor_id: "auth_user_demo_admin",
     decided_at: "2026-07-22T12:00:00",
     created_at: "2026-07-22T12:00:00",
   },
@@ -153,8 +161,9 @@ function jsonResponse(payload: unknown) {
   return Promise.resolve(new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } }));
 }
 
-function renderWorkbench() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderWorkbench(principal: CurrentPrincipal | null = adminPrincipal) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  if (principal) queryClient.setQueryData(["current-principal"], principal);
   return render(
     <ConfigProvider>
       <QueryClientProvider client={queryClient}>
@@ -229,6 +238,46 @@ describe("OperatorWorkbench", () => {
       });
     });
     expect(fetchMock.mock.calls.some(([url]) => /send/i.test(String(url)))).toBe(false);
+  });
+
+  it("renders the current identity and hides review decisions for an operator-only department role", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 1, items: [standardItem] });
+      if (url.includes("/review-items/reply_standard")) return jsonResponse(detailFor(standardItem));
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    renderWorkbench({
+      user_id: "auth_user_operator",
+      display_name: "Scoped Operator",
+      departments: [{ code: "cross_border", role: "operator" }],
+      capabilities: ["review:read", "draft:export"],
+    });
+
+    expect(await screen.findByText("当前操作人：Scoped Operator")).toBeInTheDocument();
+    await screen.findByText("Thank you for your interest.");
+    expect(screen.queryByLabelText("最终草稿")).not.toBeInTheDocument();
+    expect(screen.getByText("当前身份仅可查看")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/review-decisions"))).toBe(false);
+  });
+
+  it("does not load review data when the current identity cannot be resolved", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/auth/me")) {
+        return Promise.resolve(new Response(JSON.stringify({ detail: "invalid or missing identity assertion" }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        }));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    renderWorkbench(null);
+
+    expect(await screen.findByText("身份或权限验证失败")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/review-queue"))).toBe(false);
   });
 
   it("shows an approved draft as locked manual handoff and audits both copy and download actions", async () => {

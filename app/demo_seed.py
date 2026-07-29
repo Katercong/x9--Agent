@@ -11,8 +11,11 @@ from sqlalchemy.orm import Session
 from .database import SessionLocal, init_db
 from .models import (
     AgentFollowupRun,
+    AuthUser,
+    AuthorizationAuditEvent,
     Creator,
     CreatorOutreachEvent,
+    Department,
     DoNotContactConfirmation,
     FollowupTask,
     HumanReviewDecision,
@@ -20,12 +23,21 @@ from .models import (
     OutreachEmail,
     Product,
     ReferenceMaterial,
+    UserDepartmentMembership,
 )
 
 
 DEMO_DEPARTMENT = "demo_operations"
 DEMO_PRODUCT_TYPE = "demo_audio_accessory"
-DEMO_ACTOR_ID = "demo_operator"
+DEMO_REVIEWER_AUTH_USER_ID = "demo_auth_user_reviewer"
+DEMO_DEPARTMENT_ID = "demo_department_operations"
+DEMO_IDENTITY_SOURCE = "demo"
+DEMO_EXTERNAL_SUBJECT = "demo_reviewer"
+DEMO_ACCESS_USERS = (
+    ("demo_auth_user_operator", "demo_operator", "Demo Operator", "operator"),
+    (DEMO_REVIEWER_AUTH_USER_ID, DEMO_EXTERNAL_SUBJECT, "Demo Reviewer", "reviewer"),
+    ("demo_auth_user_admin", "demo_admin", "Demo Admin", "admin"),
+)
 DEMO_CREATED_BY = "demo_seed"
 DEMO_NOW = datetime(2026, 7, 23, 9, 0, 0)
 
@@ -147,6 +159,60 @@ def seed_demo_data(db: Session) -> int:
     def add(model: type[ModelT], record_id: str, **values: Any) -> None:
         nonlocal created
         created += int(_add_if_missing(db, model, record_id, **values))
+
+    # The Docker demo uses explicit Agent-owned mappings for each supported
+    # role; all are active and scoped to fictional data only.
+    for user_id, external_subject, display_name, _role in DEMO_ACCESS_USERS:
+        add(
+            AuthUser,
+            user_id,
+            identity_source=DEMO_IDENTITY_SOURCE,
+            external_subject=external_subject,
+            display_name=display_name,
+            is_active=True,
+            created_at=DEMO_NOW,
+        )
+    add(
+        Department,
+        DEMO_DEPARTMENT_ID,
+        code=DEMO_DEPARTMENT,
+        name="Demo Operations",
+        is_active=True,
+        created_at=DEMO_NOW,
+    )
+    for user_id, _external_subject, _display_name, role in DEMO_ACCESS_USERS:
+        add(
+            UserDepartmentMembership,
+            f"demo_membership_{role}",
+            auth_user_id=user_id,
+            department_id=DEMO_DEPARTMENT_ID,
+            role=role,
+            is_active=True,
+            authorization_source="demo_seed",
+            created_at=DEMO_NOW,
+        )
+    # AuthorizationAuditEvent has restrictive foreign keys, so persist the
+    # referenced identity directory rows before appending its seed event.
+    db.flush()
+    for user_id, external_subject, _display_name, role in DEMO_ACCESS_USERS:
+        add(
+            AuthorizationAuditEvent,
+            f"demo_auth_audit_{role}_provisioned",
+            action="demo_seed_access_provisioned",
+            target_auth_user_id=user_id,
+            department_id=DEMO_DEPARTMENT_ID,
+            after_json=json.dumps(
+                {
+                    "identity_source": DEMO_IDENTITY_SOURCE,
+                    "external_subject": external_subject,
+                    "role": role,
+                    "is_active": True,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            created_at=DEMO_NOW,
+        )
 
     add(
         Product,
@@ -477,7 +543,7 @@ def seed_demo_data(db: Session) -> int:
         outcome="approve_draft",
         final_draft="Thanks for confirming. We will share the next steps after the BD team completes the final manual check.",
         note="演示：已批准并锁定，仍需由 BD 手动复制或下载交接。",
-        actor_id=DEMO_ACTOR_ID,
+        actor_id=DEMO_REVIEWER_AUTH_USER_ID,
         decided_at=approved_at + timedelta(seconds=5),
         created_at=approved_at + timedelta(seconds=5),
     )

@@ -39,4 +39,4 @@ docker compose up --build -d
 docker compose --profile demo run --rm demo-seed
 ```
 
-随后打开 `http://127.0.0.1:8000/operator-workbench/`。完整的样例说明、演示路径和停止方式见 [运营工作台演示指南](docs/operator-workbench-demo.md)；可直接用于中文简历的项目要点见 [项目简历要点](docs/operator-workbench-resume-highlights.md)。基础演示不会启动 Worker、调用模型或发送任何消息。
+随后打开 `http://127.0.0.1:8000/operator-workbench/`。`.env.example` 默认只为此 loopback 演示启用虚构 `demo_reviewer` 本地身份；它不使用 X9 Cookie，也不能替代生产身份集成。完整的样例说明、演示路径和停止方式见 [运营工作台演示指南](docs/operator-workbench-demo.md)；RBAC 与未来 X9 断言契约见 [RBAC Foundation 计划](docs/rbac-foundation-plan.md)。基础演示不会启动 Worker、调用模型或发送任何消息。

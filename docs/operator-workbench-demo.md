@@ -4,6 +4,7 @@
 
 - 已安装 Docker Desktop，并确保 Docker Engine 已启动。
 - 从 `.env.example` 创建本机 `.env`，填写 PostgreSQL 变量。不要提交 `.env`，也不需要为基础演示填写模型 Key。
+- `.env.example` 的 `APP_ENV=demo` 与 `RBAC_AUTH_MODE=demo` 只适用于本机 loopback Docker 演示：它使用虚构 `demo_reviewer` 身份和本地授权目录，绝不接收 X9 Cookie。生产或联调必须显式改为受信 X9 签名断言配置。
 
 ## 启动与载入样例
 
@@ -14,9 +15,11 @@ docker compose up --build -d
 docker compose --profile demo run --rm demo-seed
 ```
 
-`migrate` 会先执行 Alembic，`api` 健康检查通过后提供工作台。`demo-seed` 仅在显式运行时补齐固定的虚构数据；可重复执行，不会删除或覆盖操作者在本地库中的后续操作。
+`migrate` 会先执行 Alembic，`api` 健康检查通过后提供工作台。`demo-seed` 仅在显式运行时补齐固定的虚构数据，以及 `demo_operator`、`demo_reviewer`、`demo_admin` 在 `demo_operations` 的三种本地角色映射；默认工作台使用 `demo_reviewer`。种子可重复执行，不会删除或覆盖操作者在本地库中的后续操作。
 
 打开 [http://127.0.0.1:8000/operator-workbench/](http://127.0.0.1:8000/operator-workbench/)。若修改 `API_PORT`，请使用对应端口。
+
+页面顶部会显示当前 Agent 本地身份与部门角色。它只用于展示和减少无权限操作；所有 API 仍由服务端再次校验部门范围和能力。
 
 ## 建议演示路径
 

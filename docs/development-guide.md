@@ -10,6 +10,13 @@
 
 容器化工作台、受控 demo seed 与启动方式见 [operator-workbench-demo.md](operator-workbench-demo.md) 和 [postgresql.md](postgresql.md)。
 
+## 身份、授权与 X9 边界
+
+- 除 `/health` 外，所有业务 API 都要求当前 Agent Principal。身份有效但没有本地映射返回 `403`；缺失或无效的 X9 签名断言返回 `401`；跨部门单项资源返回 `404`。
+- Agent 本地 `auth_users`、`departments` 与 `user_department_memberships` 是唯一授权权威。X9 只应在其自身完成 Session 验证后转发短期 HMAC 签名断言；Agent 不接收 `x9_session` Cookie，也不读取 X9 数据库。
+- `operator` 可读取审核并交接已批准草稿；`reviewer` 额外可作审核决定、重试和 DNC 决定；`admin` 额外可管理达人、全局资料、模拟入站和本地授权目录。后端按部门二次校验，前端只展示或禁用无权操作。
+- 本地 Docker demo 才允许 `RBAC_AUTH_MODE=demo`。种子会创建虚构 `demo_reviewer` 管理员映射；生产环境必须使用受管 X9 签名断言配置。
+
 ## 本地运行
 
 ### 1. 安装依赖与配置环境
@@ -91,6 +98,8 @@ POST /simulate-reply
 | `inbound_replies` / `InboundReply` | 入站回复、规则分类、处理状态和稳定幂等标识。 |
 | `agent_followup_runs` / `AgentFollowupRun` | 每次模型任务的提示词、上下文、输出、错误、耗时和执行状态。 |
 | `do_not_contact_confirmations` | 退订/DNC 的确认记录。 |
+| `auth_users` / `departments` / `user_department_memberships` | Agent 本地身份映射、部门目录和按部门角色。 |
+| `authorization_audit_events` | 管理员授权变更的追加式审计。 |
 | `reference_materials` | 可版本化的政策、合作资料和报价条款。 |
 | `simulated_outbound_instructions` | 仅用于模拟/人工交接的出站指令，不会发送。 |
 | `creator_outreach_events` / `followup_tasks` | 沟通事件和人工待办。 |
@@ -135,6 +144,8 @@ POST /simulate-reply
 | `GET /api/followup-agent/review-decisions/{decision_id}/delivery-capability` | 返回只读交接能力边界，始终不提供系统发送。 |
 | `POST /api/followup-agent/review-decisions/{decision_id}/exports` | 记录人工复制/导出的草稿快照；不会发送消息。 |
 | `GET /api/followup-agent/outbound-instructions` | 查询模拟出站指令，不会触发发送。 |
+| `GET /api/followup-agent/auth/me` | 返回当前 Agent 本地显示身份、部门角色与能力；不暴露 X9 断言。 |
+| `/api/followup-agent/access/*` | 管理员在自身部门范围内管理用户、部门、成员关系和授权审计；仅软停用，不提供删除。 |
 | `GET /operator-workbench/` | 提供构建后的 React 人工审核工作台。 |
 | `GET /health` | 健康检查。 |
 

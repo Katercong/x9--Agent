@@ -1,4 +1,4 @@
-import type { DncConfirmationApproveResponse, DncConfirmationRejectResponse, DraftExportResponse, FailedReviewRetryResponse, ReviewDecisionResponse, ReviewFilter, ReviewItemDetail, ReviewQueueResponse } from "./types";
+import type { CurrentPrincipal, DncConfirmationApproveResponse, DncConfirmationRejectResponse, DraftExportResponse, FailedReviewRetryResponse, ReviewDecisionResponse, ReviewFilter, ReviewItemDetail, ReviewQueueResponse } from "./types";
 
 const API_ROOT = "/api/followup-agent";
 
@@ -24,6 +24,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export function getReviewQueue(reviewType?: Exclude<ReviewFilter, "all">): Promise<ReviewQueueResponse> {
   const query = reviewType ? `?review_type=${encodeURIComponent(reviewType)}` : "";
   return request<ReviewQueueResponse>(`/review-queue${query}`);
+}
+
+export function getCurrentPrincipal(): Promise<CurrentPrincipal> {
+  return request<CurrentPrincipal>("/auth/me");
 }
 
 export function getReviewItem(replyId: string): Promise<ReviewItemDetail> {

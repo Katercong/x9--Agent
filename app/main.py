@@ -1782,6 +1782,7 @@ def _load_json_list(value: str | None) -> list[str]:
 def _reply_to_dict(row: InboundReply) -> dict[str, Any]:
     return {
         "id": row.id,
+        "department_code": row.department_code,
         "creator_id": row.creator_id,
         "direction": row.direction,
         "channel": row.channel,
