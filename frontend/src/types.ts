@@ -53,6 +53,16 @@ export interface DncConfirmation {
   created_at: string | null;
 }
 
+export interface DeclineConfirmation {
+  id: string;
+  department_code: string;
+  creator_id: string;
+  inbound_reply_id: string;
+  actor_id: string;
+  confirmed_at: string | null;
+  created_at: string | null;
+}
+
 export interface ReviewQueueItem {
   review_type: ReviewType;
   decision_available: boolean;
@@ -185,6 +195,18 @@ export interface DncConfirmationApproveResponse {
 
 export interface DncConfirmationRejectResponse extends DncConfirmationApproveResponse {
   run: AgentRun;
+}
+
+export interface DeclineConfirmationResponse {
+  ok: true;
+  confirmation: DeclineConfirmation;
+  creator: {
+    id: string;
+    current_status: string | null;
+    do_not_contact_status: string;
+  };
+  reply: InboundReply;
+  closed_followup_task_ids: string[];
 }
 
 export interface FailedReviewRetryResponse {

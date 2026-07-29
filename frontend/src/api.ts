@@ -1,4 +1,4 @@
-import type { CurrentPrincipal, DncConfirmationApproveResponse, DncConfirmationRejectResponse, DraftExportResponse, FailedReviewRetryResponse, ReviewDecisionResponse, ReviewFilter, ReviewItemDetail, ReviewQueueResponse } from "./types";
+import type { CurrentPrincipal, DeclineConfirmationResponse, DncConfirmationApproveResponse, DncConfirmationRejectResponse, DraftExportResponse, FailedReviewRetryResponse, ReviewDecisionResponse, ReviewFilter, ReviewItemDetail, ReviewQueueResponse } from "./types";
 
 const API_ROOT = "/api/followup-agent";
 
@@ -65,6 +65,13 @@ export function approveDncConfirmation(confirmationId: string): Promise<DncConfi
 
 export function rejectDncConfirmation(confirmationId: string): Promise<DncConfirmationRejectResponse> {
   return request<DncConfirmationRejectResponse>(`/dnc-confirmations/${encodeURIComponent(confirmationId)}/reject`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function confirmDeclineReviewItem(replyId: string): Promise<DeclineConfirmationResponse> {
+  return request<DeclineConfirmationResponse>(`/review-items/${encodeURIComponent(replyId)}/confirm-decline`, {
     method: "POST",
     body: JSON.stringify({}),
   });

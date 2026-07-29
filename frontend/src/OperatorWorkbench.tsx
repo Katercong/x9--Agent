@@ -33,6 +33,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   approveDncConfirmation,
+  confirmDeclineReviewItem,
   createDraftExportRecord,
   getCurrentPrincipal,
   getReviewItem,
@@ -74,8 +75,8 @@ const filterOptions: Array<{
     value: "model_failure",
   },
   {
-    label: "明确拒绝",
-    description: "终态记录，只读查看",
+    label: "拒绝待确认",
+    description: "人工确认后标记 dropped 并关闭活跃待办",
     icon: <CloseCircleOutlined />,
     tone: "terminal",
     value: "decline",
@@ -94,7 +95,7 @@ const typeLabels: Record<ReviewType, string> = {
   model_failure: "模型失败",
   generation_pending: "生成中",
   approved_draft: "已锁定待交接",
-  decline: "终态只读",
+  decline: "拒绝待确认",
   dnc_confirmation: "DNC 待确认",
   dnc_blocked: "DNC 已阻断",
 };
@@ -413,6 +414,16 @@ export function OperatorWorkbench() {
     onError: (error) => messageApi.error(error instanceof Error ? error.message : "驳回 DNC 失败"),
   });
 
+  const declineConfirmationMutation = useMutation({
+    mutationFn: confirmDeclineReviewItem,
+    onSuccess: () => {
+      messageApi.success("已确认达人拒绝并关闭活跃待办；系统不会发送消息。");
+      setSelectedReplyId(undefined);
+      void queryClient.invalidateQueries({ queryKey: ["review-queue"] });
+    },
+    onError: (error) => messageApi.error(error instanceof Error ? error.message : "确认拒绝失败"),
+  });
+
   const retryMutation = useMutation({
     mutationFn: retryFailedReviewItem,
     onSuccess: () => {
@@ -429,11 +440,13 @@ export function OperatorWorkbench() {
   const generationPending = detailItem?.review_type === "generation_pending";
   const approvedDraft = detailItem?.review_type === "approved_draft" && !dncBlocked;
   const pendingDncConfirmation = detailItem?.review_type === "dnc_confirmation" && detailItem.dnc_confirmation?.status === "pending_confirmation";
+  const pendingDeclineConfirmation = detailItem?.review_type === "decline";
   const currentDepartmentCode = detailItem?.reply.department_code;
   const canReviewDecide = hasDepartmentRole(principal, currentDepartmentCode, "reviewer");
   const canRetryRun = hasDepartmentRole(principal, currentDepartmentCode, "reviewer");
   const canDecide = Boolean(detailItem?.decision_available && detailItem.run && !terminal && canReviewDecide);
   const canDncDecide = hasDepartmentRole(principal, currentDepartmentCode, "reviewer");
+  const canDeclineDecide = hasDepartmentRole(principal, currentDepartmentCode, "reviewer");
   const hasLockedDraft = Boolean(!dncBlocked && approvedDraft && detailItem?.decision?.outcome === "approve_draft" && detailItem.decision.final_draft);
   const canHandoff = hasLockedDraft && hasDepartmentRole(principal, currentDepartmentCode, "operator");
   const conversation = useMemo(() => (detail ? buildTimeline(detail.context) : []), [detail]);
@@ -557,8 +570,25 @@ export function OperatorWorkbench() {
               {modelFailure && (
                 <Alert className="conversation-state" type="warning" showIcon message="模型未生成可用建议" description="可以从空白草稿起草，也可以在右侧明确点击人工重新生成。" />
               )}
-              {terminal && detailItem.review_type === "decline" && (
-                <Alert className="conversation-state" type="warning" showIcon message="达人已明确拒绝" description="这是只读终态记录，不可起草、批准、复制或下载。" />
+              {pendingDeclineConfirmation && (
+                <Card className="terminal-action-card" size="small">
+                  <Space direction="vertical" className="full-width">
+                    <Text strong>明确拒绝待人工确认</Text>
+                    <Text type="secondary">确认后将达人标记为 dropped，并关闭该达人的活跃待办；不会生成草稿、调用模型或发送消息。</Text>
+                    {!canDeclineDecide && <Text type="warning">当前身份没有终态确认权限，仅可查看该拒绝记录。</Text>}
+                    {canDeclineDecide && (
+                      <Popconfirm
+                        title="确认明确拒绝"
+                        description="确认后会标记达人为 dropped，并关闭该达人的活跃待办。系统不会发送消息。"
+                        okText="确认拒绝"
+                        cancelText="取消"
+                        onConfirm={() => declineConfirmationMutation.mutate(detailItem.reply.id)}
+                      >
+                        <Button danger type="primary" loading={declineConfirmationMutation.isPending}>确认拒绝</Button>
+                      </Popconfirm>
+                    )}
+                  </Space>
+                </Card>
               )}
               {dncBlocked && !pendingDncConfirmation && (
                 <Alert className="conversation-state" type="error" showIcon message="DNC 已确认并阻断" description="该达人此前的草稿已隐藏，不能复制、下载、交接或发送。" />
