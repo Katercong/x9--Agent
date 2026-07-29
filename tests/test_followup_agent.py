@@ -3321,6 +3321,70 @@ def test_worker_commits_running_claim_before_blocking_provider_call(monkeypatch)
     assert not thread.is_alive()
 
 
+def test_postgresql_claim_statement_uses_skip_locked_and_returning():
+    """PostgreSQL workers must skip another worker's uncommitted claim."""
+
+    statement = services._postgres_claim_next_queued_run_statement(
+        claim_token="claim_test",
+        claimed_at=datetime(2026, 7, 29, 12, 0, 0),
+        lease_expires_at=datetime(2026, 7, 29, 12, 2, 0),
+    )
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert "FOR UPDATE SKIP LOCKED" in compiled.upper()
+    assert "RETURNING" in compiled.upper()
+    assert "ORDER BY agent_followup_runs.created_at ASC, agent_followup_runs.id ASC" in compiled
+
+
+def test_sqlite_claim_fallback_claims_distinct_queued_runs():
+    """SQLite keeps compare-and-swap semantics while PostgreSQL owns the lock-aware path."""
+
+    client = TestClient(app)
+    _create_creator(client, "creator_sqlite_claim_first")
+    _create_creator(client, "creator_sqlite_claim_second")
+    first = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_sqlite_claim_first", "body": "Sounds interesting.", "run_agent": True},
+    )
+    second = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_sqlite_claim_second", "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+    with SessionLocal() as db:
+        first_claim = services.claim_next_queued_run(db)
+        assert first_claim is not None
+        db.commit()
+    with SessionLocal() as db:
+        second_claim = services.claim_next_queued_run(db)
+        assert second_claim is not None
+        db.commit()
+
+    assert {first_claim.run_id, second_claim.run_id} == {first.json()["run"]["id"], second.json()["run"]["id"]}
+    assert first_claim.run_id != second_claim.run_id
+
+
+def test_sqlite_claim_fallback_does_not_claim_one_run_twice():
+    """已提交的单条领取不能被第二个 SQLite Worker 重复取得。"""
+
+    client = TestClient(app)
+    _create_creator(client, "creator_sqlite_single_claim")
+    created = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_sqlite_single_claim", "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert created.status_code == 200, created.text
+
+    with SessionLocal() as db:
+        first_claim = services.claim_next_queued_run(db)
+        assert first_claim is not None
+        db.commit()
+    with SessionLocal() as db:
+        assert services.claim_next_queued_run(db) is None
+
+
 def test_expired_running_run_is_failed_without_automatic_retry():
     """过期租约必须转人工处理，不能回到 queued 或再次调用模型。"""
 

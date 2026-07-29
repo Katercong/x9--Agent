@@ -333,34 +333,85 @@ def is_creator_contact_blocked(creator: Creator | None) -> bool:
 
 
 def claim_next_queued_run(db: Session) -> ClaimedRun | None:
-    """原子领取最早 queued 任务；调用方必须在模型调用前立即提交。"""
+    """领取最早 queued 任务；调用方必须在模型调用前立即提交。"""
 
-    run_id = db.scalar(
-        select(AgentFollowupRun.id)
-        .where(AgentFollowupRun.execution_status == "queued")
-        .order_by(AgentFollowupRun.created_at.asc())
-        .limit(1)
-    )
-    if run_id is None:
-        return None
     claim_token = new_id("claim")
+    claimed_at = datetime.utcnow()
+    lease_expires_at = claimed_at + timedelta(seconds=WORKER_LEASE_SECONDS)
+
+    if db.get_bind().dialect.name == "postgresql":
+        row = db.execute(
+            _postgres_claim_next_queued_run_statement(
+                claim_token=claim_token,
+                claimed_at=claimed_at,
+                lease_expires_at=lease_expires_at,
+            )
+        ).mappings().one_or_none()
+        if row is None or not row["inbound_reply_id"]:
+            return None
+        return ClaimedRun(
+            run_id=str(row["run_id"]),
+            inbound_reply_id=str(row["inbound_reply_id"]),
+            claim_token=claim_token,
+        )
+
+    # SQLite has no row-level SKIP LOCKED equivalent.  Keep the existing
+    # compare-and-swap fallback for unit tests and the local MVP: only the
+    # session that changes queued -> running owns the generated claim token.
+    candidate = db.execute(
+        select(AgentFollowupRun.id, AgentFollowupRun.inbound_reply_id)
+        .where(AgentFollowupRun.execution_status == "queued")
+        .order_by(AgentFollowupRun.created_at.asc(), AgentFollowupRun.id.asc())
+        .limit(1)
+    ).mappings().one_or_none()
+    if candidate is None or not candidate["inbound_reply_id"]:
+        return None
     claimed = db.execute(
         update(AgentFollowupRun)
-        .where(AgentFollowupRun.id == run_id)
+        .where(AgentFollowupRun.id == candidate["id"])
         .where(AgentFollowupRun.execution_status == "queued")
         .values(
             execution_status="running",
-            started_at=datetime.utcnow(),
+            started_at=claimed_at,
             claim_token=claim_token,
-            lease_expires_at=datetime.utcnow() + timedelta(seconds=WORKER_LEASE_SECONDS),
+            lease_expires_at=lease_expires_at,
         )
     )
     if claimed.rowcount != 1:
         return None
-    run = db.get(AgentFollowupRun, run_id)
-    if run is None or not run.inbound_reply_id:
-        return None
-    return ClaimedRun(run_id=run.id, inbound_reply_id=run.inbound_reply_id, claim_token=claim_token)
+    return ClaimedRun(
+        run_id=str(candidate["id"]),
+        inbound_reply_id=str(candidate["inbound_reply_id"]),
+        claim_token=claim_token,
+    )
+
+
+def _postgres_claim_next_queued_run_statement(*, claim_token: str, claimed_at: datetime, lease_expires_at: datetime):
+    """Build one PostgreSQL statement that skips rows claimed by other workers."""
+
+    next_queued_run = (
+        select(AgentFollowupRun.id.label("run_id"))
+        .where(AgentFollowupRun.execution_status == "queued")
+        .order_by(AgentFollowupRun.created_at.asc(), AgentFollowupRun.id.asc())
+        .limit(1)
+        .with_for_update(skip_locked=True)
+        .cte("next_queued_run")
+    )
+    return (
+        update(AgentFollowupRun)
+        .where(AgentFollowupRun.id == next_queued_run.c.run_id)
+        .where(AgentFollowupRun.execution_status == "queued")
+        .values(
+            execution_status="running",
+            started_at=claimed_at,
+            claim_token=claim_token,
+            lease_expires_at=lease_expires_at,
+        )
+        .returning(
+            AgentFollowupRun.id.label("run_id"),
+            AgentFollowupRun.inbound_reply_id,
+        )
+    )
 
 
 def recover_expired_runs(db: Session) -> int:
