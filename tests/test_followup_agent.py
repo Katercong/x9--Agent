@@ -25,6 +25,8 @@ from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 from app.database import Base, SessionLocal, engine, init_db  # noqa: E402
 from app.demo_seed import seed_demo_data  # noqa: E402
+from app.authorization import DepartmentMembership, Role, principal_from_memberships  # noqa: E402
+from app.identity import get_current_principal  # noqa: E402
 from app.main import _apply_review_queue_filters, _review_queue_base_statement, app  # noqa: E402
 from app.models import (  # noqa: E402
     AgentFollowupRun,
@@ -75,6 +77,21 @@ def reset_database():
                 )
             )
             db.commit()
+    app.dependency_overrides[get_current_principal] = lambda: principal_from_memberships(
+        user_id="test_admin",
+        identity_source="test",
+        external_subject="test_admin",
+        display_name="Test Admin",
+        memberships=[
+            DepartmentMembership("cross_border", Role.ADMIN),
+            DepartmentMembership("demo_operations", Role.ADMIN),
+            DepartmentMembership("other_department", Role.ADMIN),
+        ],
+    )
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_current_principal, None)
 
 
 def test_classify_reply_categories():

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.NamedTemporaryFile(delete=False, suffix='.db').name}"
@@ -26,7 +27,17 @@ from app.authorization import Capability, DepartmentMembership, Principal, Role,
 from app.database import Base, SessionLocal, engine
 from app.identity import ensure_capability
 from app.main import app
-from app.models import AuthUser, AuthorizationAuditEvent, Department, UserDepartmentMembership
+from app.models import (
+    AgentFollowupRun,
+    AuthUser,
+    AuthorizationAuditEvent,
+    Creator,
+    Department,
+    HumanReviewDecision,
+    InboundReply,
+    SimulatedOutboundInstruction,
+    UserDepartmentMembership,
+)
 from app.rbac_bootstrap import bootstrap_admin, main as bootstrap_main
 
 
@@ -126,6 +137,182 @@ def _configure_x9_assertion(monkeypatch: pytest.MonkeyPatch, *, keys: dict[str, 
     monkeypatch.setenv("X9_IDENTITY_ISSUER", "x9")
     monkeypatch.setenv("X9_IDENTITY_AUDIENCE", "x9-replychat-agent")
     monkeypatch.setenv("X9_IDENTITY_HMAC_KEYS_JSON", json.dumps(keys or {"test-key-1": "test-hmac-secret"}))
+
+
+def _provision_scoped_read_data() -> None:
+    """Create two departments so HTTP tests exercise SQL-side scope filters."""
+
+    with SessionLocal() as db:
+        cross_reviewer = AuthUser(
+            id="auth_user_cross_reviewer",
+            identity_source="x9",
+            external_subject="x9-cross-reviewer",
+            display_name="Cross Reviewer",
+        )
+        cross_admin = AuthUser(
+            id="auth_user_cross_admin",
+            identity_source="x9",
+            external_subject="x9-cross-admin",
+            display_name="Cross Admin",
+        )
+        cross_department = Department(id="department_cross", code="cross_border", name="Cross Border")
+        foreign_department = Department(id="department_foreign", code="foreign_trade", name="Foreign Trade")
+        db.add_all(
+            [
+                cross_reviewer,
+                cross_admin,
+                cross_department,
+                foreign_department,
+                UserDepartmentMembership(
+                    id="membership_cross_reviewer",
+                    auth_user_id=cross_reviewer.id,
+                    department_id=cross_department.id,
+                    role=Role.REVIEWER.value,
+                ),
+                UserDepartmentMembership(
+                    id="membership_cross_admin",
+                    auth_user_id=cross_admin.id,
+                    department_id=cross_department.id,
+                    role=Role.ADMIN.value,
+                ),
+            ]
+        )
+        db.flush()
+        creators = [
+            Creator(id="creator_cross", department_code="cross_border", handle="cross_creator"),
+            Creator(id="creator_foreign", department_code="foreign_trade", handle="foreign_creator"),
+        ]
+        db.add_all(creators)
+        db.flush()
+        replies = [
+            InboundReply(
+                id="reply_cross_pending",
+                department_code="cross_border",
+                creator_id="creator_cross",
+                direction="inbound",
+                channel="simulation",
+                external_message_id="scope-cross-pending",
+                body="Cross-border pending review",
+                processing_status="need_ai_review",
+                reply_category="need_more_info",
+                message_at=datetime.utcnow(),
+            ),
+            InboundReply(
+                id="reply_foreign_pending",
+                department_code="foreign_trade",
+                creator_id="creator_foreign",
+                direction="inbound",
+                channel="simulation",
+                external_message_id="scope-foreign-pending",
+                body="Foreign-trade pending review",
+                processing_status="need_ai_review",
+                reply_category="need_more_info",
+                message_at=datetime.utcnow(),
+            ),
+            InboundReply(
+                id="reply_cross_decision",
+                department_code="cross_border",
+                creator_id="creator_cross",
+                direction="inbound",
+                channel="simulation",
+                external_message_id="scope-cross-decision",
+                body="Cross-border approved review",
+                processing_status="reviewed",
+                reply_category="need_more_info",
+                message_at=datetime.utcnow(),
+            ),
+            InboundReply(
+                id="reply_foreign_decision",
+                department_code="foreign_trade",
+                creator_id="creator_foreign",
+                direction="inbound",
+                channel="simulation",
+                external_message_id="scope-foreign-decision",
+                body="Foreign-trade approved review",
+                processing_status="reviewed",
+                reply_category="need_more_info",
+                message_at=datetime.utcnow(),
+            ),
+        ]
+        db.add_all(replies)
+        db.flush()
+        runs = [
+            AgentFollowupRun(
+                id="run_cross_pending",
+                department_code="cross_border",
+                creator_id="creator_cross",
+                inbound_reply_id="reply_cross_pending",
+                execution_status="succeeded",
+                llm_status="succeeded",
+            ),
+            AgentFollowupRun(
+                id="run_foreign_pending",
+                department_code="foreign_trade",
+                creator_id="creator_foreign",
+                inbound_reply_id="reply_foreign_pending",
+                execution_status="succeeded",
+                llm_status="succeeded",
+            ),
+            AgentFollowupRun(
+                id="run_cross_decision",
+                department_code="cross_border",
+                creator_id="creator_cross",
+                inbound_reply_id="reply_cross_decision",
+                execution_status="succeeded",
+                llm_status="succeeded",
+            ),
+            AgentFollowupRun(
+                id="run_foreign_decision",
+                department_code="foreign_trade",
+                creator_id="creator_foreign",
+                inbound_reply_id="reply_foreign_decision",
+                execution_status="succeeded",
+                llm_status="succeeded",
+            ),
+        ]
+        db.add_all(runs)
+        db.flush()
+        db.add_all(
+            [
+                HumanReviewDecision(
+                    id="decision_cross",
+                    department_code="cross_border",
+                    creator_id="creator_cross",
+                    inbound_reply_id="reply_cross_decision",
+                    agent_followup_run_id="run_cross_decision",
+                    outcome="approve_draft",
+                    final_draft="Cross approved draft",
+                    actor_id="legacy_demo_operator",
+                ),
+                HumanReviewDecision(
+                    id="decision_foreign",
+                    department_code="foreign_trade",
+                    creator_id="creator_foreign",
+                    inbound_reply_id="reply_foreign_decision",
+                    agent_followup_run_id="run_foreign_decision",
+                    outcome="approve_draft",
+                    final_draft="Foreign approved draft",
+                    actor_id="legacy_demo_operator",
+                ),
+                SimulatedOutboundInstruction(
+                    id="instruction_cross",
+                    creator_id="creator_cross",
+                    inbound_reply_id="reply_cross_pending",
+                    action_type="simulation_only",
+                    template_key="scope-test",
+                    content="Cross instruction",
+                ),
+                SimulatedOutboundInstruction(
+                    id="instruction_foreign",
+                    creator_id="creator_foreign",
+                    inbound_reply_id="reply_foreign_pending",
+                    action_type="simulation_only",
+                    template_key="scope-test",
+                    content="Foreign instruction",
+                ),
+            ]
+        )
+        db.commit()
 
 
 def test_role_capability_matrix_and_department_scope_are_explicit():
@@ -278,6 +465,97 @@ def test_unconfigured_identity_and_capability_dependency_fail_closed(monkeypatch
     with pytest.raises(HTTPException) as exc_info:
         ensure_capability(_principal(Role.OPERATOR), Capability.REVIEW_DECIDE, department_code="cross_border")
     assert exc_info.value.status_code == 403
+
+
+def test_business_read_endpoints_require_a_principal(monkeypatch: pytest.MonkeyPatch):
+    _configure_x9_assertion(monkeypatch)
+    client = TestClient(app)
+
+    for path in (
+        "/api/followup-agent/reference-materials",
+        "/api/followup-agent/outbound-instructions",
+        "/api/followup-agent/replies/missing",
+        "/api/followup-agent/runs/missing",
+        "/api/followup-agent/runs",
+        "/api/followup-agent/review-queue",
+        "/api/followup-agent/review-items/missing",
+        "/api/followup-agent/review-decisions/missing",
+        "/api/followup-agent/review-decisions/missing/delivery-capability",
+    ):
+        assert client.get(path).status_code == 401
+
+
+def test_read_endpoints_filter_to_authorized_department_and_hide_cross_department_rows(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _provision_scoped_read_data()
+    _configure_x9_assertion(monkeypatch)
+    client = TestClient(app)
+    reviewer_headers = _signed_x9_headers(subject_id="x9-cross-reviewer")
+
+    reference_response = client.get("/api/followup-agent/reference-materials", headers=reviewer_headers)
+    assert reference_response.status_code == 200
+
+    own_reply = client.get("/api/followup-agent/replies/reply_cross_pending", headers=reviewer_headers)
+    assert own_reply.status_code == 200
+    assert client.get("/api/followup-agent/replies/reply_foreign_pending", headers=reviewer_headers).status_code == 404
+
+    own_run = client.get("/api/followup-agent/runs/run_cross_pending", headers=reviewer_headers)
+    assert own_run.status_code == 200
+    assert client.get("/api/followup-agent/runs/run_foreign_pending", headers=reviewer_headers).status_code == 404
+
+    runs_response = client.get("/api/followup-agent/runs", headers=reviewer_headers)
+    assert runs_response.status_code == 200
+    assert {item["id"] for item in runs_response.json()["items"]} == {"run_cross_pending", "run_cross_decision"}
+
+    queue_response = client.get(
+        "/api/followup-agent/review-queue?review_type=standard",
+        headers=reviewer_headers,
+    )
+    assert queue_response.status_code == 200
+    assert queue_response.json()["total"] == 1
+    assert queue_response.json()["items"][0]["reply"]["id"] == "reply_cross_pending"
+    assert client.get(
+        "/api/followup-agent/review-queue?department_code=foreign_trade",
+        headers=reviewer_headers,
+    ).json()["total"] == 0
+
+    assert client.get(
+        "/api/followup-agent/review-items/reply_cross_pending",
+        headers=reviewer_headers,
+    ).status_code == 200
+    assert client.get(
+        "/api/followup-agent/review-items/reply_foreign_pending",
+        headers=reviewer_headers,
+    ).status_code == 404
+
+    assert client.get(
+        "/api/followup-agent/review-decisions/decision_cross",
+        headers=reviewer_headers,
+    ).status_code == 200
+    assert client.get(
+        "/api/followup-agent/review-decisions/decision_foreign",
+        headers=reviewer_headers,
+    ).status_code == 404
+    assert client.get(
+        "/api/followup-agent/review-decisions/decision_foreign/delivery-capability",
+        headers=reviewer_headers,
+    ).status_code == 404
+
+    # Reviewer can read review data but not simulated instruction history.
+    assert client.get("/api/followup-agent/outbound-instructions", headers=reviewer_headers).status_code == 403
+
+
+def test_outbound_instruction_read_is_admin_only_and_still_department_scoped(monkeypatch: pytest.MonkeyPatch):
+    _provision_scoped_read_data()
+    _configure_x9_assertion(monkeypatch)
+    admin_headers = _signed_x9_headers(subject_id="x9-cross-admin")
+
+    response = TestClient(app).get("/api/followup-agent/outbound-instructions", headers=admin_headers)
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert [item["id"] for item in response.json()["items"]] == ["instruction_cross"]
 
 
 def test_authorization_models_enforce_unique_roles_and_restrict_deletes():

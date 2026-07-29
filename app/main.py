@@ -4,6 +4,7 @@ import json
 from hashlib import sha256
 from datetime import datetime
 from pathlib import Path
+from collections.abc import Collection
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -13,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from .database import get_db, init_db
-from .identity import get_current_principal
+from .identity import ensure_capability, get_current_principal
 from .models import (
     AgentFollowupRun,
     Creator,
@@ -219,9 +220,16 @@ def version_reference_material(reference_key: str, body: ReferenceMaterialVersio
 
 
 @app.get("/api/followup-agent/reference-materials")
-def list_reference_materials(active_only: bool = Query(default=False), db: Session = Depends(get_db)) -> dict[str, Any]:
+def list_reference_materials(
+    active_only: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
     """按版本列出参考资料，可选择只查看当前启用版本。"""
 
+    # Reference materials are global configuration, but still never public.
+    # Resolving the principal here keeps them available to every active role.
+    del principal
     query = select(ReferenceMaterial)
     if active_only:
         query = query.where(ReferenceMaterial.is_active.is_(True))
@@ -230,10 +238,19 @@ def list_reference_materials(active_only: bool = Query(default=False), db: Sessi
 
 
 @app.get("/api/followup-agent/outbound-instructions")
-def list_outbound_instructions(creator_id: str | None = Query(default=None), db: Session = Depends(get_db)) -> dict[str, Any]:
+def list_outbound_instructions(
+    creator_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
     """查询内部模拟出站指令，当前接口不会触发任何外部渠道发送。"""
 
-    query = select(SimulatedOutboundInstruction)
+    allowed_departments = _allowed_departments(principal, Capability.OUTBOUND_READ)
+    query = (
+        select(SimulatedOutboundInstruction)
+        .join(Creator, Creator.id == SimulatedOutboundInstruction.creator_id)
+        .where(Creator.department_code.in_(allowed_departments))
+    )
     if creator_id:
         query = query.where(SimulatedOutboundInstruction.creator_id == creator_id)
     rows = list(db.scalars(query.order_by(SimulatedOutboundInstruction.created_at.desc())).all())
@@ -318,16 +335,36 @@ def run_agent(body: RunAgentIn, db: Session = Depends(get_db)) -> dict[str, Any]
 
 
 @app.get("/api/followup-agent/replies/{reply_id}")
-def get_reply(reply_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    reply = db.get(InboundReply, reply_id)
+def get_reply(
+    reply_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    reply = db.scalar(
+        select(InboundReply).where(
+            InboundReply.id == reply_id,
+            InboundReply.department_code.in_(allowed_departments),
+        )
+    )
     if reply is None:
         raise HTTPException(status_code=404, detail="inbound reply not found")
     return {"ok": True, "reply": _reply_to_dict(reply)}
 
 
 @app.get("/api/followup-agent/runs/{run_id}")
-def get_run(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    run = db.get(AgentFollowupRun, run_id)
+def get_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    run = db.scalar(
+        select(AgentFollowupRun).where(
+            AgentFollowupRun.id == run_id,
+            AgentFollowupRun.department_code.in_(allowed_departments),
+        )
+    )
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
     return {"ok": True, "run": _run_to_dict(run)}
@@ -340,8 +377,10 @@ def list_runs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
-    filters = []
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    filters = [AgentFollowupRun.department_code.in_(allowed_departments)]
     if creator_id:
         filters.append(AgentFollowupRun.creator_id == creator_id)
     if inbound_reply_id:
@@ -366,6 +405,7 @@ def list_human_review_queue(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """列出工作台中的待审、生成中与已批准草稿项。"""
 
@@ -380,7 +420,16 @@ def list_human_review_queue(
     }
     if review_type is not None and review_type not in allowed_review_types:
         raise HTTPException(status_code=422, detail="unknown review_type")
-    statement, review_type_expression = _review_queue_base_statement(department_code)
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    scoped_departments: Collection[str]
+    if department_code is not None and department_code not in allowed_departments:
+        # A list endpoint never confirms that another department exists.
+        scoped_departments = ()
+    elif department_code is not None:
+        scoped_departments = (department_code,)
+    else:
+        scoped_departments = allowed_departments
+    statement, review_type_expression = _review_queue_base_statement(scoped_departments)
     filtered_statement = _apply_review_queue_filters(
         statement,
         review_type_expression,
@@ -395,13 +444,28 @@ def list_human_review_queue(
 
 
 @app.get("/api/followup-agent/review-items/{reply_id}")
-def get_human_review_item(reply_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_human_review_item(
+    reply_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
     """读取工作台项的当前上下文与完整 Agent run 留痕，不写入业务数据。"""
 
-    reply = db.get(InboundReply, reply_id)
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    reply = db.scalar(
+        select(InboundReply).where(
+            InboundReply.id == reply_id,
+            InboundReply.department_code.in_(allowed_departments),
+        )
+    )
     if reply is None:
         raise HTTPException(status_code=404, detail="inbound reply not found")
-    item = _load_review_queue_item(db, reply_id, include_dnc_blocked=True)
+    item = _load_review_queue_item(
+        db,
+        reply_id,
+        include_dnc_blocked=True,
+        department_codes=allowed_departments,
+    )
     if item is None:
         raise HTTPException(status_code=409, detail="reply is not available in the operator workbench")
     runs = list(
@@ -695,10 +759,20 @@ def create_human_review_decision(
 
 
 @app.get("/api/followup-agent/review-decisions/{decision_id}")
-def get_human_review_decision(decision_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_human_review_decision(
+    decision_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
     """读取不可变审核决定及其导出审计，不触发复制、导出或发送。"""
 
-    decision = db.get(HumanReviewDecision, decision_id)
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    decision = db.scalar(
+        select(HumanReviewDecision).where(
+            HumanReviewDecision.id == decision_id,
+            HumanReviewDecision.department_code.in_(allowed_departments),
+        )
+    )
     if decision is None:
         raise HTTPException(status_code=404, detail="human review decision not found")
     exports = list(
@@ -716,10 +790,20 @@ def get_human_review_decision(decision_id: str, db: Session = Depends(get_db)) -
 
 
 @app.get("/api/followup-agent/review-decisions/{decision_id}/delivery-capability")
-def get_draft_delivery_capability(decision_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_draft_delivery_capability(
+    decision_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
     """返回未来渠道交接的能力边界；该预留接口不发送也不写入任何数据。"""
 
-    decision = db.get(HumanReviewDecision, decision_id)
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    decision = db.scalar(
+        select(HumanReviewDecision).where(
+            HumanReviewDecision.id == decision_id,
+            HumanReviewDecision.department_code.in_(allowed_departments),
+        )
+    )
     if decision is None:
         raise HTTPException(status_code=404, detail="human review decision not found")
     if decision.outcome != "approve_draft" or not decision.final_draft:
@@ -777,6 +861,13 @@ def _create_run(db: Session, inbound_reply_id: str, *, created_by: str) -> Agent
     return enqueue_followup_run(db, inbound_reply_id, created_by=created_by)
 
 
+def _allowed_departments(principal: Principal, capability: Capability) -> frozenset[str]:
+    """Return only departments where this principal has the requested ability."""
+
+    ensure_capability(principal, capability)
+    return principal.allowed_departments_for(capability)
+
+
 def _normalized_message_fields(creator: Creator, body: SimulateReplyIn) -> dict[str, str]:
     """规范化模拟消息字段，并生成可重放的稳定外部消息 ID。"""
 
@@ -821,8 +912,15 @@ def _get_or_create_existing_run(db: Session, reply: InboundReply, run_agent: boo
     return _run_to_dict(run) if run is not None else None
 
 
-def _review_queue_base_statement(department_code: str | None):
+def _review_queue_base_statement(department_codes: str | Collection[str] | None):
     """Build the shared, set-based read model for queue items and details."""
+
+    if isinstance(department_codes, str):
+        scoped_departments: tuple[str, ...] | None = (department_codes,)
+    elif department_codes is None:
+        scoped_departments = None
+    else:
+        scoped_departments = tuple(department_codes)
 
     pending_candidates = select(InboundReply.id.label("reply_id")).where(
         InboundReply.processing_status == "need_ai_review"
@@ -832,9 +930,9 @@ def _review_queue_base_statement(department_code: str | None):
         .join(InboundReply, InboundReply.id == HumanReviewDecision.inbound_reply_id)
         .where(HumanReviewDecision.outcome == "approve_draft")
     )
-    if department_code:
-        pending_candidates = pending_candidates.where(InboundReply.department_code == department_code)
-        approved_candidates = approved_candidates.where(InboundReply.department_code == department_code)
+    if scoped_departments is not None:
+        pending_candidates = pending_candidates.where(InboundReply.department_code.in_(scoped_departments))
+        approved_candidates = approved_candidates.where(InboundReply.department_code.in_(scoped_departments))
 
     candidate_reply_ids = union(pending_candidates, approved_candidates).cte("review_candidate_reply_ids")
     ranked_runs = (
@@ -947,10 +1045,11 @@ def _load_review_queue_item(
     reply_id: str,
     *,
     include_dnc_blocked: bool,
+    department_codes: Collection[str] | None = None,
 ) -> dict[str, Any] | None:
     """Load one candidate through the same SQL read model as the queue."""
 
-    statement, review_type_expression = _review_queue_base_statement(department_code=None)
+    statement, review_type_expression = _review_queue_base_statement(department_codes=department_codes)
     row = db.execute(
         _apply_review_queue_filters(
             statement.where(InboundReply.id == reply_id),
