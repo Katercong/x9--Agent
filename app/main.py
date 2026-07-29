@@ -1042,6 +1042,104 @@ def reject_dnc_confirmation(
     }
 
 
+@app.post("/api/followup-agent/review-items/{reply_id}/confirm-decline", status_code=201)
+def confirm_decline_review_item(
+    reply_id: str,
+    body: DeclineConfirmationApproveIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """人工确认明确拒绝并关闭该达人的活跃待办；不调用模型或外部渠道。"""
+
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_DECIDE)
+    row = db.execute(
+        select(InboundReply, Creator)
+        .join(Creator, Creator.id == InboundReply.creator_id)
+        .where(
+            InboundReply.id == reply_id,
+            InboundReply.department_code.in_(allowed_departments),
+        )
+        .with_for_update()
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="inbound reply not found")
+    reply, creator = row
+    if creator.department_code != reply.department_code:
+        raise HTTPException(status_code=409, detail="reply and creator department scopes do not match")
+    if reply.processing_status != "need_ai_review":
+        raise HTTPException(status_code=409, detail="reply is not pending human review")
+    if reply.reply_category != "not_interested":
+        raise HTTPException(status_code=409, detail="only an explicit decline can be confirmed")
+    if is_creator_contact_blocked(creator):
+        raise HTTPException(status_code=409, detail="do not contact creator must use the dnc confirmation flow")
+    if db.scalar(
+        select(DeclineConfirmation.id).where(DeclineConfirmation.inbound_reply_id == reply.id).limit(1)
+    ) is not None:
+        raise HTTPException(status_code=409, detail="decline reply has already been confirmed")
+
+    active_tasks = list(
+        db.scalars(
+            select(FollowupTask)
+            .where(
+                FollowupTask.creator_id == creator.id,
+                FollowupTask.department_code == reply.department_code,
+                FollowupTask.status.in_(("open", "pending")),
+            )
+            .with_for_update()
+        ).all()
+    )
+    confirmed_at = datetime.utcnow()
+    confirmation = DeclineConfirmation(
+        id=new_id("decline"),
+        department_code=reply.department_code,
+        creator_id=creator.id,
+        inbound_reply_id=reply.id,
+        actor_id=principal.user_id,
+        confirmed_at=confirmed_at,
+    )
+    closed_task_ids = [task.id for task in active_tasks]
+    for task in active_tasks:
+        task.status = "closed_declined"
+    creator.current_status = "dropped"
+    reply.processing_status = "reviewed"
+    db.add(confirmation)
+    db.add(
+        CreatorOutreachEvent(
+            id=new_id("oev"),
+            department_code=reply.department_code,
+            creator_id=creator.id,
+            event_type="decline_confirmed_by_human",
+            note="An explicit collaboration decline was confirmed by a human reviewer; no outbound message was sent.",
+            metadata_json=json.dumps(
+                {
+                    "actor_id": principal.user_id,
+                    "decline_confirmation_id": confirmation.id,
+                    "inbound_reply_id": reply.id,
+                    "closed_followup_task_ids": closed_task_ids,
+                },
+                ensure_ascii=False,
+            ),
+            event_at=confirmed_at,
+        )
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        # 唯一回复约束是并发确认时的最终裁决；转换为稳定业务冲突而不是 HTTP 500。
+        db.rollback()
+        raise HTTPException(status_code=409, detail="decline reply has already been confirmed")
+    db.refresh(confirmation)
+    db.refresh(creator)
+    db.refresh(reply)
+    return {
+        "ok": True,
+        "confirmation": _decline_confirmation_to_dict(confirmation),
+        "creator": _creator_to_dict(creator),
+        "reply": _reply_to_dict(reply),
+        "closed_followup_task_ids": closed_task_ids,
+    }
+
+
 @app.post("/api/followup-agent/review-items/{reply_id}/retry")
 def retry_failed_human_review_item(
     reply_id: str,
