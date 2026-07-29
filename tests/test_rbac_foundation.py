@@ -19,7 +19,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateTable
@@ -42,6 +42,9 @@ from app.models import (
 )
 from app.rbac_bootstrap import bootstrap_admin, main as bootstrap_main
 from app.schemas import (
+    AccessDepartmentPatchIn,
+    AccessMembershipPatchIn,
+    AccessUserPatchIn,
     DncConfirmationApproveIn,
     DncConfirmationRejectIn,
     DraftExportCreateIn,
@@ -170,6 +173,12 @@ def _provision_scoped_read_data() -> None:
             external_subject="x9-cross-operator",
             display_name="Cross Operator",
         )
+        foreign_member = AuthUser(
+            id="auth_user_foreign_member",
+            identity_source="x9",
+            external_subject="x9-foreign-member",
+            display_name="Foreign Member",
+        )
         cross_department = Department(id="department_cross", code="cross_border", name="Cross Border")
         foreign_department = Department(id="department_foreign", code="foreign_trade", name="Foreign Trade")
         db.add_all(
@@ -177,6 +186,7 @@ def _provision_scoped_read_data() -> None:
                 cross_reviewer,
                 cross_admin,
                 cross_operator,
+                foreign_member,
                 cross_department,
                 foreign_department,
                 UserDepartmentMembership(
@@ -196,6 +206,12 @@ def _provision_scoped_read_data() -> None:
                     auth_user_id=cross_operator.id,
                     department_id=cross_department.id,
                     role=Role.OPERATOR.value,
+                ),
+                UserDepartmentMembership(
+                    id="membership_foreign_member",
+                    auth_user_id=foreign_member.id,
+                    department_id=foreign_department.id,
+                    role=Role.REVIEWER.value,
                 ),
             ]
         )
@@ -747,6 +763,171 @@ def test_dnc_and_retry_writes_require_reviewer_and_use_principal_for_audit(monke
     )
     assert retry.status_code == 200
     assert retry.json()["run"]["created_by"] == "auth_user_cross_reviewer"
+
+
+def test_access_management_is_admin_only_scoped_audited_and_immediately_revocable(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _provision_scoped_read_data()
+    _configure_x9_assertion(monkeypatch)
+    client = TestClient(app)
+    admin_headers = _signed_x9_headers(subject_id="x9-cross-admin")
+    operator_headers = _signed_x9_headers(subject_id="x9-cross-operator")
+
+    assert client.get("/api/followup-agent/access/departments", headers=operator_headers).status_code == 403
+    departments = client.get("/api/followup-agent/access/departments", headers=admin_headers)
+    assert departments.status_code == 200
+    assert [department["code"] for department in departments.json()["items"]] == ["cross_border"]
+
+    users = client.get("/api/followup-agent/access/users", headers=admin_headers)
+    assert users.status_code == 200
+    assert {user["id"] for user in users.json()["items"]} == {
+        "auth_user_cross_admin",
+        "auth_user_cross_operator",
+        "auth_user_cross_reviewer",
+    }
+    assert client.patch(
+        "/api/followup-agent/access/departments/foreign_trade",
+        json={"name": "Hidden Foreign Trade"},
+        headers=admin_headers,
+    ).status_code == 404
+    assert client.patch(
+        "/api/followup-agent/access/users/auth_user_foreign_member",
+        json={"is_active": False},
+        headers=admin_headers,
+    ).status_code == 404
+
+    created_user = client.post(
+        "/api/followup-agent/access/users",
+        json={
+            "identity_source": "X9",
+            "external_subject": "x9-new-reviewer",
+            "display_name": "New Reviewer",
+        },
+        headers=admin_headers,
+    )
+    assert created_user.status_code == 201
+    user_id = created_user.json()["user"]["id"]
+    assert created_user.json()["user"]["identity_source"] == "x9"
+    assert client.post(
+        "/api/followup-agent/access/users",
+        json={"identity_source": "x9", "external_subject": "x9-new-reviewer"},
+        headers=admin_headers,
+    ).status_code == 409
+
+    assert client.post(
+        "/api/followup-agent/access/memberships",
+        json={"auth_user_id": user_id, "department_code": "foreign_trade", "role": "reviewer"},
+        headers=admin_headers,
+    ).status_code == 404
+    membership_response = client.post(
+        "/api/followup-agent/access/memberships",
+        json={"auth_user_id": user_id, "department_code": "cross_border", "role": "operator"},
+        headers=admin_headers,
+    )
+    assert membership_response.status_code == 201
+    membership_id = membership_response.json()["membership"]["id"]
+    assert membership_response.json()["membership"]["granted_by_auth_user_id"] == "auth_user_cross_admin"
+
+    new_user_headers = _signed_x9_headers(subject_id="x9-new-reviewer")
+    initial_identity = client.get("/api/followup-agent/auth/me", headers=new_user_headers)
+    assert initial_identity.status_code == 200
+    assert initial_identity.json()["departments"] == [{"code": "cross_border", "role": "operator"}]
+
+    promoted = client.patch(
+        f"/api/followup-agent/access/memberships/{membership_id}",
+        json={"role": "reviewer"},
+        headers=admin_headers,
+    )
+    assert promoted.status_code == 200
+    assert promoted.json()["membership"]["role"] == "reviewer"
+    assert "review:decide" in client.get("/api/followup-agent/auth/me", headers=new_user_headers).json()["capabilities"]
+
+    revoked = client.patch(
+        f"/api/followup-agent/access/memberships/{membership_id}",
+        json={"is_active": False},
+        headers=admin_headers,
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["membership"]["is_active"] is False
+    assert client.get("/api/followup-agent/auth/me", headers=new_user_headers).status_code == 403
+
+    audit_events = client.get("/api/followup-agent/access/audit-events", headers=admin_headers)
+    assert audit_events.status_code == 200
+    actions = {event["action"] for event in audit_events.json()["items"]}
+    assert {"access_user_created", "access_membership_created", "access_membership_updated"} <= actions
+    assert all(event["actor_auth_user_id"] == "auth_user_cross_admin" for event in audit_events.json()["items"])
+    assert client.delete(f"/api/followup-agent/access/memberships/{membership_id}", headers=admin_headers).status_code == 405
+
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(SimulatedOutboundInstruction)) == 2
+        assert db.scalar(
+            select(func.count()).select_from(AuthorizationAuditEvent).where(
+                AuthorizationAuditEvent.target_auth_user_id == user_id
+            )
+        ) == 4
+
+
+def test_access_department_creation_grants_scoped_admin_and_audits(monkeypatch: pytest.MonkeyPatch):
+    _provision_scoped_read_data()
+    _configure_x9_assertion(monkeypatch)
+    client = TestClient(app)
+    admin_headers = _signed_x9_headers(subject_id="x9-cross-admin")
+
+    response = client.post(
+        "/api/followup-agent/access/departments",
+        json={"code": " Creator Partnerships ", "name": "Creator Partnerships"},
+        headers=admin_headers,
+    )
+    assert response.status_code == 201
+    assert response.json()["department"]["code"] == "creator partnerships"
+    assert response.json()["membership"]["role"] == "admin"
+    assert response.json()["membership"]["auth_user_id"] == "auth_user_cross_admin"
+    assert client.post(
+        "/api/followup-agent/access/departments",
+        json={"code": "creator partnerships", "name": "Duplicate"},
+        headers=admin_headers,
+    ).status_code == 409
+
+    departments = client.get("/api/followup-agent/access/departments", headers=admin_headers)
+    assert {department["code"] for department in departments.json()["items"]} == {
+        "cross_border",
+        "creator partnerships",
+    }
+    memberships = client.get(
+        "/api/followup-agent/access/memberships?department_code=creator%20partnerships",
+        headers=admin_headers,
+    )
+    assert memberships.status_code == 200
+    assert len(memberships.json()["items"]) == 1
+
+    disabled = client.patch(
+        "/api/followup-agent/access/departments/creator%20partnerships",
+        json={"is_active": False},
+        headers=admin_headers,
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["department"]["is_active"] is False
+    audit = client.get("/api/followup-agent/access/audit-events", headers=admin_headers)
+    assert {event["action"] for event in audit.json()["items"]} >= {
+        "access_department_created",
+        "access_department_updated",
+        "access_membership_created",
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        (AccessUserPatchIn, {}),
+        (AccessMembershipPatchIn, {}),
+        (AccessDepartmentPatchIn, {}),
+        (AccessDepartmentPatchIn, {"name": None}),
+    ],
+)
+def test_access_patch_schemas_require_an_explicit_valid_change(model, payload):
+    with pytest.raises(ValidationError, match="at least one|must not be null"):
+        model.model_validate(payload)
 
 
 def test_authorization_models_enforce_unique_roles_and_restrict_deletes():

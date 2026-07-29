@@ -17,8 +17,11 @@ from .database import get_db, init_db
 from .identity import ensure_capability, get_current_principal
 from .models import (
     AgentFollowupRun,
+    AuthUser,
+    AuthorizationAuditEvent,
     Creator,
     CreatorOutreachEvent,
+    Department,
     DoNotContactConfirmation,
     DraftExportRecord,
     FollowupTask,
@@ -27,9 +30,16 @@ from .models import (
     Product,
     ReferenceMaterial,
     SimulatedOutboundInstruction,
+    UserDepartmentMembership,
 )
-from .authorization import Capability, Principal
+from .authorization import Capability, Principal, Role
 from .schemas import (
+    AccessDepartmentCreateIn,
+    AccessDepartmentPatchIn,
+    AccessMembershipCreateIn,
+    AccessMembershipPatchIn,
+    AccessUserCreateIn,
+    AccessUserPatchIn,
     CreatorCreateIn,
     CreatorPatchIn,
     CreatorReplaceIn,
@@ -96,6 +106,335 @@ def get_auth_me(principal: Principal = Depends(get_current_principal)) -> dict[s
                 if principal.allowed_departments_for(capability)
             }
         ),
+    }
+
+
+@app.get("/api/followup-agent/access/departments")
+def list_access_departments(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """List only departments the current administrator may manage."""
+
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    departments = db.scalars(
+        select(Department)
+        .where(Department.code.in_(allowed_departments))
+        .order_by(Department.code.asc())
+    ).all()
+    return {"items": [_department_to_dict(department) for department in departments]}
+
+
+@app.post("/api/followup-agent/access/departments", status_code=201)
+def create_access_department(
+    body: AccessDepartmentCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Create a department and grant its creator an active admin membership."""
+
+    _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    code = _normalise_department_code(body.code)
+    if db.scalar(select(Department.id).where(Department.code == code)) is not None:
+        raise HTTPException(status_code=409, detail="department already exists")
+    actor = _current_auth_user_or_503(db, principal)
+    department = Department(
+        id=new_id("department"),
+        code=code,
+        name=body.name.strip(),
+        is_active=True,
+    )
+    db.add(department)
+    db.flush()
+    membership = UserDepartmentMembership(
+        id=new_id("membership"),
+        auth_user_id=actor.id,
+        department_id=department.id,
+        role=Role.ADMIN.value,
+        is_active=True,
+        authorization_source="admin_api_department_creator",
+        granted_by_auth_user_id=actor.id,
+    )
+    db.add(membership)
+    _append_authorization_audit(
+        db,
+        action="access_department_created",
+        actor_auth_user_id=actor.id,
+        department_id=department.id,
+        after=_department_snapshot(department),
+    )
+    _append_authorization_audit(
+        db,
+        action="access_membership_created",
+        actor_auth_user_id=actor.id,
+        target_auth_user_id=actor.id,
+        department_id=department.id,
+        after=_membership_snapshot(membership, department.code),
+    )
+    db.commit()
+    db.refresh(department)
+    db.refresh(membership)
+    return {
+        "ok": True,
+        "department": _department_to_dict(department),
+        "membership": _membership_to_dict(membership, department),
+    }
+
+
+@app.patch("/api/followup-agent/access/departments/{department_code}")
+def patch_access_department(
+    department_code: str,
+    body: AccessDepartmentPatchIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Soft-update a department within the current administrator's scope."""
+
+    department = _managed_department_or_404(db, department_code, principal)
+    actor = _current_auth_user_or_503(db, principal)
+    before = _department_snapshot(department)
+    if "name" in body.model_fields_set and body.name is not None:
+        department.name = body.name.strip()
+    if "is_active" in body.model_fields_set:
+        department.is_active = body.is_active
+    _append_authorization_audit(
+        db,
+        action="access_department_updated",
+        actor_auth_user_id=actor.id,
+        department_id=department.id,
+        before=before,
+        after=_department_snapshot(department),
+    )
+    db.commit()
+    db.refresh(department)
+    return {"ok": True, "department": _department_to_dict(department)}
+
+
+@app.get("/api/followup-agent/access/users")
+def list_access_users(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """List mappings that do not carry memberships outside the administrator's scope."""
+
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    foreign_memberships = (
+        select(UserDepartmentMembership.auth_user_id)
+        .join(Department, Department.id == UserDepartmentMembership.department_id)
+        .where(Department.code.not_in(allowed_departments))
+    )
+    users = db.scalars(
+        select(AuthUser)
+        .join(UserDepartmentMembership, UserDepartmentMembership.auth_user_id == AuthUser.id)
+        .join(Department, Department.id == UserDepartmentMembership.department_id)
+        .where(
+            Department.code.in_(allowed_departments),
+            AuthUser.id.not_in(foreign_memberships),
+        )
+        .distinct()
+        .order_by(AuthUser.created_at.desc(), AuthUser.id.desc())
+    ).all()
+    return {"items": [_auth_user_to_dict(user) for user in users]}
+
+
+@app.post("/api/followup-agent/access/users", status_code=201)
+def create_access_user(
+    body: AccessUserCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Provision an Agent-local identity mapping; it has no access until membership is granted."""
+
+    _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    source = body.identity_source.strip().lower()
+    subject = body.external_subject.strip()
+    if db.scalar(
+        select(AuthUser.id).where(
+            AuthUser.identity_source == source,
+            AuthUser.external_subject == subject,
+        )
+    ) is not None:
+        raise HTTPException(status_code=409, detail="auth user already exists")
+    actor = _current_auth_user_or_503(db, principal)
+    user = AuthUser(
+        id=new_id("auth_user"),
+        identity_source=source,
+        external_subject=subject,
+        display_name=body.display_name.strip() if body.display_name and body.display_name.strip() else None,
+        is_active=True,
+    )
+    db.add(user)
+    _append_authorization_audit(
+        db,
+        action="access_user_created",
+        actor_auth_user_id=actor.id,
+        target_auth_user_id=user.id,
+        after=_auth_user_snapshot(user),
+    )
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="auth user already exists") from exc
+    db.refresh(user)
+    return {"ok": True, "user": _auth_user_to_dict(user)}
+
+
+@app.patch("/api/followup-agent/access/users/{auth_user_id}")
+def patch_access_user(
+    auth_user_id: str,
+    body: AccessUserPatchIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Change local display metadata or immediately revoke a scoped user by soft-disable."""
+
+    user = _managed_auth_user_or_404(db, auth_user_id, principal)
+    actor = _current_auth_user_or_503(db, principal)
+    before = _auth_user_snapshot(user)
+    if "display_name" in body.model_fields_set:
+        user.display_name = body.display_name.strip() if body.display_name and body.display_name.strip() else None
+    if "is_active" in body.model_fields_set:
+        user.is_active = body.is_active
+    _append_authorization_audit(
+        db,
+        action="access_user_updated",
+        actor_auth_user_id=actor.id,
+        target_auth_user_id=user.id,
+        before=before,
+        after=_auth_user_snapshot(user),
+    )
+    db.commit()
+    db.refresh(user)
+    return {"ok": True, "user": _auth_user_to_dict(user)}
+
+
+@app.get("/api/followup-agent/access/memberships")
+def list_access_memberships(
+    department_code: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """List only memberships for departments the current administrator may manage."""
+
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    statement = (
+        select(UserDepartmentMembership, Department)
+        .join(Department, Department.id == UserDepartmentMembership.department_id)
+        .where(Department.code.in_(allowed_departments))
+        .order_by(Department.code.asc(), UserDepartmentMembership.created_at.asc(), UserDepartmentMembership.id.asc())
+    )
+    if department_code is not None:
+        statement = statement.where(Department.code == _normalise_department_code(department_code))
+    rows = db.execute(statement).all()
+    return {"items": [_membership_to_dict(membership, department) for membership, department in rows]}
+
+
+@app.post("/api/followup-agent/access/memberships", status_code=201)
+def create_access_membership(
+    body: AccessMembershipCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Grant one role in one scoped department; existing relations are only reactivated by PATCH."""
+
+    department = _managed_department_or_404(db, body.department_code, principal)
+    user = _managed_auth_user_or_404(db, body.auth_user_id, principal, allow_unassigned=True)
+    existing = db.scalar(
+        select(UserDepartmentMembership).where(
+            UserDepartmentMembership.auth_user_id == user.id,
+            UserDepartmentMembership.department_id == department.id,
+        )
+    )
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="department membership already exists")
+    actor = _current_auth_user_or_503(db, principal)
+    membership = UserDepartmentMembership(
+        id=new_id("membership"),
+        auth_user_id=user.id,
+        department_id=department.id,
+        role=Role(body.role).value,
+        is_active=True,
+        authorization_source="admin_api",
+        granted_by_auth_user_id=actor.id,
+    )
+    db.add(membership)
+    _append_authorization_audit(
+        db,
+        action="access_membership_created",
+        actor_auth_user_id=actor.id,
+        target_auth_user_id=user.id,
+        department_id=department.id,
+        after=_membership_snapshot(membership, department.code),
+    )
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="department membership already exists") from exc
+    db.refresh(membership)
+    return {"ok": True, "membership": _membership_to_dict(membership, department)}
+
+
+@app.patch("/api/followup-agent/access/memberships/{membership_id}")
+def patch_access_membership(
+    membership_id: str,
+    body: AccessMembershipPatchIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Change a scoped membership role or soft-disable it for immediate revocation."""
+
+    membership, department = _managed_membership_or_404(db, membership_id, principal)
+    actor = _current_auth_user_or_503(db, principal)
+    before = _membership_snapshot(membership, department.code)
+    if "role" in body.model_fields_set and body.role is not None:
+        membership.role = Role(body.role).value
+    if "is_active" in body.model_fields_set:
+        membership.is_active = body.is_active
+    _append_authorization_audit(
+        db,
+        action="access_membership_updated",
+        actor_auth_user_id=actor.id,
+        target_auth_user_id=membership.auth_user_id,
+        department_id=department.id,
+        before=before,
+        after=_membership_snapshot(membership, department.code),
+    )
+    db.commit()
+    db.refresh(membership)
+    return {"ok": True, "membership": _membership_to_dict(membership, department)}
+
+
+@app.get("/api/followup-agent/access/audit-events")
+def list_access_audit_events(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Read append-only authorization events without leaking other departments' history."""
+
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    scoped_events = (
+        select(AuthorizationAuditEvent, Department.code.label("department_code"))
+        .outerjoin(Department, Department.id == AuthorizationAuditEvent.department_id)
+        .where(
+            or_(
+                Department.code.in_(allowed_departments),
+                AuthorizationAuditEvent.actor_auth_user_id == principal.user_id,
+            )
+        )
+        .order_by(AuthorizationAuditEvent.created_at.desc(), AuthorizationAuditEvent.id.desc())
+    )
+    total = db.scalar(select(func.count()).select_from(scoped_events.subquery())) or 0
+    rows = db.execute(scoped_events.limit(limit).offset(offset)).all()
+    return {
+        "total": total,
+        "items": [
+            _authorization_audit_event_to_dict(event, department_code)
+            for event, department_code in rows
+        ],
     }
 
 
@@ -952,6 +1291,104 @@ def _allowed_departments(principal: Principal, capability: Capability) -> frozen
     return principal.allowed_departments_for(capability)
 
 
+def _normalise_department_code(value: str) -> str:
+    code = value.strip().lower()
+    if not code:
+        raise HTTPException(status_code=422, detail="department code must not be empty")
+    return code
+
+
+def _current_auth_user_or_503(db: Session, principal: Principal) -> AuthUser:
+    """Defend against a concurrent local revocation after identity resolution."""
+
+    user = db.get(AuthUser, principal.user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=503, detail="current authorization mapping is unavailable")
+    return user
+
+
+def _managed_department_or_404(db: Session, department_code: str, principal: Principal) -> Department:
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    department = db.scalar(
+        select(Department).where(
+            Department.code == _normalise_department_code(department_code),
+            Department.code.in_(allowed_departments),
+        )
+    )
+    if department is None:
+        raise HTTPException(status_code=404, detail="department not found")
+    return department
+
+
+def _managed_auth_user_or_404(
+    db: Session,
+    auth_user_id: str,
+    principal: Principal,
+    *,
+    allow_unassigned: bool = False,
+) -> AuthUser:
+    """Return a user only when every existing department relationship is manageable."""
+
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    user = db.get(AuthUser, auth_user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="auth user not found")
+    membership_departments = db.scalars(
+        select(Department.code)
+        .join(UserDepartmentMembership, UserDepartmentMembership.department_id == Department.id)
+        .where(UserDepartmentMembership.auth_user_id == user.id)
+    ).all()
+    if any(code not in allowed_departments for code in membership_departments):
+        raise HTTPException(status_code=404, detail="auth user not found")
+    if not membership_departments and not allow_unassigned:
+        raise HTTPException(status_code=404, detail="auth user not found")
+    return user
+
+
+def _managed_membership_or_404(
+    db: Session,
+    membership_id: str,
+    principal: Principal,
+) -> tuple[UserDepartmentMembership, Department]:
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    row = db.execute(
+        select(UserDepartmentMembership, Department)
+        .join(Department, Department.id == UserDepartmentMembership.department_id)
+        .where(
+            UserDepartmentMembership.id == membership_id,
+            Department.code.in_(allowed_departments),
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="department membership not found")
+    return row
+
+
+def _append_authorization_audit(
+    db: Session,
+    *,
+    action: str,
+    actor_auth_user_id: str | None,
+    target_auth_user_id: str | None = None,
+    department_id: str | None = None,
+    before: dict[str, object] | None = None,
+    after: dict[str, object] | None = None,
+) -> AuthorizationAuditEvent:
+    """Append a change record; this module never updates or deletes audit rows."""
+
+    event = AuthorizationAuditEvent(
+        id=new_id("auth_audit"),
+        action=action,
+        actor_auth_user_id=actor_auth_user_id,
+        target_auth_user_id=target_auth_user_id,
+        department_id=department_id,
+        before_json=json.dumps(before, ensure_ascii=False, sort_keys=True) if before is not None else None,
+        after_json=json.dumps(after, ensure_ascii=False, sort_keys=True) if after is not None else None,
+    )
+    db.add(event)
+    return event
+
+
 def _require_department_capability(
     principal: Principal,
     capability: Capability,
@@ -1208,6 +1645,85 @@ def _run_to_dnc_safe_dict(row: AgentFollowupRun) -> dict[str, Any]:
     payload = _run_to_dict(row)
     payload["output"] = None
     return payload
+
+
+def _auth_user_snapshot(row: AuthUser) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "identity_source": row.identity_source,
+        "external_subject": row.external_subject,
+        "display_name": row.display_name,
+        "is_active": bool(row.is_active),
+    }
+
+
+def _auth_user_to_dict(row: AuthUser) -> dict[str, object]:
+    return {
+        **_auth_user_snapshot(row),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _department_snapshot(row: Department) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "code": row.code,
+        "name": row.name,
+        "is_active": bool(row.is_active),
+    }
+
+
+def _department_to_dict(row: Department) -> dict[str, object]:
+    return {
+        **_department_snapshot(row),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _membership_snapshot(
+    row: UserDepartmentMembership,
+    department_code: str,
+) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "auth_user_id": row.auth_user_id,
+        "department_code": department_code,
+        "role": row.role,
+        "is_active": bool(row.is_active),
+        "authorization_source": row.authorization_source,
+        "granted_by_auth_user_id": row.granted_by_auth_user_id,
+    }
+
+
+def _membership_to_dict(
+    row: UserDepartmentMembership,
+    department: Department,
+) -> dict[str, object]:
+    return {
+        **_membership_snapshot(row, department.code),
+        "department_name": department.name,
+        "department_is_active": bool(department.is_active),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _authorization_audit_event_to_dict(
+    row: AuthorizationAuditEvent,
+    department_code: str | None,
+) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "action": row.action,
+        "actor_auth_user_id": row.actor_auth_user_id,
+        "target_auth_user_id": row.target_auth_user_id,
+        "department_code": department_code,
+        "before": _load_json(row.before_json),
+        "after": _load_json(row.after_json),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
 
 
 def _creator_to_dict(row: Creator) -> dict[str, Any]:

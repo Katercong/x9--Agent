@@ -229,6 +229,79 @@ class DraftExportCreateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+AccessRole = Literal["operator", "reviewer", "admin"]
+
+
+class AccessUserCreateIn(BaseModel):
+    """Create an Agent-local mapping for an already authenticated external identity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    identity_source: str = Field(min_length=1, max_length=40)
+    external_subject: str = Field(min_length=1, max_length=200)
+    display_name: str | None = Field(default=None, max_length=200)
+
+
+class AccessUserPatchIn(BaseModel):
+    """Only soft-state and display metadata are editable; mappings are immutable."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = Field(default=None, max_length=200)
+    is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def require_an_update(self) -> "AccessUserPatchIn":
+        if not self.model_fields_set:
+            raise ValueError("at least one user field is required")
+        return self
+
+
+class AccessDepartmentCreateIn(BaseModel):
+    """Create a department and assign the requesting admin as its first admin."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=40)
+    name: str = Field(min_length=1, max_length=200)
+
+
+class AccessDepartmentPatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def require_an_update(self) -> "AccessDepartmentPatchIn":
+        if not self.model_fields_set:
+            raise ValueError("at least one department field is required")
+        if "name" in self.model_fields_set and self.name is None:
+            raise ValueError("department name must not be null")
+        return self
+
+
+class AccessMembershipCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    auth_user_id: str = Field(min_length=1, max_length=120)
+    department_code: str = Field(min_length=1, max_length=40)
+    role: AccessRole
+
+
+class AccessMembershipPatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: AccessRole | None = None
+    is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def require_an_update(self) -> "AccessMembershipPatchIn":
+        if not self.model_fields_set:
+            raise ValueError("at least one membership field is required")
+        return self
+
+
 class AgentSuggestion(BaseModel):
     reply_category: ReplyCategory
     suggested_reply: str = Field(min_length=1)
