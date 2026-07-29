@@ -1,6 +1,6 @@
 # RBAC Foundation 与 X9 身份适配计划
 
-> 当前进度（2026-07-29）：PR1 至 PR6 已完成并推送；已完成独立 Docker Compose 的迁移、健康检查、工作台、demo 身份、六类队列和重复 seed 幂等性演练。本机 demo 的未配置 X9 密钥使用有效空 JSON 默认值，不会影响 `demo` Adapter；真实 X9 签名断言出口仍是外部前置条件。
+> 当前进度（2026-07-29）：PR1 至 PR6 已完成并推送；已完成独立 Docker Compose 的迁移、健康检查、工作台、demo 身份、六类队列和重复 seed 幂等性演练。本轮 P1 部门目录修复已在当前分支完成、等待 review：新增回填迁移，阻止认领已有业务部门码，并收紧达人部门写入。本机 demo 的未配置 X9 密钥使用有效空 JSON 默认值，不会影响 `demo` Adapter；真实 X9 签名断言出口仍是外部前置条件。
 
 ## 目标与固定决策
 
@@ -9,6 +9,8 @@ ReplyChat Agent 建立按部门隔离、可审计的 `operator`、`reviewer`、`
 - X9 只提供稳定且已认证的身份；Agent 本地用户、部门成员关系和角色是授权唯一权威。
 - Agent 不读取 X9 数据库、不接收或转发 `x9_session` Cookie，不复制 X9 业务、Gmail 或外联代码。
 - 除 `/health` 外，所有 `/api/followup-agent/*` 业务接口最终均要求当前 Principal。
+- `departments` 是全部业务 `department_code` 的受保护目录，而不是可任意认领的标签表；既有业务码必须先由迁移回填为未授予成员关系的启用目录项。
+- 已授权 admin 仅能创建从未出现在目录或业务数据中的全新部门；创建成功后才获得该新部门的 admin。创建或迁移达人时，目标部门必须存在、启用且具备目标范围的 `creator:manage`。
 - 不新增真实渠道、发送能力、Redis、Celery、RAG 或既有审核/DNC/Agent run 状态机改造。
 - 每个 PR 先完成测试，等待 review 后才中文提交与推送；合并后同时删除本地和远端分支。
 
@@ -24,6 +26,8 @@ ReplyChat Agent 建立按部门隔离、可审计的 `operator`、`reviewer`、`
 - claims：`issuer`、`audience=x9-replychat-agent`、`subject_id`、`display_name`、`issued_at`、`expires_at`、`request_id`；最长有效期 120 秒，允许 30 秒时钟偏差。
 
 Adapter 仅使用 `.env` 或受管 Secrets 中的密钥。签名、issuer、audience 或时间无效返回 `401`；身份有效但 Agent 未预配置、成员停用或没有能力返回 `403`。外部 subject 以 `identity_source + external_subject` 唯一标识，邮箱和显示名绝不作为授权主键。
+
+真实 X9 联调仍必须使用受信网络与 TLS/mTLS，且日志不得记录身份断言或签名。当前分支尚未实现 `request_id` 的一次性重放防护；它是未来 X9 网关或 Agent 侧持久化防重放设计的独立前置项，不能被本地 HMAC 契约替代。
 
 ## 权限模型
 
@@ -85,6 +89,13 @@ Adapter 仅使用 `.env` 或受管 Secrets 中的密钥。签名、issuer、audi
 - Docker 演示仅在本机 demo 模式启用 Fake Adapter；更新启动说明、交接记录、缺口复盘和 X9 联调说明。
 - 运行 Python 全量测试、前端测试/构建、Docker PostgreSQL 迁移与不同角色演示。
 - Compose 在未配置 X9 HMAC 密钥时传入有效空 JSON 对象；只有显式切换到 `x9_assertion` 时才要求受管密钥，避免本机 demo 因未使用的 X9 配置失败。
+
+### P1：部门目录与业务归属边界修复（当前分支，待 review）
+
+- 新增 Alembic revision：从所有含 `department_code` 的领域表回填规范化部门码；只创建启用目录项，不创建成员关系或授权审计。revision 的 downgrade 保留这些目录项，避免破坏后续授权关系。
+- `POST /access/departments` 同时检查目录与所有既有业务部门码；已存在或已使用的码一律返回 `409`，不能借创建接口扩大读取范围。
+- 创建达人、PUT/PATCH 迁移达人时，先校验目标 `creator:manage`，再校验目标目录存在且启用；未知、停用或未授权码均不得成为新的业务归属。
+- 回归覆盖遗留业务码认领、全新部门创建、活跃目录、未知/停用目录、SQLite upgrade/downgrade 回填、隔离 PostgreSQL 空库升级到 `e8f9a0b1c2d3` 与全部前后端测试。
 
 ## 验收与外部前置条件
 

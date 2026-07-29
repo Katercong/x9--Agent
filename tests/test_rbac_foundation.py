@@ -19,25 +19,30 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import delete, func, select
+from sqlalchemy import create_engine, delete, func, select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.schema import CreateTable
 
 from app.authorization import Capability, DepartmentMembership, Principal, Role, principal_from_memberships
 from app.database import Base, SessionLocal, engine
 from app.demo_seed import DEMO_ACCESS_USERS, DEMO_DEPARTMENT, DEMO_REVIEWER_AUTH_USER_ID, seed_demo_data
-from app.identity import ensure_capability
+from app.identity import ensure_capability, get_current_principal
 from app.main import app
 from app.models import (
     AgentFollowupRun,
     AuthUser,
     AuthorizationAuditEvent,
     Creator,
+    CreatorOutreachEvent,
     Department,
     DoNotContactConfirmation,
+    DraftExportRecord,
+    FollowupTask,
     HumanReviewDecision,
     InboundReply,
+    OutreachEmail,
     SimulatedOutboundInstruction,
     UserDepartmentMembership,
 )
@@ -940,6 +945,154 @@ def test_access_department_creation_grants_scoped_admin_and_audits(monkeypatch: 
     }
 
 
+def test_access_department_cannot_claim_existing_business_department_code(monkeypatch: pytest.MonkeyPatch):
+    """A missing catalog row must not let another department's admin claim legacy data."""
+
+    _provision_access(external_subject="x9-cross-admin", role=Role.ADMIN)
+    with SessionLocal() as db:
+        legacy_creator = Creator(
+            id="creator_legacy_foreign",
+            department_code="foreign_trade",
+            handle="legacy_foreign",
+        )
+        legacy_reply = InboundReply(
+            id="reply_legacy_foreign",
+            department_code="foreign_trade",
+            creator_id=legacy_creator.id,
+            direction="inbound",
+            channel="simulation",
+            external_message_id="legacy-foreign-reply",
+            body="Legacy data must stay outside the cross-border admin scope.",
+            processing_status="need_ai_review",
+        )
+        db.add_all([legacy_creator, legacy_reply])
+        db.commit()
+
+    _configure_x9_assertion(monkeypatch)
+    client = TestClient(app)
+    admin_headers = _signed_x9_headers(subject_id="x9-cross-admin")
+
+    response = client.post(
+        "/api/followup-agent/access/departments",
+        json={"code": " FOREIGN_TRADE ", "name": "Foreign Trade"},
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 409
+    with SessionLocal() as db:
+        assert db.scalar(select(Department.id).where(Department.code == "foreign_trade")) is None
+        assert db.get(InboundReply, "reply_legacy_foreign") is not None
+    assert client.get(
+        "/api/followup-agent/review-items/reply_legacy_foreign",
+        headers=admin_headers,
+    ).status_code == 404
+    queue = client.get(
+        "/api/followup-agent/review-queue?department_code=foreign_trade",
+        headers=admin_headers,
+    )
+    assert queue.status_code == 200
+    assert queue.json()["total"] == 0
+
+
+def test_new_department_grants_its_creator_scope_for_new_business_data(monkeypatch: pytest.MonkeyPatch):
+    _provision_access(external_subject="x9-cross-admin", role=Role.ADMIN)
+    _configure_x9_assertion(monkeypatch)
+    client = TestClient(app)
+    admin_headers = _signed_x9_headers(subject_id="x9-cross-admin")
+
+    created_department = client.post(
+        "/api/followup-agent/access/departments",
+        json={"code": " New Operations ", "name": "New Operations"},
+        headers=admin_headers,
+    )
+    assert created_department.status_code == 201
+    assert created_department.json()["department"]["code"] == "new operations"
+    assert created_department.json()["membership"]["role"] == "admin"
+
+    created_creator = client.post(
+        "/api/followup-agent/creators",
+        json={"id": "creator_new_operations", "department_code": " NEW OPERATIONS ", "handle": "new_operations"},
+        headers=admin_headers,
+    )
+    assert created_creator.status_code == 201
+    with SessionLocal() as db:
+        new_creator = db.get(Creator, "creator_new_operations")
+        assert new_creator is not None
+        assert new_creator.department_code == "new operations"
+
+    simulated_reply = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_new_operations", "body": "Please share the campaign details.", "run_agent": False},
+        headers=admin_headers,
+    )
+    assert simulated_reply.status_code == 200
+    assert simulated_reply.json()["reply"]["department_code"] == "new operations"
+
+
+def test_creator_department_writes_require_an_active_catalog_entry():
+    """Recheck catalog state after capability resolution to close revocation races."""
+
+    with SessionLocal() as db:
+        source_department = Department(id="department_source", code="source_department", name="Source")
+        disabled_department = Department(
+            id="department_disabled",
+            code="disabled_department",
+            name="Disabled",
+            is_active=False,
+        )
+        creator = Creator(id="creator_catalog_source", department_code="source_department", handle="catalog_source")
+        db.add_all([source_department, disabled_department, creator])
+        db.commit()
+
+    principal = principal_from_memberships(
+        user_id="auth_user_race_test",
+        identity_source="test",
+        external_subject="race-test",
+        display_name="Race Test Admin",
+        memberships=[
+            DepartmentMembership("source_department", Role.ADMIN),
+            DepartmentMembership("missing_department", Role.ADMIN),
+            DepartmentMembership("disabled_department", Role.ADMIN),
+        ],
+    )
+    app.dependency_overrides[get_current_principal] = lambda: principal
+    try:
+        client = TestClient(app)
+        assert client.post(
+            "/api/followup-agent/creators",
+            json={"id": "creator_missing_department", "department_code": "missing_department", "handle": "missing"},
+        ).status_code == 409
+        assert client.put(
+            "/api/followup-agent/creators/creator_catalog_source",
+            json={
+                "department_code": "missing_department",
+                "platform": "tiktok",
+                "handle": "catalog_source",
+                "display_name": None,
+                "profile_url": None,
+                "email": None,
+                "bio": None,
+                "followers_count": None,
+                "owner_bd": None,
+                "recommendation_reason": None,
+                "recommended_product_type": None,
+                "recommended_collab_type": None,
+            },
+        ).status_code == 409
+        assert client.patch(
+            "/api/followup-agent/creators/creator_catalog_source",
+            json={"department_code": "disabled_department"},
+        ).status_code == 409
+    finally:
+        app.dependency_overrides.pop(get_current_principal, None)
+
+    with SessionLocal() as db:
+        assert db.get(Creator, "creator_missing_department") is None
+        current_creator = db.get(Creator, "creator_catalog_source")
+        assert current_creator is not None
+        assert current_creator.department_code == "source_department"
+
+
 @pytest.mark.parametrize(
     ("model", "payload"),
     [
@@ -1119,3 +1272,126 @@ def test_rbac_foundation_migration_upgrades_and_downgrades_sqlite(tmp_path: Path
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "auth_users" not in tables
         assert "authorization_audit_events" not in tables
+
+
+def test_department_catalog_backfill_migration_preserves_business_scope_and_downgrade_data(tmp_path: Path):
+    """Every persisted business department code becomes an ungranted catalog entry."""
+
+    root = Path(__file__).resolve().parents[1]
+    db_path = tmp_path / "department_catalog_backfill.sqlite"
+    database_url = f"sqlite:///{db_path.as_posix()}"
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = database_url
+
+    def run_alembic(*args: str) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", *args],
+            cwd=root,
+            env=environment,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    run_alembic("upgrade", "d7e8f9a0b1c2")
+    migration_engine = create_engine(database_url)
+    MigrationSession = sessionmaker(bind=migration_engine, future=True)
+    try:
+        with MigrationSession() as db:
+            creator = Creator(id="backfill_creator", department_code=" Dept_Creators ", handle="backfill_creator")
+            reply = InboundReply(
+                id="backfill_reply",
+                department_code="DEPT_REPLIES",
+                creator_id=creator.id,
+                direction="inbound",
+                channel="simulation",
+                external_message_id="backfill-reply",
+                body="Backfill reply",
+            )
+            run = AgentFollowupRun(
+                id="backfill_run",
+                department_code="dept_runs",
+                creator_id=creator.id,
+                inbound_reply_id=reply.id,
+                execution_status="succeeded",
+            )
+            decision = HumanReviewDecision(
+                id="backfill_decision",
+                department_code="dept_decisions",
+                creator_id=creator.id,
+                inbound_reply_id=reply.id,
+                agent_followup_run_id=run.id,
+                outcome="close_without_draft",
+                actor_id="backfill_actor",
+            )
+            db.add_all(
+                [
+                    creator,
+                    reply,
+                    DoNotContactConfirmation(
+                        id="backfill_dnc",
+                        department_code=" Dept_Dnc ",
+                        creator_id=creator.id,
+                        inbound_reply_id=reply.id,
+                    ),
+                    OutreachEmail(
+                        id="backfill_outreach",
+                        department_code="DEPT_OUTREACH",
+                        creator_id=creator.id,
+                    ),
+                    CreatorOutreachEvent(
+                        id="backfill_event",
+                        department_code="dept_events ",
+                        creator_id=creator.id,
+                        event_type="backfill",
+                    ),
+                    FollowupTask(
+                        id="backfill_task",
+                        department_code="dept_tasks",
+                        creator_id=creator.id,
+                        task_type="backfill",
+                    ),
+                    run,
+                    decision,
+                    DraftExportRecord(
+                        id="backfill_export",
+                        department_code="dept_exports",
+                        human_review_decision_id=decision.id,
+                        creator_id=creator.id,
+                        inbound_reply_id=reply.id,
+                        exported_content="Backfill export",
+                        actor_id="backfill_actor",
+                    ),
+                ]
+            )
+            db.commit()
+    finally:
+        migration_engine.dispose()
+
+    expected_codes = {
+        "dept_creators",
+        "dept_dnc",
+        "dept_replies",
+        "dept_outreach",
+        "dept_events",
+        "dept_tasks",
+        "dept_runs",
+        "dept_decisions",
+        "dept_exports",
+    }
+    run_alembic("upgrade", "head")
+    with sqlite3.connect(db_path) as connection:
+        catalog_codes = {row[0] for row in connection.execute("SELECT code FROM departments")}
+        assert catalog_codes == expected_codes
+        assert connection.execute("SELECT COUNT(*) FROM user_department_memberships").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM authorization_audit_events").fetchone()[0] == 0
+
+    # This revision deliberately leaves backfilled catalog rows intact.  It is
+    # therefore safe to migrate down one step without deleting later grants or
+    # audit records, and an upgrade back to head remains idempotent.
+    run_alembic("downgrade", "d7e8f9a0b1c2")
+    with sqlite3.connect(db_path) as connection:
+        assert {row[0] for row in connection.execute("SELECT code FROM departments")} == expected_codes
+    run_alembic("upgrade", "head")
+    with sqlite3.connect(db_path) as connection:
+        assert {row[0] for row in connection.execute("SELECT code FROM departments")} == expected_codes

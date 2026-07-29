@@ -5,8 +5,8 @@
 ## 代码基线
 
 - 远端 `main` 当前基线为 `080f886 Feat/review queue sql optimization (#6)`，已包含 V2/V3.2 默认配置、集合 SQL 审核队列、React 工作台、DNC 审核动作、人工导出交接，以及 Dockerfile、Compose `migrate`/API/Worker profile、前端静态托管和受控 demo seed。
-- 当前功能分支为 `feat/rbac-foundation`：已推送 `de227f5`（授权目录与策略）、`5f0f1f1`（身份 Adapter）、`5307480`（读范围）、`3e34752`（写范围）、`3dcfdbb`（管理员授权审计）和 `7b4179f`（身份感知工作台、受控 demo 与文档）；本轮补齐 Compose demo 身份默认值回归修复，确保未配置 X9 密钥时仍可安全使用本地 Fake Adapter。
-- 最近验证：后端相关测试为 `120 passed`，前端 `npm run test -- --run` 为 `10 passed`，`npm run build` 通过；仅有 FastAPI `on_event` 既有弃用警告和 Vite 既有的大 bundle 提示。已用独立 Compose 项目完成迁移、API 健康检查、`/operator-workbench/` 静态资源、demo 身份、六类队列和重复 demo seed（第二次新增 `0` 条）的 RBAC Docker 全链路演练。
+- 当前功能分支为 `feat/rbac-foundation`：已推送 `de227f5`（授权目录与策略）、`5f0f1f1`（身份 Adapter）、`5307480`（读范围）、`3e34752`（写范围）、`3dcfdbb`（管理员授权审计）、`7b4179f`（身份感知工作台、受控 demo 与文档）和 `7f44b0e`（Compose demo 身份默认值）；当前工作区另有 P1 部门目录安全修复，等待 review 后提交。
+- 最近验证：后端相关测试为 `124 passed`，前端 `npm run test -- --run` 为 `10 passed`，`npm run build` 通过；仅有 FastAPI `on_event` 既有弃用警告和 Vite 既有的大 bundle 提示。已用独立 Compose 项目完成迁移、API 健康检查、`/operator-workbench/` 静态资源、demo 身份、六类队列和重复 demo seed（第二次新增 `0` 条）的 RBAC Docker 全链路演练；本轮还验证隔离 PostgreSQL 空库迁移至 P1 head `e8f9a0b1c2d3`。
 - 本地数据库：Docker Compose 管理 PostgreSQL。默认服务为 PostgreSQL、一次性 `migrate` 和 API；`worker` 与 `demo-seed` 是显式 profile。`.env.example` 的 Docker 默认值只启用 loopback demo Fake Adapter，且未配置 X9 HMAC 密钥时传入有效空 JSON；生产必须改为 X9 签名断言和受管密钥。SQLite 只用于自动化测试和可丢弃的本地 MVP 数据。
 
 ## 当前系统能力
@@ -24,6 +24,7 @@
 - 工作台地址为 `/operator-workbench/`。队列覆盖普通回复、模型失败、生成中、拒绝、DNC 待确认和已锁定待交接草稿；单项详情聚合达人、产品、资料、会话、事件、待办和全部 Agent run。
 - 除 `/health` 外，业务 API 必须解析当前 Principal。Agent 本地 `AuthUser`、部门和成员关系是授权唯一权威；X9 仅能经短期签名断言提供稳定身份，Agent 不接收 `x9_session` Cookie、不读 X9 数据库。
 - 工作台先读取 `/api/followup-agent/auth/me`，展示当前本地身份与部门角色，并按角色隐藏或禁用审核、DNC、重试和交接操作；服务端继续负责所有实际授权与审计主体。
+- `departments` 是受保护的业务部门码目录：回填迁移会为历史业务码创建无成员关系的启用目录项。管理员只能创建从未使用的部门码；创建或迁移达人时，目标目录必须存在、启用且调用者在目标范围具备 `creator:manage`，防止管理员认领其他部门的既有业务数据。
 - DNC 是最高优先级安全边界：待确认或已确认后隐藏既有 AI 草稿和所有交接入口。DNC 确认永久阻断后续业务处理；驳回会显式新建审核 run，但不会发送消息。明确拒绝仍是只读终态，尚未实现确认 `dropped`。
 - AI 只能提供分类、上下文、草稿和建议；所有非终态推进须人工确认。复制/下载只写导出审计，不会调用真实渠道。没有 Gmail、IMAP、X9 或自动发送能力。
 - 当前 Worker 使用短事务领取、120 秒 lease、claim token 条件回写和过期回收。手动重试的并发活跃 run 会返回业务 `409`；无模型 Key 时仍使用本地受限 fallback 完成 queued run，配置 Key 后才调用 Provider。
@@ -56,7 +57,7 @@
 
 ## 接手时的优先顺序
 
-1. Review `feat/rbac-foundation` 的六个阶段和已完成的 Docker 演练；确认后合并、删除本地与远端功能分支。
+1. Review `feat/rbac-foundation` 的六个阶段、已完成的 Docker 演练与当前 P1 部门目录安全修复；确认后合并、删除本地与远端功能分支。
 2. 由 X9 独立交付 Session 验证后的短期签名断言出口和受管密钥，再进行真实身份联调；Agent 不接收 X9 Session。
 3. 补齐拒绝确认、DNC 解除和退信复核的受 RBAC 保护状态机。
 4. 使用 PostgreSQL 原子并发领取完善多 Worker，补监控、告警、备份恢复和容量验证；渠道选型和详细规格明确后才可建设适配与同步，系统仍不得自动发送。

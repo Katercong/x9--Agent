@@ -6,6 +6,8 @@
 
 完整的开发与交接资料已归档到 [docs/README.md](docs/README.md)。开始任何需求、代码、数据模型或部署变更前，必须先阅读 [最终需求规格](docs/final-requirements.md)，并用 [实现缺口复盘](docs/implementation-gap-review.md) 确认当前范围。
 
+RBAC 中的 `departments` 是受保护的业务部门码目录：已有业务数据使用过的部门码不能通过管理员创建接口认领；只有从未使用的新部门才能创建并授予创建者该新范围的 admin。创建达人或迁移达人部门前，目标目录项必须存在、启用且已获 `creator:manage` 授权。
+
 ## 快速开始（本地）
 
 ```powershell

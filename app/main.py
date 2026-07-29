@@ -27,6 +27,7 @@ from .models import (
     FollowupTask,
     HumanReviewDecision,
     InboundReply,
+    OutreachEmail,
     Product,
     ReferenceMaterial,
     SimulatedOutboundInstruction,
@@ -135,8 +136,8 @@ def create_access_department(
 
     _allowed_departments(principal, Capability.ACCESS_MANAGE)
     code = _normalise_department_code(body.code)
-    if db.scalar(select(Department.id).where(Department.code == code)) is not None:
-        raise HTTPException(status_code=409, detail="department already exists")
+    if _department_code_is_reserved(db, code):
+        raise HTTPException(status_code=409, detail="department code is already reserved")
     actor = _current_auth_user_or_503(db, principal)
     department = Department(
         id=new_id("department"),
@@ -444,11 +445,12 @@ def create_creator(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
-    _require_department_capability(principal, Capability.CREATOR_MANAGE, body.department_code)
+    department_code = _active_creator_department_code(db, principal, body.department_code)
     creator = db.get(Creator, body.id)
     if creator is not None:
         raise HTTPException(status_code=409, detail="creator already exists")
     values = body.model_dump()
+    values["department_code"] = department_code
     creator = Creator(**values)
     db.add(creator)
     db.commit()
@@ -464,8 +466,9 @@ def replace_creator(
     principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     creator = _scoped_creator_or_404(db, creator_id, principal, Capability.CREATOR_MANAGE)
-    _require_department_capability(principal, Capability.CREATOR_MANAGE, body.department_code)
-    for key, value in body.model_dump().items():
+    values = body.model_dump()
+    values["department_code"] = _active_creator_department_code(db, principal, body.department_code)
+    for key, value in values.items():
         setattr(creator, key, value)
     db.commit()
     db.refresh(creator)
@@ -480,10 +483,13 @@ def patch_creator(
     principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     creator = _scoped_creator_or_404(db, creator_id, principal, Capability.CREATOR_MANAGE)
-    if body.department_code is not None:
-        _require_department_capability(principal, Capability.CREATOR_MANAGE, body.department_code)
+    values = body.model_dump(exclude_unset=True)
+    if "department_code" in values:
+        if values["department_code"] is None:
+            raise HTTPException(status_code=422, detail="department code must not be null")
+        values["department_code"] = _active_creator_department_code(db, principal, values["department_code"])
     # exclude_unset 能区分“字段未提供”和“调用方显式传 null”。
-    for key, value in body.model_dump(exclude_unset=True).items():
+    for key, value in values.items():
         setattr(creator, key, value)
     db.commit()
     db.refresh(creator)
@@ -1296,6 +1302,53 @@ def _normalise_department_code(value: str) -> str:
     if not code:
         raise HTTPException(status_code=422, detail="department code must not be empty")
     return code
+
+
+def _department_code_is_reserved(db: Session, department_code: str) -> bool:
+    """Return whether a canonical code already names catalog or business data.
+
+    The authorization catalog is the protected namespace for every existing
+    business ``department_code``.  A newly created department may grant its
+    creator a role only when the code has never been used by either namespace.
+    """
+
+    sources = (
+        (Department, Department.code),
+        (Creator, Creator.department_code),
+        (DoNotContactConfirmation, DoNotContactConfirmation.department_code),
+        (InboundReply, InboundReply.department_code),
+        (OutreachEmail, OutreachEmail.department_code),
+        (CreatorOutreachEvent, CreatorOutreachEvent.department_code),
+        (FollowupTask, FollowupTask.department_code),
+        (AgentFollowupRun, AgentFollowupRun.department_code),
+        (HumanReviewDecision, HumanReviewDecision.department_code),
+        (DraftExportRecord, DraftExportRecord.department_code),
+    )
+    matches = union(
+        *(
+            select(model.id.label("record_id")).where(func.lower(func.trim(column)) == department_code)
+            for model, column in sources
+        )
+    ).subquery()
+    return db.scalar(select(matches.c.record_id).limit(1)) is not None
+
+
+def _active_creator_department_code(db: Session, principal: Principal, department_code: str) -> str:
+    """Validate target scope before assigning a creator to a protected department."""
+
+    code = _normalise_department_code(department_code)
+    # Authorization comes first so a caller never gets to create or migrate
+    # business records into an ungranted department merely because it exists.
+    _require_department_capability(principal, Capability.CREATOR_MANAGE, code)
+    department = db.scalar(
+        select(Department).where(
+            Department.code == code,
+            Department.is_active.is_(True),
+        )
+    )
+    if department is None:
+        raise HTTPException(status_code=409, detail="target department is unavailable")
+    return department.code
 
 
 def _current_auth_user_or_503(db: Session, principal: Principal) -> AuthUser:

@@ -13,11 +13,11 @@
 | 人工审核 API | 审核队列支持普通回复、模型失败、生成中、拒绝、DNC、已批准草稿和 `reply_ready` 聚合；筛选、分类、排序、分页与关联预加载均由集合 SQL 完成，单次列表读取固定为总数与页面两条查询。`GET /review-items/{reply_id}` 返回上下文与完整 run 留痕。普通项可批准最终草稿或关闭；模型失败可人工重试，活跃 run 冲突返回 `409`。 |
 | DNC 安全边界 | DNC 确认与驳回均需人工显式调用接口。待确认/已确认 DNC 优先阻断新 run、草稿、复制、下载、导出和既有普通待办；同一 DNC 只在源回复上显示为可操作队列项，历史会话标记为 `dnc_blocked`。 |
 | 运营工作台 | React + Vite + TypeScript + Ant Design + TanStack Query 三栏工作台，提供会话上下文、AI 建议、草稿编辑、批准/关闭、DNC 确认或驳回、模型失败重试、复制和 `.txt` 下载审计。没有发送能力。 |
-| RBAC Foundation | Agent 本地 `AuthUser`、`Department`、成员关系和追加式授权审计已落库；角色为 `operator`、`reviewer`、`admin`。除 `/health` 外的业务 API 均解析 Principal，并按部门范围执行 `401`、`403` 或跨部门 `404`。 |
+| RBAC Foundation | Agent 本地 `AuthUser`、`Department`、成员关系和追加式授权审计已落库；角色为 `operator`、`reviewer`、`admin`。除 `/health` 外的业务 API 均解析 Principal，并按部门范围执行 `401`、`403` 或跨部门 `404`。当前分支的待 review P1 修复将历史业务部门码回填为无授权目录项，并禁止管理员认领已使用的部门码。 |
 | 身份适配 | Agent 不接收 X9 Cookie、不读 X9 数据库。生产预留短期 HMAC 身份断言；本地 demo/test 才允许 Fake Adapter。`/auth/me` 仅返回 Agent 本地显示身份、角色和能力。 |
 | 管理员授权 | 管理员只能在自身授权部门内创建/软停用用户、部门和成员关系；每次变更追加 `authorization_audit_events`，没有物理删除接口。 |
 | 容器化演示 | 提供多阶段镜像、API 静态托管 `/operator-workbench/`、`worker` profile 和显式 `demo-seed` profile。Compose 的 loopback demo 使用虚构本地 operator/reviewer/admin；未配置 X9 HMAC 密钥时传入有效空 JSON 并继续使用 demo Adapter；种子幂等、不调用模型、不创建出站指令。 |
-| 验证 | Python 全量测试为 `120 passed`，前端 Vitest 为 `10 passed`；已验证前端构建。已使用独立 Compose 项目完成 Docker 迁移、健康检查、静态资源、demo 身份、六类队列与重复 demo seed（第二次新增 `0` 条）的完整 RBAC 演练。仅有既有 FastAPI `on_event` 弃用警告。 |
+| 验证 | Python 全量测试为 `124 passed`，前端 Vitest 为 `10 passed`；已验证前端构建。已使用独立 Compose 项目完成 Docker 迁移、健康检查、静态资源、demo 身份、六类队列与重复 demo seed（第二次新增 `0` 条）的完整 RBAC 演练；另已验证隔离 PostgreSQL 空库迁移至 P1 head `e8f9a0b1c2d3`。仅有既有 FastAPI `on_event` 弃用警告和 Vite 既有的大 bundle 提示。 |
 
 ## 已实现但与目标仍有差距
 

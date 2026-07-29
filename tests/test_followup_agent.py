@@ -50,6 +50,15 @@ def reset_database():
     Base.metadata.create_all(bind=engine)
     if hasattr(models, "Product"):
         with SessionLocal() as db:
+            # Unit-test principals intentionally receive these scopes, but the
+            # protected department catalog must still exist before a creator
+            # may be assigned to one.  No memberships are created here.
+            db.add_all(
+                [
+                    models.Department(id="department_test_cross_border", code="cross_border", name="Cross Border"),
+                    models.Department(id="department_test_other", code="other_department", name="Other Department"),
+                ]
+            )
             db.add(
                 models.Product(
                     id="product_default_baby_care",
