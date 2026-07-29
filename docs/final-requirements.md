@@ -57,6 +57,7 @@
 
 - API、未来渠道同步 Worker、LLM Worker 应独立容器运行，数据库使用受管 PostgreSQL。
 - 所有 schema 变更必须由 Alembic 执行；生产应用启动不得自动建表或修改 schema。
+- 已发布 migration 不得依赖可变的应用规则；涉及规范化或数据修复时，必须将规则冻结在版本化模块或 revision 内，保证新环境可重复执行同一施工记录。
 - 多 Worker 领取任务必须采用事务级原子机制（PostgreSQL 使用 `FOR UPDATE SKIP LOCKED` 或等价机制）。
 - 保留并扩展短事务领取、120 秒 lease、claim token 条件回写、过期租约回收和错误留痕；同步失败应可重试、回补、告警和观测。
 - 凭据必须加密存储、来源于受管 Secrets；生产需具备备份恢复、监控、告警和最小权限访问。

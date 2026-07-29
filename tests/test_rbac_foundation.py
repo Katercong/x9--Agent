@@ -27,6 +27,7 @@ from sqlalchemy.schema import CreateTable
 
 from app.authorization import Capability, DepartmentMembership, Principal, Role, principal_from_memberships
 from app.database import Base, SessionLocal, engine, get_db
+from app import department_codes, department_codes_v1
 from app.demo_seed import DEMO_ACCESS_USERS, DEMO_DEPARTMENT, DEMO_REVIEWER_AUTH_USER_ID, seed_demo_data
 from app.identity import ensure_capability, get_current_principal
 from app.main import app
@@ -964,6 +965,16 @@ def test_department_code_schema_canonicalizes_ascii_boundary_whitespace():
     assert AccessDepartmentCreateIn.model_validate(
         {"code": "\tFOREIGN_TRADE\n", "name": "Foreign Trade"}
     ).code == "foreign_trade"
+
+
+def test_historical_department_code_migration_exports_are_frozen_v1():
+    """Released revisions keep object identity with their explicitly frozen rule set."""
+
+    assert department_codes.DEPARTMENT_CODE_BOUNDARY_WHITESPACE == department_codes_v1.DEPARTMENT_CODE_BOUNDARY_WHITESPACE
+    assert department_codes.DEPARTMENT_CODE_SLUG is department_codes_v1.DEPARTMENT_CODE_SLUG
+    assert department_codes.normalise_department_code is department_codes_v1.normalise_department_code
+    assert department_codes.validate_department_code is department_codes_v1.validate_department_code
+    assert department_codes.normalised_department_code_expression is department_codes_v1.normalised_department_code_expression
 
 
 def test_access_department_creation_maps_concurrent_unique_conflict_to_409(monkeypatch: pytest.MonkeyPatch):

@@ -13,11 +13,11 @@
 | 人工审核 API | 审核队列支持普通回复、模型失败、生成中、拒绝、DNC、已批准草稿和 `reply_ready` 聚合；筛选、分类、排序、分页与关联预加载均由集合 SQL 完成，单次列表读取固定为总数与页面两条查询。`GET /review-items/{reply_id}` 返回上下文与完整 run 留痕。普通项可批准最终草稿或关闭；模型失败可人工重试，活跃 run 冲突返回 `409`。 |
 | DNC 安全边界 | DNC 确认与驳回均需人工显式调用接口。待确认/已确认 DNC 优先阻断新 run、草稿、复制、下载、导出和既有普通待办；同一 DNC 只在源回复上显示为可操作队列项，历史会话标记为 `dnc_blocked`。 |
 | 运营工作台 | React + Vite + TypeScript + Ant Design + TanStack Query 三栏工作台，提供会话上下文、AI 建议、草稿编辑、批准/关闭、DNC 确认或驳回、模型失败重试、复制和 `.txt` 下载审计。没有发送能力。 |
-| RBAC Foundation | Agent 本地 `AuthUser`、`Department`、成员关系和追加式授权审计已落库；角色为 `operator`、`reviewer`、`admin`。除 `/health` 外的业务 API 均解析 Principal，并按部门范围执行 `401`、`403` 或跨部门 `404`。历史业务部门码已回填为无授权目录项并规范化目录与历史业务行，禁止管理员认领已使用的部门码且保持已授权历史数据可访问；同名新部门的并发唯一约束冲突会回滚并转换为 `409`。本轮待 review P1 将部门码收敛为 ASCII slug：API 拒绝空格和非 ASCII，迁移预检拒绝历史非法值，避免依赖 SQLite/PostgreSQL 不一致的 Unicode 大小写。 |
+| RBAC Foundation | Agent 本地 `AuthUser`、`Department`、成员关系和追加式授权审计已落库；角色为 `operator`、`reviewer`、`admin`。除 `/health` 外的业务 API 均解析 Principal，并按部门范围执行 `401`、`403` 或跨部门 `404`。历史业务部门码已回填为无授权目录项并规范化目录与历史业务行，禁止管理员认领已使用的部门码且保持已授权历史数据可访问；同名新部门的并发唯一约束冲突会回滚并转换为 `409`。部门码使用 ASCII slug，迁移预检拒绝历史非法值，避免依赖 SQLite/PostgreSQL 不一致的 Unicode 大小写。本轮待 review P2 将已发布 revision 绑定到冻结 V1 规则，防止未来应用 helper 改动重写历史迁移语义。 |
 | 身份适配 | Agent 不接收 X9 Cookie、不读 X9 数据库。生产预留短期 HMAC 身份断言；本地 demo/test 才允许 Fake Adapter。`/auth/me` 仅返回 Agent 本地显示身份、角色和能力。 |
 | 管理员授权 | 管理员只能在自身授权部门内创建/软停用用户、部门和成员关系；每次变更追加 `authorization_audit_events`，没有物理删除接口。 |
 | 容器化演示 | 提供多阶段镜像、API 静态托管 `/operator-workbench/`、`worker` profile 和显式 `demo-seed` profile。Compose 的 loopback demo 使用虚构本地 operator/reviewer/admin；未配置 X9 HMAC 密钥时传入有效空 JSON 并继续使用 demo Adapter；种子幂等、不调用模型、不创建出站指令。 |
-| 验证 | Python 全量测试为 `131 passed`；前端 Vitest 为 `10 passed`，并已验证前端构建。已使用独立 Compose 项目完成 Docker 迁移、健康检查、静态资源、demo 身份、六类队列与重复 demo seed（第二次新增 `0` 条）的完整 RBAC 演练；本轮另验证隔离 PostgreSQL 旧库从 `d7e8f9a0b1c2` 升级时，当前 head `2b3c4d5e6f7a` 会原子地拒绝带 tab/换行的非 ASCII 大写历史部门码。仅有既有 FastAPI `on_event` 弃用警告和 Vite 既有的大 bundle 提示。 |
+| 验证 | Python 全量测试为 `132 passed`；前端 Vitest 为 `10 passed`，并已验证前端构建。已使用独立 Compose 项目完成 Docker 迁移、健康检查、静态资源、demo 身份、六类队列与重复 demo seed（第二次新增 `0` 条）的完整 RBAC 演练；本轮另验证隔离 PostgreSQL 旧库从 `d7e8f9a0b1c2` 升级时，当前 head `2b3c4d5e6f7a` 会原子地拒绝带 tab/换行的非 ASCII 大写历史部门码。仅有既有 FastAPI `on_event` 弃用警告和 Vite 既有的大 bundle 提示。 |
 
 ## 已实现但与目标仍有差距
 

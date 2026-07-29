@@ -5,8 +5,8 @@
 ## 代码基线
 
 - 远端 `main` 当前基线为 `080f886 Feat/review queue sql optimization (#6)`，已包含 V2/V3.2 默认配置、集合 SQL 审核队列、React 工作台、DNC 审核动作、人工导出交接，以及 Dockerfile、Compose `migrate`/API/Worker profile、前端静态托管和受控 demo seed。
-- 当前功能分支为 `feat/rbac-foundation`：已推送 `de227f5`（授权目录与策略）、`5f0f1f1`（身份 Adapter）、`5307480`（读范围）、`3e34752`（写范围）、`3dcfdbb`（管理员授权审计）、`7b4179f`（身份感知工作台、受控 demo 与文档）、`7f44b0e`（Compose demo 身份默认值）、`5b343a3`（部门目录与业务归属边界）、`f2e2ba9`（历史部门码规范化访问范围）、`83c8463`（并发部门创建冲突）和 `fcaaffa`（部门码边界空白规范）；当前工作区另有 P1 ASCII slug 修复，等待 review：非 ASCII 历史部门码会被迁移预检安全拒绝，避免目录与业务行因 Unicode 大小写不一致而脱节。
-- 最近验证：后端全量测试为 `131 passed`，前端 `npm run test -- --run` 为 `10 passed`，`npm run build` 通过；仅有 FastAPI `on_event` 既有弃用警告和 Vite 既有的大 bundle 提示。已用独立 Compose 项目完成迁移、API 健康检查、`/operator-workbench/` 静态资源、demo 身份、六类队列和重复 demo seed（第二次新增 `0` 条）的 RBAC Docker 全链路演练；本轮还验证隔离 PostgreSQL 旧库从 `d7e8f9a0b1c2` 升级至当前 P1 head `2b3c4d5e6f7a` 时，带 tab/换行的非 ASCII 大写历史部门码会原子地失败，保留在原 migration revision。
+- 当前功能分支为 `feat/rbac-foundation`：已推送 `de227f5`（授权目录与策略）、`5f0f1f1`（身份 Adapter）、`5307480`（读范围）、`3e34752`（写范围）、`3dcfdbb`（管理员授权审计）、`7b4179f`（身份感知工作台、受控 demo 与文档）、`7f44b0e`（Compose demo 身份默认值）、`5b343a3`（部门目录与业务归属边界）、`f2e2ba9`（历史部门码规范化访问范围）、`83c8463`（并发部门创建冲突）、`fcaaffa`（部门码边界空白规范）和 `9feff65`（可移植 ASCII 部门码）；当前工作区另有 P2 迁移规则冻结修复，等待 review：已发布 revision 通过冻结 V1 兼容导出保持原始规则，未来变更必须新增版本模块与 migration。
+- 最近验证：后端全量测试为 `132 passed`，前端 `npm run test -- --run` 为 `10 passed`，`npm run build` 通过；仅有 FastAPI `on_event` 既有弃用警告和 Vite 既有的大 bundle 提示。已用独立 Compose 项目完成迁移、API 健康检查、`/operator-workbench/` 静态资源、demo 身份、六类队列和重复 demo seed（第二次新增 `0` 条）的 RBAC Docker 全链路演练；本轮还验证隔离 PostgreSQL 旧库从 `d7e8f9a0b1c2` 升级至当前 P1 head `2b3c4d5e6f7a` 时，带 tab/换行的非 ASCII 大写历史部门码会原子地失败，保留在原 migration revision。
 - 本地数据库：Docker Compose 管理 PostgreSQL。默认服务为 PostgreSQL、一次性 `migrate` 和 API；`worker` 与 `demo-seed` 是显式 profile。`.env.example` 的 Docker 默认值只启用 loopback demo Fake Adapter，且未配置 X9 HMAC 密钥时传入有效空 JSON；生产必须改为 X9 签名断言和受管密钥。SQLite 只用于自动化测试和可丢弃的本地 MVP 数据。
 
 ## 当前系统能力
