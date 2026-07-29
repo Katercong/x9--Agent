@@ -100,7 +100,12 @@ def get_auth_me(principal: Principal = Depends(get_current_principal)) -> dict[s
 
 
 @app.post("/api/followup-agent/creators", status_code=201)
-def create_creator(body: CreatorCreateIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+def create_creator(
+    body: CreatorCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    _require_department_capability(principal, Capability.CREATOR_MANAGE, body.department_code)
     creator = db.get(Creator, body.id)
     if creator is not None:
         raise HTTPException(status_code=409, detail="creator already exists")
@@ -117,10 +122,10 @@ def replace_creator(
     creator_id: str,
     body: CreatorReplaceIn,
     db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
-    creator = db.get(Creator, creator_id)
-    if creator is None:
-        raise HTTPException(status_code=404, detail="creator not found")
+    creator = _scoped_creator_or_404(db, creator_id, principal, Capability.CREATOR_MANAGE)
+    _require_department_capability(principal, Capability.CREATOR_MANAGE, body.department_code)
     for key, value in body.model_dump().items():
         setattr(creator, key, value)
     db.commit()
@@ -133,10 +138,11 @@ def patch_creator(
     creator_id: str,
     body: CreatorPatchIn,
     db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
-    creator = db.get(Creator, creator_id)
-    if creator is None:
-        raise HTTPException(status_code=404, detail="creator not found")
+    creator = _scoped_creator_or_404(db, creator_id, principal, Capability.CREATOR_MANAGE)
+    if body.department_code is not None:
+        _require_department_capability(principal, Capability.CREATOR_MANAGE, body.department_code)
     # exclude_unset 能区分“字段未提供”和“调用方显式传 null”。
     for key, value in body.model_dump(exclude_unset=True).items():
         setattr(creator, key, value)
@@ -146,7 +152,12 @@ def patch_creator(
 
 
 @app.post("/api/followup-agent/products", status_code=201)
-def create_product(body: ProductCreateIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+def create_product(
+    body: ProductCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    ensure_capability(principal, Capability.CATALOG_MANAGE)
     existing = db.get(Product, body.id)
     duplicate_type = db.scalars(select(Product).where(Product.product_type == body.product_type).limit(1)).first()
     if existing is not None or duplicate_type is not None:
@@ -163,7 +174,9 @@ def replace_product(
     product_id: str,
     body: ProductReplaceIn,
     db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
+    ensure_capability(principal, Capability.CATALOG_MANAGE)
     product = db.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="product not found")
@@ -180,7 +193,9 @@ def patch_product(
     product_id: str,
     body: ProductPatchIn,
     db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
+    ensure_capability(principal, Capability.CATALOG_MANAGE)
     product = db.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="product not found")
@@ -195,9 +210,14 @@ def patch_product(
 
 
 @app.post("/api/followup-agent/reference-materials", status_code=201)
-def create_reference_material(body: ReferenceMaterialCreateIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+def create_reference_material(
+    body: ReferenceMaterialCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
     """创建首个参考资料版本，并将同一资料键的旧活动版本停用。"""
 
+    ensure_capability(principal, Capability.CATALOG_MANAGE)
     version = int(db.scalar(select(func.max(ReferenceMaterial.version)).where(ReferenceMaterial.reference_key == body.reference_key)) or 0) + 1
     db.query(ReferenceMaterial).filter(ReferenceMaterial.reference_key == body.reference_key).update({"is_active": False})
     row = ReferenceMaterial(id=new_id("ref"), version=version, is_active=True, **body.model_dump())
@@ -206,9 +226,15 @@ def create_reference_material(body: ReferenceMaterialCreateIn, db: Session = Dep
 
 
 @app.patch("/api/followup-agent/reference-materials/{reference_key}")
-def version_reference_material(reference_key: str, body: ReferenceMaterialVersionIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+def version_reference_material(
+    reference_key: str,
+    body: ReferenceMaterialVersionIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
     """以新增版本替代当前活动资料，保留旧版本供历史 run 追溯。"""
 
+    ensure_capability(principal, Capability.CATALOG_MANAGE)
     exists = db.scalar(select(ReferenceMaterial.id).where(ReferenceMaterial.reference_key == reference_key).limit(1))
     if exists is None:
         raise HTTPException(status_code=404, detail="reference material not found")
@@ -258,10 +284,12 @@ def list_outbound_instructions(
 
 
 @app.post("/api/followup-agent/simulate-reply")
-def simulate_reply(body: SimulateReplyIn, db: Session = Depends(get_db)) -> dict[str, Any]:
-    creator = db.get(Creator, body.creator_id)
-    if creator is None:
-        raise HTTPException(status_code=404, detail="creator not found")
+def simulate_reply(
+    body: SimulateReplyIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    creator = _scoped_creator_or_404(db, body.creator_id, principal, Capability.SIMULATION_WRITE)
     message_fields = _normalized_message_fields(creator, body)
     existing_reply = _find_duplicate_reply(db, **message_fields)
     if existing_reply is not None:
@@ -316,8 +344,18 @@ def simulate_reply(body: SimulateReplyIn, db: Session = Depends(get_db)) -> dict
 
 
 @app.post("/api/followup-agent/runs")
-def run_agent(body: RunAgentIn, db: Session = Depends(get_db)) -> dict[str, Any]:
-    reply = db.get(InboundReply, body.inbound_reply_id)
+def run_agent(
+    body: RunAgentIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    allowed_departments = _allowed_departments(principal, Capability.RUN_ENQUEUE)
+    reply = db.scalar(
+        select(InboundReply).where(
+            InboundReply.id == body.inbound_reply_id,
+            InboundReply.department_code.in_(allowed_departments),
+        )
+    )
     if reply is None:
         raise HTTPException(status_code=404, detail="inbound reply not found")
     if reply.processing_status == "ignored":
@@ -329,7 +367,7 @@ def run_agent(body: RunAgentIn, db: Session = Depends(get_db)) -> dict[str, Any]
     creator = db.get(Creator, reply.creator_id)
     if is_creator_contact_blocked(creator):
         raise HTTPException(status_code=409, detail="do not contact creator cannot run agent")
-    run = _create_run(db, body.inbound_reply_id, created_by="manual")
+    run = _create_run(db, body.inbound_reply_id, created_by=principal.user_id)
     db.commit()
     return {"ok": True, "run": _run_to_dict(run)}
 
@@ -489,13 +527,21 @@ def get_human_review_item(
 
 @app.post("/api/followup-agent/dnc-confirmations/{confirmation_id}/approve")
 def approve_dnc_confirmation(
-    confirmation_id: str, body: DncConfirmationApproveIn, db: Session = Depends(get_db)
+    confirmation_id: str,
+    body: DncConfirmationApproveIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """人工确认待审 DNC，并永久阻断该达人后续业务联系；不发送任何消息。"""
 
+    allowed_departments = _allowed_departments(principal, Capability.DNC_DECIDE)
     confirmation = db.scalars(
         select(DoNotContactConfirmation)
-        .where(DoNotContactConfirmation.id == confirmation_id)
+        .join(Creator, Creator.id == DoNotContactConfirmation.creator_id)
+        .where(
+            DoNotContactConfirmation.id == confirmation_id,
+            Creator.department_code.in_(allowed_departments),
+        )
         .with_for_update()
     ).first()
     if confirmation is None:
@@ -512,7 +558,7 @@ def approve_dnc_confirmation(
 
     reviewed_at = datetime.utcnow()
     confirmation.status = "confirmed"
-    confirmation.reviewed_by = body.actor_id
+    confirmation.reviewed_by = principal.user_id
     confirmation.reviewed_at = reviewed_at
     creator.do_not_contact_status = "confirmed"
     creator.do_not_contact_reason = confirmation.reason
@@ -527,7 +573,7 @@ def approve_dnc_confirmation(
             note="Do-not-contact request was confirmed by a human reviewer; no outbound message was sent.",
             metadata_json=json.dumps(
                 {
-                    "actor_id": body.actor_id,
+                    "actor_id": principal.user_id,
                     "dnc_confirmation_id": confirmation.id,
                     "inbound_reply_id": reply.id,
                 },
@@ -549,13 +595,21 @@ def approve_dnc_confirmation(
 
 @app.post("/api/followup-agent/dnc-confirmations/{confirmation_id}/reject")
 def reject_dnc_confirmation(
-    confirmation_id: str, body: DncConfirmationRejectIn, db: Session = Depends(get_db)
+    confirmation_id: str,
+    body: DncConfirmationRejectIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """人工驳回 DNC 判定，将该回复重新入队为普通审核；不发送任何消息。"""
 
+    allowed_departments = _allowed_departments(principal, Capability.DNC_DECIDE)
     confirmation = db.scalars(
         select(DoNotContactConfirmation)
-        .where(DoNotContactConfirmation.id == confirmation_id)
+        .join(Creator, Creator.id == DoNotContactConfirmation.creator_id)
+        .where(
+            DoNotContactConfirmation.id == confirmation_id,
+            Creator.department_code.in_(allowed_departments),
+        )
         .with_for_update()
     ).first()
     if confirmation is None:
@@ -574,7 +628,7 @@ def reject_dnc_confirmation(
     original_reason = reply.classification_reason
     reviewed_at = datetime.utcnow()
     confirmation.status = "rejected"
-    confirmation.reviewed_by = body.actor_id
+    confirmation.reviewed_by = principal.user_id
     confirmation.reviewed_at = reviewed_at
     creator.do_not_contact_status = "none"
     creator.do_not_contact_reason = None
@@ -596,7 +650,7 @@ def reject_dnc_confirmation(
         task.status = "blocked_dnc_rejected"
         task.reason = "DNC was rejected by a human reviewer; manually reassess before resuming any follow-up."
 
-    run = enqueue_followup_run(db, reply.id, created_by=body.actor_id)
+    run = enqueue_followup_run(db, reply.id, created_by=principal.user_id)
     db.add(
         CreatorOutreachEvent(
             id=new_id("oev"),
@@ -606,7 +660,7 @@ def reject_dnc_confirmation(
             note="Do-not-contact classification was rejected by a human reviewer; a new review run was queued without sending a message.",
             metadata_json=json.dumps(
                 {
-                    "actor_id": body.actor_id,
+                    "actor_id": principal.user_id,
                     "dnc_confirmation_id": confirmation.id,
                     "inbound_reply_id": reply.id,
                     "original_reply_category": original_category,
@@ -633,17 +687,31 @@ def reject_dnc_confirmation(
 
 @app.post("/api/followup-agent/review-items/{reply_id}/retry")
 def retry_failed_human_review_item(
-    reply_id: str, body: FailedReviewRetryIn, db: Session = Depends(get_db)
+    reply_id: str,
+    body: FailedReviewRetryIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """人工重试最新模型失败的待审项；只创建新的 queued run，不发送任何消息。"""
 
-    reply = db.get(InboundReply, reply_id)
+    allowed_departments = _allowed_departments(principal, Capability.RUN_RETRY)
+    reply = db.scalar(
+        select(InboundReply).where(
+            InboundReply.id == reply_id,
+            InboundReply.department_code.in_(allowed_departments),
+        )
+    )
     if reply is None:
         raise HTTPException(status_code=404, detail="inbound reply not found")
     if reply.processing_status != "need_ai_review":
         raise HTTPException(status_code=409, detail="reply is not pending human review")
 
-    item = _load_review_queue_item(db, reply.id, include_dnc_blocked=True)
+    item = _load_review_queue_item(
+        db,
+        reply.id,
+        include_dnc_blocked=True,
+        department_codes=allowed_departments,
+    )
     if item is None:
         raise HTTPException(status_code=409, detail="reply is not available in the operator workbench")
     if item["review_type"] != "model_failure" or item["run"] is None:
@@ -661,7 +729,7 @@ def retry_failed_human_review_item(
         run = enqueue_followup_run(
             db,
             reply.id,
-            created_by=body.actor_id,
+            created_by=principal.user_id,
             reject_if_active=True,
         )
     except IntegrityError:
@@ -682,7 +750,7 @@ def retry_failed_human_review_item(
                 note="A human reviewer requested another draft generation after a model failure; no outbound message was sent.",
                 metadata_json=json.dumps(
                     {
-                        "actor_id": body.actor_id,
+                        "actor_id": principal.user_id,
                         "inbound_reply_id": reply.id,
                         "failed_run_id": item["run"]["id"],
                         "queued_run_id": run.id,
@@ -698,11 +766,19 @@ def retry_failed_human_review_item(
 
 @app.post("/api/followup-agent/review-decisions", status_code=201)
 def create_human_review_decision(
-    body: HumanReviewDecisionCreateIn, db: Session = Depends(get_db)
+    body: HumanReviewDecisionCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """保存普通回复的最终人工决定，不自动推进达人业务状态。"""
 
-    run = db.get(AgentFollowupRun, body.agent_followup_run_id)
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_DECIDE)
+    run = db.scalar(
+        select(AgentFollowupRun).where(
+            AgentFollowupRun.id == body.agent_followup_run_id,
+            AgentFollowupRun.department_code.in_(allowed_departments),
+        )
+    )
     if run is None:
         raise HTTPException(status_code=404, detail="agent followup run not found")
     if run.execution_status not in {"succeeded", "failed"}:
@@ -733,7 +809,6 @@ def create_human_review_decision(
     if db.scalar(select(HumanReviewDecision.id).where(HumanReviewDecision.agent_followup_run_id == run.id)) is not None:
         raise HTTPException(status_code=409, detail="agent followup run already has a human review decision")
 
-    # actor_id 当前仅是审计归属；正式身份认证与角色授权将在后续 RBAC 模块接管。
     decision = HumanReviewDecision(
         id=new_id("hrd"),
         department_code=reply.department_code,
@@ -743,7 +818,7 @@ def create_human_review_decision(
         outcome=body.outcome,
         final_draft=body.final_draft.strip() if body.final_draft is not None else None,
         note=body.note,
-        actor_id=body.actor_id,
+        actor_id=principal.user_id,
     )
     db.add(decision)
     # 人工审核完成只结束本次回复的审核，不采纳模型 suggested_status，也不修改达人业务状态。
@@ -829,11 +904,20 @@ def get_draft_delivery_capability(
 
 @app.post("/api/followup-agent/review-decisions/{decision_id}/exports", status_code=201)
 def create_draft_export_record(
-    decision_id: str, body: DraftExportCreateIn, db: Session = Depends(get_db)
+    decision_id: str,
+    body: DraftExportCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     """记录人工导出草稿的快照；该接口绝不调用外部渠道。"""
 
-    decision = db.get(HumanReviewDecision, decision_id)
+    allowed_departments = _allowed_departments(principal, Capability.DRAFT_EXPORT)
+    decision = db.scalar(
+        select(HumanReviewDecision).where(
+            HumanReviewDecision.id == decision_id,
+            HumanReviewDecision.department_code.in_(allowed_departments),
+        )
+    )
     if decision is None:
         raise HTTPException(status_code=404, detail="human review decision not found")
     if decision.outcome != "approve_draft" or not decision.final_draft:
@@ -849,7 +933,7 @@ def create_draft_export_record(
         creator_id=decision.creator_id,
         inbound_reply_id=decision.inbound_reply_id,
         exported_content=decision.final_draft,
-        actor_id=body.actor_id,
+        actor_id=principal.user_id,
     )
     db.add(export)
     db.commit()
@@ -866,6 +950,36 @@ def _allowed_departments(principal: Principal, capability: Capability) -> frozen
 
     ensure_capability(principal, capability)
     return principal.allowed_departments_for(capability)
+
+
+def _require_department_capability(
+    principal: Principal,
+    capability: Capability,
+    department_code: str,
+) -> None:
+    """Require a write capability in one explicit target department."""
+
+    ensure_capability(principal, capability, department_code=department_code)
+
+
+def _scoped_creator_or_404(
+    db: Session,
+    creator_id: str,
+    principal: Principal,
+    capability: Capability,
+) -> Creator:
+    """Load a creator only from a department manageable by this principal."""
+
+    allowed_departments = _allowed_departments(principal, capability)
+    creator = db.scalar(
+        select(Creator).where(
+            Creator.id == creator_id,
+            Creator.department_code.in_(allowed_departments),
+        )
+    )
+    if creator is None:
+        raise HTTPException(status_code=404, detail="creator not found")
+    return creator
 
 
 def _normalized_message_fields(creator: Creator, body: SimulateReplyIn) -> dict[str, str]:

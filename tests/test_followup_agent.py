@@ -429,12 +429,12 @@ def test_human_can_confirm_pending_dnc_without_creating_an_outbound_action():
 
     confirmed = client.post(
         f"/api/followup-agent/dnc-confirmations/{confirmation_id}/approve",
-        json={"actor_id": "demo_operator"},
+        json={},
     )
     assert confirmed.status_code == 200, confirmed.text
     payload = confirmed.json()
     assert payload["confirmation"]["status"] == "confirmed"
-    assert payload["confirmation"]["reviewed_by"] == "demo_operator"
+    assert payload["confirmation"]["reviewed_by"] == "test_admin"
     assert payload["confirmation"]["reviewed_at"] is not None
     assert payload["creator"]["do_not_contact_status"] == "confirmed"
     assert payload["reply"]["processing_status"] == "reviewed"
@@ -443,7 +443,7 @@ def test_human_can_confirm_pending_dnc_without_creating_an_outbound_action():
     assert client.get(f"/api/followup-agent/review-items/{opt_out.json()['reply']['id']}").status_code == 409
     assert client.post(
         f"/api/followup-agent/dnc-confirmations/{confirmation_id}/approve",
-        json={"actor_id": "demo_operator"},
+        json={},
     ).status_code == 409
 
     later_reply = client.post(
@@ -463,7 +463,7 @@ def test_human_can_confirm_pending_dnc_without_creating_an_outbound_action():
         )
         assert event is not None
         assert json.loads(event.metadata_json or "{}") == {
-            "actor_id": "demo_operator",
+            "actor_id": "test_admin",
             "dnc_confirmation_id": confirmation_id,
             "inbound_reply_id": opt_out.json()["reply"]["id"],
         }
@@ -490,18 +490,18 @@ def test_human_can_reject_pending_dnc_and_requeue_it_for_standard_review():
 
     rejected = client.post(
         f"/api/followup-agent/dnc-confirmations/{confirmation_id}/reject",
-        json={"actor_id": "demo_operator"},
+        json={},
     )
     assert rejected.status_code == 200, rejected.text
     payload = rejected.json()
     assert payload["confirmation"]["status"] == "rejected"
-    assert payload["confirmation"]["reviewed_by"] == "demo_operator"
+    assert payload["confirmation"]["reviewed_by"] == "test_admin"
     assert payload["creator"]["do_not_contact_status"] == "none"
     assert payload["reply"]["processing_status"] == "need_ai_review"
     assert payload["reply"]["reply_category"] == "unclear"
     assert payload["reply"]["classification_reason"] == "human_rejected_dnc_confirmation"
     assert payload["run"]["execution_status"] == "queued"
-    assert payload["run"]["created_by"] == "demo_operator"
+    assert payload["run"]["created_by"] == "test_admin"
 
     dnc_queue = client.get("/api/followup-agent/review-queue?review_type=dnc_confirmation")
     assert dnc_queue.status_code == 200, dnc_queue.text
@@ -532,7 +532,7 @@ def test_human_can_reject_pending_dnc_and_requeue_it_for_standard_review():
         )
         assert event is not None
         metadata = json.loads(event.metadata_json or "{}")
-        assert metadata["actor_id"] == "demo_operator"
+        assert metadata["actor_id"] == "test_admin"
         assert metadata["dnc_confirmation_id"] == confirmation_id
         assert metadata["original_reply_category"] == "not_interested"
         assert metadata["queued_run_id"] == payload["run"]["id"]
@@ -563,16 +563,16 @@ def test_human_can_retry_a_model_failure_as_a_new_audited_run():
 
     retry = client.post(
         f"/api/followup-agent/review-items/{reply_id}/retry",
-        json={"actor_id": "demo_operator"},
+        json={},
     )
     assert retry.status_code == 200, retry.text
     payload = retry.json()
     assert payload["run"]["id"] != failed_run_id
     assert payload["run"]["execution_status"] == "queued"
-    assert payload["run"]["created_by"] == "demo_operator"
+    assert payload["run"]["created_by"] == "test_admin"
     assert client.post(
         f"/api/followup-agent/review-items/{reply_id}/retry",
-        json={"actor_id": "demo_operator"},
+        json={},
     ).status_code == 409
 
     with SessionLocal() as db:
@@ -594,7 +594,7 @@ def test_human_can_retry_a_model_failure_as_a_new_audited_run():
         )
         assert event is not None
         assert json.loads(event.metadata_json or "{}") == {
-            "actor_id": "demo_operator",
+            "actor_id": "test_admin",
             "inbound_reply_id": reply_id,
             "failed_run_id": failed_run_id,
             "queued_run_id": payload["run"]["id"],
@@ -642,7 +642,7 @@ def test_human_retry_translates_active_run_unique_conflict_to_409(monkeypatch):
     )
     retry = client.post(
         f"/api/followup-agent/review-items/{reply_id}/retry",
-        json={"actor_id": "demo_operator"},
+        json={},
     )
     assert retry.status_code == 409
     assert retry.json()["detail"] == "agent retry is already queued"
@@ -1398,7 +1398,7 @@ def test_standard_human_review_queue_approves_draft_without_advancing_creator_st
 
     invalid = client.post(
         "/api/followup-agent/review-decisions",
-        json={"agent_followup_run_id": run["id"], "outcome": "approve_draft", "actor_id": "reviewer_1"},
+        json={"agent_followup_run_id": run["id"], "outcome": "approve_draft"},
     )
     assert invalid.status_code == 422
 
@@ -1409,7 +1409,6 @@ def test_standard_human_review_queue_approves_draft_without_advancing_creator_st
             "outcome": "approve_draft",
             "final_draft": "Thank you for your interest. Here are the campaign details.",
             "note": "Approved after checking the product brief.",
-            "actor_id": "reviewer_1",
         },
     )
     assert approved.status_code == 201, approved.text
@@ -1430,7 +1429,6 @@ def test_standard_human_review_queue_approves_draft_without_advancing_creator_st
             "agent_followup_run_id": run["id"],
             "outcome": "approve_draft",
             "final_draft": "A second decision must fail.",
-            "actor_id": "reviewer_2",
         },
     )
     assert repeated.status_code == 409
@@ -1463,7 +1461,6 @@ def test_operator_workbench_queue_lists_generation_pending_and_approved_drafts()
             "agent_followup_run_id": approved_run["id"],
             "outcome": "approve_draft",
             "final_draft": "Approved draft for manual handoff only.",
-            "actor_id": "reviewer_workbench",
         },
     )
     assert approved.status_code == 201, approved.text
@@ -1535,7 +1532,6 @@ def test_operator_workbench_reply_ready_filter_combines_pending_and_locked_draft
             "agent_followup_run_id": approved_run["id"],
             "outcome": "approve_draft",
             "final_draft": "Locked draft for manual handoff.",
-            "actor_id": "reviewer_workbench",
         },
     )
     assert approved.status_code == 201, approved.text
@@ -1638,7 +1634,6 @@ def test_review_queue_separates_model_failures_from_standard_and_terminal_items(
             "agent_followup_run_id": failure_run["id"],
             "outcome": "approve_draft",
             "final_draft": "A human-authored draft after the model failure.",
-            "actor_id": "reviewer_1",
         },
     )
     assert approved_failure.status_code == 201, approved_failure.text
@@ -1908,7 +1903,6 @@ def test_review_item_detail_keeps_terminal_items_read_only_and_rejects_non_pendi
             json={
                 "agent_followup_run_id": terminal_run_id,
                 "outcome": "close_without_draft",
-                "actor_id": "reviewer_1",
             },
         )
         assert terminal_decision.status_code == 409
@@ -1930,7 +1924,6 @@ def test_review_item_detail_keeps_terminal_items_read_only_and_rejects_non_pendi
         json={
             "agent_followup_run_id": run["id"],
             "outcome": "close_without_draft",
-            "actor_id": "reviewer_1",
         },
     )
     assert reviewed.status_code == 201, reviewed.text
@@ -1958,7 +1951,6 @@ def test_standard_human_review_can_close_completed_run_without_draft():
             "agent_followup_run_id": run["id"],
             "outcome": "close_without_draft",
             "final_draft": "This must not be accepted.",
-            "actor_id": "reviewer_1",
         },
     )
     assert invalid.status_code == 422
@@ -1969,7 +1961,6 @@ def test_standard_human_review_can_close_completed_run_without_draft():
             "agent_followup_run_id": run["id"],
             "outcome": "close_without_draft",
             "note": "No follow-up draft is needed.",
-            "actor_id": "reviewer_1",
         },
     )
     assert closed.status_code == 201, closed.text
@@ -2000,7 +1991,6 @@ def test_human_review_cannot_use_stale_run_or_requeue_a_reviewed_reply():
             "agent_followup_run_id": first_run["id"],
             "outcome": "approve_draft",
             "final_draft": "This older draft must not be approved.",
-            "actor_id": "reviewer_1",
         },
     )
     assert stale_decision.status_code == 409
@@ -2018,7 +2008,6 @@ def test_human_review_cannot_use_stale_run_or_requeue_a_reviewed_reply():
         json={
             "agent_followup_run_id": first_run["id"],
             "outcome": "close_without_draft",
-            "actor_id": "reviewer_1",
         },
     )
     assert stale_after_completion.status_code == 409
@@ -2028,7 +2017,6 @@ def test_human_review_cannot_use_stale_run_or_requeue_a_reviewed_reply():
             "agent_followup_run_id": second_run_response.json()["run"]["id"],
             "outcome": "approve_draft",
             "final_draft": "This is the only final draft for the reply.",
-            "actor_id": "reviewer_1",
         },
     )
     assert latest_decision.status_code == 201, latest_decision.text
@@ -2067,7 +2055,6 @@ def test_approved_draft_export_is_audited_and_dnc_blocks_later_export_and_runs()
             "agent_followup_run_id": run["id"],
             "outcome": "approve_draft",
             "final_draft": "Here are the reviewed campaign details.",
-            "actor_id": "reviewer_1",
         },
     )
     assert approved.status_code == 201, approved.text
@@ -2076,7 +2063,7 @@ def test_approved_draft_export_is_audited_and_dnc_blocks_later_export_and_runs()
 
     exported = client.post(
         f"/api/followup-agent/review-decisions/{decision_id}/exports",
-        json={"actor_id": "operator_1"},
+        json={},
     )
     assert exported.status_code == 201, exported.text
     assert exported.json()["export"]["exported_content"] == "Here are the reviewed campaign details."
@@ -2133,7 +2120,7 @@ def test_approved_draft_export_is_audited_and_dnc_blocks_later_export_and_runs()
 
     confirmed_dnc = client.post(
         f"/api/followup-agent/dnc-confirmations/{confirmation_id}/approve",
-        json={"actor_id": "reviewer_1"},
+        json={},
     )
     assert confirmed_dnc.status_code == 200, confirmed_dnc.text
     assert confirmed_dnc.json()["confirmation"]["status"] == "confirmed"
@@ -2151,7 +2138,7 @@ def test_approved_draft_export_is_audited_and_dnc_blocks_later_export_and_runs()
 
     blocked_export = client.post(
         f"/api/followup-agent/review-decisions/{decision_id}/exports",
-        json={"actor_id": "operator_2"},
+        json={},
     )
     assert blocked_export.status_code == 409
     assert blocked_export.json()["detail"] == "do not contact creator cannot export draft"
@@ -3249,7 +3236,7 @@ def test_automatic_generation_skips_terminal_unclear_and_incomplete_replies():
     with SessionLocal() as db:
         run = db.get(AgentFollowupRun, manual.json()["run"]["id"])
         assert run is not None
-        assert run.created_by == "manual"
+        assert run.created_by == "test_admin"
 
 
 def _process_response_run(client: TestClient, response: object) -> dict[str, object]:

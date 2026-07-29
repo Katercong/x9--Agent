@@ -1,7 +1,6 @@
 import type { DncConfirmationApproveResponse, DncConfirmationRejectResponse, DraftExportResponse, FailedReviewRetryResponse, ReviewDecisionResponse, ReviewFilter, ReviewItemDetail, ReviewQueueResponse } from "./types";
 
 const API_ROOT = "/api/followup-agent";
-const DEMO_ACTOR_ID = "demo_operator";
 
 export class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -42,7 +41,6 @@ export function submitReviewDecision(input: {
       agent_followup_run_id: input.runId,
       outcome: input.outcome,
       final_draft: input.outcome === "approve_draft" ? input.finalDraft?.trim() : undefined,
-      actor_id: DEMO_ACTOR_ID,
     }),
   });
 }
@@ -50,27 +48,27 @@ export function submitReviewDecision(input: {
 export function createDraftExportRecord(decisionId: string): Promise<DraftExportResponse> {
   return request<DraftExportResponse>(`/review-decisions/${encodeURIComponent(decisionId)}/exports`, {
     method: "POST",
-    body: JSON.stringify({ actor_id: DEMO_ACTOR_ID }),
+    body: JSON.stringify({}),
   });
 }
 
 export function approveDncConfirmation(confirmationId: string): Promise<DncConfirmationApproveResponse> {
   return request<DncConfirmationApproveResponse>(`/dnc-confirmations/${encodeURIComponent(confirmationId)}/approve`, {
     method: "POST",
-    body: JSON.stringify({ actor_id: DEMO_ACTOR_ID }),
+    body: JSON.stringify({}),
   });
 }
 
 export function rejectDncConfirmation(confirmationId: string): Promise<DncConfirmationRejectResponse> {
   return request<DncConfirmationRejectResponse>(`/dnc-confirmations/${encodeURIComponent(confirmationId)}/reject`, {
     method: "POST",
-    body: JSON.stringify({ actor_id: DEMO_ACTOR_ID }),
+    body: JSON.stringify({}),
   });
 }
 
 export function retryFailedReviewItem(replyId: string): Promise<FailedReviewRetryResponse> {
   return request<FailedReviewRetryResponse>(`/review-items/${encodeURIComponent(replyId)}/retry`, {
     method: "POST",
-    body: JSON.stringify({ actor_id: DEMO_ACTOR_ID }),
+    body: JSON.stringify({}),
   });
 }

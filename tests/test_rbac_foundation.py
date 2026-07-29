@@ -18,6 +18,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.NamedTemporaryFile(delete=Fal
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
@@ -33,12 +34,20 @@ from app.models import (
     AuthorizationAuditEvent,
     Creator,
     Department,
+    DoNotContactConfirmation,
     HumanReviewDecision,
     InboundReply,
     SimulatedOutboundInstruction,
     UserDepartmentMembership,
 )
 from app.rbac_bootstrap import bootstrap_admin, main as bootstrap_main
+from app.schemas import (
+    DncConfirmationApproveIn,
+    DncConfirmationRejectIn,
+    DraftExportCreateIn,
+    FailedReviewRetryIn,
+    HumanReviewDecisionCreateIn,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -155,12 +164,19 @@ def _provision_scoped_read_data() -> None:
             external_subject="x9-cross-admin",
             display_name="Cross Admin",
         )
+        cross_operator = AuthUser(
+            id="auth_user_cross_operator",
+            identity_source="x9",
+            external_subject="x9-cross-operator",
+            display_name="Cross Operator",
+        )
         cross_department = Department(id="department_cross", code="cross_border", name="Cross Border")
         foreign_department = Department(id="department_foreign", code="foreign_trade", name="Foreign Trade")
         db.add_all(
             [
                 cross_reviewer,
                 cross_admin,
+                cross_operator,
                 cross_department,
                 foreign_department,
                 UserDepartmentMembership(
@@ -174,6 +190,12 @@ def _provision_scoped_read_data() -> None:
                     auth_user_id=cross_admin.id,
                     department_id=cross_department.id,
                     role=Role.ADMIN.value,
+                ),
+                UserDepartmentMembership(
+                    id="membership_cross_operator",
+                    auth_user_id=cross_operator.id,
+                    department_id=cross_department.id,
+                    role=Role.OPERATOR.value,
                 ),
             ]
         )
@@ -485,6 +507,40 @@ def test_business_read_endpoints_require_a_principal(monkeypatch: pytest.MonkeyP
         assert client.get(path).status_code == 401
 
 
+def test_business_write_endpoint_requires_a_principal(monkeypatch: pytest.MonkeyPatch):
+    _configure_x9_assertion(monkeypatch)
+
+    response = TestClient(app).post(
+        "/api/followup-agent/creators",
+        json={"id": "unauthenticated_creator", "department_code": "cross_border", "handle": "unauthenticated"},
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        (
+            HumanReviewDecisionCreateIn,
+            {
+                "agent_followup_run_id": "run",
+                "outcome": "approve_draft",
+                "final_draft": "Final draft",
+                "actor_id": "forged",
+            },
+        ),
+        (DncConfirmationApproveIn, {"actor_id": "forged"}),
+        (DncConfirmationRejectIn, {"actor_id": "forged"}),
+        (FailedReviewRetryIn, {"actor_id": "forged"}),
+        (DraftExportCreateIn, {"actor_id": "forged"}),
+    ],
+)
+def test_server_audited_write_schemas_reject_client_actor_id(model, payload):
+    with pytest.raises(ValidationError, match="actor_id"):
+        model.model_validate(payload)
+
+
 def test_read_endpoints_filter_to_authorized_department_and_hide_cross_department_rows(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -556,6 +612,141 @@ def test_outbound_instruction_read_is_admin_only_and_still_department_scoped(mon
     assert response.status_code == 200
     assert response.json()["total"] == 1
     assert [item["id"] for item in response.json()["items"]] == ["instruction_cross"]
+
+
+def test_write_endpoints_enforce_role_department_scope_and_server_audit_subject(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _provision_scoped_read_data()
+    _configure_x9_assertion(monkeypatch)
+    client = TestClient(app)
+    reviewer_headers = _signed_x9_headers(subject_id="x9-cross-reviewer")
+    operator_headers = _signed_x9_headers(subject_id="x9-cross-operator")
+    admin_headers = _signed_x9_headers(subject_id="x9-cross-admin")
+
+    product_body = {
+        "id": "product_rbac_scope",
+        "product_type": "rbac scope",
+        "name": "RBAC Scope Product",
+        "summary": "Only an admin may create this global catalog entry.",
+    }
+    assert client.post("/api/followup-agent/products", json=product_body, headers=operator_headers).status_code == 403
+    assert client.post("/api/followup-agent/products", json=product_body, headers=admin_headers).status_code == 201
+
+    assert client.post(
+        "/api/followup-agent/creators",
+        json={"id": "creator_reviewer_denied", "department_code": "cross_border", "handle": "denied"},
+        headers=reviewer_headers,
+    ).status_code == 403
+    assert client.post(
+        "/api/followup-agent/creators",
+        json={"id": "creator_admin_allowed", "department_code": "cross_border", "handle": "allowed"},
+        headers=admin_headers,
+    ).status_code == 201
+    assert client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_foreign", "body": "Do not expose another department.", "run_agent": False},
+        headers=admin_headers,
+    ).status_code == 404
+
+    assert client.post(
+        "/api/followup-agent/runs",
+        json={"inbound_reply_id": "reply_foreign_pending"},
+        headers=reviewer_headers,
+    ).status_code == 404
+
+    forged_actor = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": "run_cross_pending",
+            "outcome": "approve_draft",
+            "final_draft": "A locally reviewed draft.",
+            "actor_id": "forged-browser-value",
+        },
+        headers=reviewer_headers,
+    )
+    assert forged_actor.status_code == 422
+
+    decision_response = client.post(
+        "/api/followup-agent/review-decisions",
+        json={
+            "agent_followup_run_id": "run_cross_pending",
+            "outcome": "approve_draft",
+            "final_draft": "A locally reviewed draft.",
+        },
+        headers=reviewer_headers,
+    )
+    assert decision_response.status_code == 201
+    decision_id = decision_response.json()["decision"]["id"]
+    assert decision_response.json()["decision"]["actor_id"] == "auth_user_cross_reviewer"
+
+    export_response = client.post(
+        f"/api/followup-agent/review-decisions/{decision_id}/exports",
+        json={},
+        headers=operator_headers,
+    )
+    assert export_response.status_code == 201
+    assert export_response.json()["export"]["actor_id"] == "auth_user_cross_operator"
+
+
+def test_dnc_and_retry_writes_require_reviewer_and_use_principal_for_audit(monkeypatch: pytest.MonkeyPatch):
+    _provision_scoped_read_data()
+    _configure_x9_assertion(monkeypatch)
+    client = TestClient(app)
+    reviewer_headers = _signed_x9_headers(subject_id="x9-cross-reviewer")
+    operator_headers = _signed_x9_headers(subject_id="x9-cross-operator")
+    admin_headers = _signed_x9_headers(subject_id="x9-cross-admin")
+
+    dnc_reply = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_cross", "body": "Please unsubscribe me.", "run_agent": False},
+        headers=admin_headers,
+    )
+    assert dnc_reply.status_code == 200
+    with SessionLocal() as db:
+        confirmation_id = db.scalar(
+            select(DoNotContactConfirmation.id).where(
+                DoNotContactConfirmation.inbound_reply_id == dnc_reply.json()["reply"]["id"]
+            )
+        )
+    assert confirmation_id is not None
+    assert client.post(
+        f"/api/followup-agent/dnc-confirmations/{confirmation_id}/approve",
+        json={},
+        headers=operator_headers,
+    ).status_code == 403
+    dnc_confirmation = client.post(
+        f"/api/followup-agent/dnc-confirmations/{confirmation_id}/approve",
+        json={},
+        headers=reviewer_headers,
+    )
+    assert dnc_confirmation.status_code == 200
+    assert dnc_confirmation.json()["confirmation"]["reviewed_by"] == "auth_user_cross_reviewer"
+
+    # Rebuild a fresh scoped dataset for a non-terminal model-failure retry.
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    _provision_scoped_read_data()
+    with SessionLocal() as db:
+        failed_run = db.get(AgentFollowupRun, "run_cross_pending")
+        assert failed_run is not None
+        failed_run.execution_status = "failed"
+        failed_run.llm_status = "validation_failed"
+        failed_run.validation_error = "suggested_reply: Field required"
+        db.commit()
+
+    assert client.post(
+        "/api/followup-agent/review-items/reply_cross_pending/retry",
+        json={},
+        headers=operator_headers,
+    ).status_code == 403
+    retry = client.post(
+        "/api/followup-agent/review-items/reply_cross_pending/retry",
+        json={},
+        headers=reviewer_headers,
+    )
+    assert retry.status_code == 200
+    assert retry.json()["run"]["created_by"] == "auth_user_cross_reviewer"
 
 
 def test_authorization_models_enforce_unique_roles_and_restrict_deletes():

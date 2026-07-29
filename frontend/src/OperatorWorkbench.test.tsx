@@ -226,7 +226,6 @@ describe("OperatorWorkbench", () => {
         agent_followup_run_id: "run_standard",
         outcome: "approve_draft",
         final_draft: "Human final draft.",
-        actor_id: "demo_operator",
       });
     });
     expect(fetchMock.mock.calls.some(([url]) => /send/i.test(String(url)))).toBe(false);

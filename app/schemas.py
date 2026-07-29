@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 REPLY_CATEGORIES = {
@@ -187,11 +187,12 @@ class RunAgentIn(BaseModel):
 class HumanReviewDecisionCreateIn(BaseModel):
     """普通回复的人工决定；终态 DNC/拒绝不在当前接口范围内。"""
 
+    model_config = ConfigDict(extra="forbid")
+
     agent_followup_run_id: str
     outcome: Literal["approve_draft", "close_without_draft"]
     final_draft: str | None = Field(default=None, max_length=20000)
     note: str | None = Field(default=None, max_length=5000)
-    actor_id: str = Field(min_length=1, max_length=120)
 
     @model_validator(mode="after")
     def validate_final_draft_for_outcome(self) -> "HumanReviewDecisionCreateIn":
@@ -207,25 +208,25 @@ class HumanReviewDecisionCreateIn(BaseModel):
 class DncConfirmationApproveIn(BaseModel):
     """人工确认明确退订；确认后永久阻断后续业务处理，不涉及任何外发。"""
 
-    actor_id: str = Field(min_length=1, max_length=120)
+    model_config = ConfigDict(extra="forbid")
 
 
 class DncConfirmationRejectIn(BaseModel):
     """人工驳回 DNC 判定；回复重新进入人工触发的 Agent 审核，不涉及任何外发。"""
 
-    actor_id: str = Field(min_length=1, max_length=120)
+    model_config = ConfigDict(extra="forbid")
 
 
 class FailedReviewRetryIn(BaseModel):
     """人工重试模型失败的审核项；只入队新的 Agent run。"""
 
-    actor_id: str = Field(min_length=1, max_length=120)
+    model_config = ConfigDict(extra="forbid")
 
 
 class DraftExportCreateIn(BaseModel):
     """记录人工复制/导出动作；不包含渠道、收件人或发送参数。"""
 
-    actor_id: str = Field(min_length=1, max_length=120)
+    model_config = ConfigDict(extra="forbid")
 
 
 class AgentSuggestion(BaseModel):
