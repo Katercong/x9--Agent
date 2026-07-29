@@ -37,6 +37,7 @@ from app.models import (
     AuthorizationAuditEvent,
     Creator,
     CreatorOutreachEvent,
+    DeclineConfirmation,
     Department,
     DoNotContactConfirmation,
     DraftExportRecord,
@@ -795,6 +796,94 @@ def test_dnc_and_retry_writes_require_reviewer_and_use_principal_for_audit(monke
     )
     assert retry.status_code == 200
     assert retry.json()["run"]["created_by"] == "auth_user_cross_reviewer"
+
+
+def test_decline_confirmation_requires_reviewer_scope_and_uses_principal_for_audit(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _provision_scoped_read_data()
+    _configure_x9_assertion(monkeypatch)
+    client = TestClient(app)
+    reviewer_headers = _signed_x9_headers(subject_id="x9-cross-reviewer")
+    operator_headers = _signed_x9_headers(subject_id="x9-cross-operator")
+    admin_headers = _signed_x9_headers(subject_id="x9-cross-admin")
+
+    with SessionLocal() as db:
+        cross_reply = InboundReply(
+            id="reply_cross_decline",
+            department_code="cross_border",
+            creator_id="creator_cross",
+            direction="inbound",
+            channel="simulation",
+            external_message_id="scope-cross-decline",
+            body="No thanks, not interested.",
+            processing_status="need_ai_review",
+            reply_category="not_interested",
+            message_at=datetime.utcnow(),
+        )
+        cross_admin_reply = InboundReply(
+            id="reply_cross_admin_decline",
+            department_code="cross_border",
+            creator_id="creator_cross",
+            direction="inbound",
+            channel="simulation",
+            external_message_id="scope-cross-admin-decline",
+            body="No thanks, not interested again.",
+            processing_status="need_ai_review",
+            reply_category="not_interested",
+            message_at=datetime.utcnow(),
+        )
+        foreign_reply = InboundReply(
+            id="reply_foreign_decline",
+            department_code="foreign_trade",
+            creator_id="creator_foreign",
+            direction="inbound",
+            channel="simulation",
+            external_message_id="scope-foreign-decline",
+            body="No thanks, not interested.",
+            processing_status="need_ai_review",
+            reply_category="not_interested",
+            message_at=datetime.utcnow(),
+        )
+        db.add_all([cross_reply, cross_admin_reply, foreign_reply])
+        db.commit()
+
+    assert client.post(
+        "/api/followup-agent/review-items/reply_cross_decline/confirm-decline",
+        json={},
+        headers=operator_headers,
+    ).status_code == 403
+    assert client.post(
+        "/api/followup-agent/review-items/reply_foreign_decline/confirm-decline",
+        json={},
+        headers=reviewer_headers,
+    ).status_code == 404
+
+    reviewer_confirmation = client.post(
+        "/api/followup-agent/review-items/reply_cross_decline/confirm-decline",
+        json={},
+        headers=reviewer_headers,
+    )
+    assert reviewer_confirmation.status_code == 201
+    assert reviewer_confirmation.json()["confirmation"]["actor_id"] == "auth_user_cross_reviewer"
+
+    admin_confirmation = client.post(
+        "/api/followup-agent/review-items/reply_cross_admin_decline/confirm-decline",
+        json={},
+        headers=admin_headers,
+    )
+    assert admin_confirmation.status_code == 201
+    assert admin_confirmation.json()["confirmation"]["actor_id"] == "auth_user_cross_admin"
+
+    with SessionLocal() as db:
+        confirmations = {
+            row.inbound_reply_id: row.actor_id
+            for row in db.scalars(select(DeclineConfirmation)).all()
+        }
+        assert confirmations == {
+            "reply_cross_decline": "auth_user_cross_reviewer",
+            "reply_cross_admin_decline": "auth_user_cross_admin",
+        }
 
 
 def test_access_management_is_admin_only_scoped_audited_and_immediately_revocable(

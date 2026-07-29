@@ -27,18 +27,19 @@ from app.database import Base, SessionLocal, engine, init_db  # noqa: E402
 from app.demo_seed import seed_demo_data  # noqa: E402
 from app.authorization import DepartmentMembership, Role, principal_from_memberships  # noqa: E402
 from app.identity import get_current_principal  # noqa: E402
-from app.main import _apply_review_queue_filters, _review_queue_base_statement, app  # noqa: E402
+from app.main import _apply_review_queue_filters, _decline_confirmation_to_dict, _review_queue_base_statement, app  # noqa: E402
 from app.models import (  # noqa: E402
     AgentFollowupRun,
     Creator,
     CreatorOutreachEvent,
+    DeclineConfirmation,
     DraftExportRecord,
     FollowupTask,
     HumanReviewDecision,
     InboundReply,
 )
 from app import models, services  # noqa: E402
-from app.schemas import AgentSuggestion  # noqa: E402
+from app.schemas import AgentSuggestion, DeclineConfirmationApproveIn  # noqa: E402
 from app.services import classify_reply  # noqa: E402
 
 
@@ -323,6 +324,164 @@ def test_unconfirmed_decline_does_not_create_reengagement_task_for_later_reply()
             .where(FollowupTask.task_type == "reengagement_review")
         )
         assert task is None
+
+
+def test_human_can_confirm_decline_drop_creator_close_active_tasks_and_preserve_audit():
+    client = TestClient(app)
+    creator_id = "creator_confirmed_decline"
+    _create_creator(client, creator_id)
+
+    first_reply = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Sounds interesting.", "run_agent": False},
+    )
+    assert first_reply.status_code == 200, first_reply.text
+    with SessionLocal() as db:
+        first_task_id = db.scalar(
+            select(FollowupTask.id)
+            .where(FollowupTask.creator_id == creator_id)
+            .where(FollowupTask.task_type == "reply_followup_1")
+        )
+        assert first_task_id is not None
+        db.add_all(
+            [
+                FollowupTask(
+                    id="task_decline_pending",
+                    department_code="cross_border",
+                    creator_id=creator_id,
+                    task_type="manual_campaign_followup",
+                    status="pending",
+                    reason="A manually created active task.",
+                ),
+                FollowupTask(
+                    id="task_decline_dnc_blocked",
+                    department_code="cross_border",
+                    creator_id=creator_id,
+                    task_type="preserve_non_active_task",
+                    status="blocked_dnc_pending",
+                    reason="This inactive task must not be rewritten by decline confirmation.",
+                ),
+            ]
+        )
+        db.commit()
+
+    decline = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "No thanks, I am not interested.", "run_agent": True},
+    )
+    assert decline.status_code == 200, decline.text
+    reply_id = decline.json()["reply"]["id"]
+    assert decline.json()["run"] is None
+
+    with SessionLocal() as db:
+        run_count_before = db.scalar(select(func.count()).select_from(AgentFollowupRun))
+        outbound_count_before = db.scalar(select(func.count()).select_from(models.SimulatedOutboundInstruction))
+
+    invalid_body = client.post(
+        f"/api/followup-agent/review-items/{reply_id}/confirm-decline",
+        json={"actor_id": "forged-browser-value"},
+    )
+    assert invalid_body.status_code == 422
+
+    confirmed = client.post(
+        f"/api/followup-agent/review-items/{reply_id}/confirm-decline",
+        json={},
+    )
+    assert confirmed.status_code == 201, confirmed.text
+    payload = confirmed.json()
+    assert payload["confirmation"]["actor_id"] == "test_admin"
+    assert payload["confirmation"]["inbound_reply_id"] == reply_id
+    assert payload["creator"]["current_status"] == "dropped"
+    assert payload["creator"]["do_not_contact_status"] == "none"
+    assert payload["reply"]["processing_status"] == "reviewed"
+    assert set(payload["closed_followup_task_ids"]) == {"task_decline_pending", first_task_id}
+
+    with SessionLocal() as db:
+        creator = db.get(Creator, creator_id)
+        reply = db.get(InboundReply, reply_id)
+        confirmation = db.scalar(select(DeclineConfirmation).where(DeclineConfirmation.inbound_reply_id == reply_id))
+        tasks = {
+            task.id: task
+            for task in db.scalars(select(FollowupTask).where(FollowupTask.creator_id == creator_id)).all()
+        }
+        event = db.scalar(
+            select(CreatorOutreachEvent)
+            .where(CreatorOutreachEvent.creator_id == creator_id)
+            .where(CreatorOutreachEvent.event_type == "decline_confirmed_by_human")
+        )
+        assert creator is not None and creator.current_status == "dropped"
+        assert reply is not None and reply.processing_status == "reviewed"
+        assert confirmation is not None and confirmation.actor_id == "test_admin"
+        assert tasks[first_task_id].status == "closed_declined"
+        assert tasks["task_decline_pending"].status == "closed_declined"
+        assert tasks["task_decline_dnc_blocked"].status == "blocked_dnc_pending"
+        assert event is not None
+        event_metadata = json.loads(event.metadata_json or "{}")
+        assert event_metadata["actor_id"] == "test_admin"
+        assert event_metadata["decline_confirmation_id"] == confirmation.id
+        assert event_metadata["inbound_reply_id"] == reply_id
+        assert set(event_metadata["closed_followup_task_ids"]) == set(payload["closed_followup_task_ids"])
+        assert db.scalar(select(func.count()).select_from(AgentFollowupRun)) == run_count_before
+        assert db.scalar(select(func.count()).select_from(models.SimulatedOutboundInstruction)) == outbound_count_before
+        db.add(
+            DeclineConfirmation(
+                id="decline_confirmation_duplicate",
+                department_code="cross_border",
+                creator_id=creator_id,
+                inbound_reply_id=reply_id,
+                actor_id="concurrent_reviewer",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+    assert client.get("/api/followup-agent/review-queue?review_type=decline").json()["total"] == 0
+    assert client.get(f"/api/followup-agent/review-items/{reply_id}").status_code == 409
+    repeated = client.post(f"/api/followup-agent/review-items/{reply_id}/confirm-decline", json={})
+    assert repeated.status_code == 409
+    assert repeated.json()["detail"] == "reply is not pending human review"
+
+    renewed_interest = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "I changed my mind and am interested.", "run_agent": True},
+    )
+    assert renewed_interest.status_code == 200, renewed_interest.text
+    with SessionLocal() as db:
+        creator = db.get(Creator, creator_id)
+        reengagement_task = db.scalar(
+            select(FollowupTask)
+            .where(FollowupTask.creator_id == creator_id)
+            .where(FollowupTask.task_type == "reengagement_review")
+        )
+        assert creator is not None and creator.current_status == "dropped"
+        assert reengagement_task is not None and reengagement_task.status == "open"
+
+
+def test_decline_confirmation_does_not_override_pending_dnc():
+    client = TestClient(app)
+    creator_id = "creator_decline_dnc_boundary"
+    _create_creator(client, creator_id)
+    dnc_reply = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": creator_id, "body": "Please unsubscribe me from all future messages.", "run_agent": True},
+    )
+    assert dnc_reply.status_code == 200, dnc_reply.text
+    reply_id = dnc_reply.json()["reply"]["id"]
+
+    response = client.post(f"/api/followup-agent/review-items/{reply_id}/confirm-decline", json={})
+    assert response.status_code == 409
+    assert response.json()["detail"] == "do not contact creator must use the dnc confirmation flow"
+
+    with SessionLocal() as db:
+        creator = db.get(Creator, creator_id)
+        reply = db.get(InboundReply, reply_id)
+        dnc = db.scalar(select(models.DoNotContactConfirmation).where(models.DoNotContactConfirmation.inbound_reply_id == reply_id))
+        assert creator is not None and creator.current_status is None
+        assert creator.do_not_contact_status == "pending_confirmation"
+        assert reply is not None and reply.processing_status == "need_ai_review"
+        assert dnc is not None and dnc.status == "pending_confirmation"
+        assert db.scalar(select(func.count()).select_from(DeclineConfirmation)) == 0
 
 
 def test_campaign_brief_fields_are_available_to_product_context():
@@ -2660,6 +2819,77 @@ def test_alembic_upgrade_creates_review_queue_query_indexes(tmp_path):
             assert expected_names <= actual_names
 
 
+def test_decline_confirmation_audit_migration_upgrades_and_downgrades_sqlite(tmp_path):
+    """拒绝确认审计表必须有唯一回复约束和不可级联删除的外键。"""
+
+    root = Path(__file__).resolve().parents[1]
+    database_path = tmp_path / "decline_confirmation_audit.sqlite"
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = f"sqlite:///{database_path.as_posix()}"
+
+    def run_alembic(*args: str) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", *args],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    run_alembic("upgrade", "head")
+    with sqlite3.connect(database_path) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "decline_confirmations" in tables
+        foreign_keys = connection.execute("PRAGMA foreign_key_list('decline_confirmations')").fetchall()
+        assert {(row[3], row[2], row[6]) for row in foreign_keys} == {
+            ("creator_id", "creators", "RESTRICT"),
+            ("inbound_reply_id", "inbound_replies", "RESTRICT"),
+        }
+        indexes = connection.execute("PRAGMA index_list('decline_confirmations')").fetchall()
+        assert "ix_decline_confirmations_department_confirmed" in {row[1] for row in indexes}
+        unique_indexes = [row[1] for row in indexes if row[2]]
+        assert any(
+            [row[2] for row in connection.execute(f"PRAGMA index_info('{index_name}')").fetchall()]
+            == ["inbound_reply_id"]
+            for index_name in unique_indexes
+        )
+
+    run_alembic("downgrade", "2b3c4d5e6f7a")
+    with sqlite3.connect(database_path) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "decline_confirmations" not in tables
+
+
+def test_decline_confirmation_schema_and_serializer_are_audit_only():
+    """阶段 1 的确认请求无客户端主体字段，序列化器只返回审计数据。"""
+
+    assert DeclineConfirmationApproveIn.model_validate({}).model_dump() == {}
+    with pytest.raises(ValidationError):
+        DeclineConfirmationApproveIn.model_validate({"actor_id": "forged"})
+
+    confirmation = DeclineConfirmation(
+        id="decline_confirmation_schema",
+        department_code="cross_border",
+        creator_id="creator_schema",
+        inbound_reply_id="reply_schema",
+        actor_id="auth_user_reviewer",
+        confirmed_at=datetime(2026, 7, 29, 21, 0, 0),
+        created_at=datetime(2026, 7, 29, 21, 0, 0),
+    )
+    assert _decline_confirmation_to_dict(confirmation) == {
+        "id": "decline_confirmation_schema",
+        "department_code": "cross_border",
+        "creator_id": "creator_schema",
+        "inbound_reply_id": "reply_schema",
+        "actor_id": "auth_user_reviewer",
+        "confirmed_at": "2026-07-29T21:00:00",
+        "created_at": "2026-07-29T21:00:00",
+    }
+
+
 def test_review_queue_sql_compiles_for_postgresql_and_sqlite():
     """集合队列查询必须同时兼容生产 PostgreSQL 与 SQLite 自动化测试。"""
 
@@ -3335,6 +3565,39 @@ def test_demo_seed_is_idempotent_and_populates_all_operator_workbench_states(mon
 
     assert second_created == 0
     assert counts_after == counts_before
+
+
+def test_demo_seed_reuses_existing_protected_demo_department_without_overwriting_it():
+    """RBAC backfill may have created the demo code before the demo seed runs."""
+
+    legacy_department_id = "legacy_department_demo_operations"
+    with SessionLocal() as db:
+        db.add(
+            models.Department(
+                id=legacy_department_id,
+                code="demo_operations",
+                name="Legacy protected directory entry",
+                is_active=True,
+            )
+        )
+        db.commit()
+
+    with SessionLocal() as db:
+        created = seed_demo_data(db)
+        db.commit()
+        department = db.scalar(select(models.Department).where(models.Department.code == "demo_operations"))
+        memberships = db.scalars(select(models.UserDepartmentMembership)).all()
+
+    assert created > 0
+    assert department is not None
+    assert department.id == legacy_department_id
+    assert department.name == "Legacy protected directory entry"
+    assert len(memberships) == 3
+    assert {membership.department_id for membership in memberships} == {legacy_department_id}
+
+    with SessionLocal() as db:
+        assert seed_demo_data(db) == 0
+        db.commit()
 
 
 def _create_creator(

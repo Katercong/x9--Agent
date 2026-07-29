@@ -15,7 +15,7 @@ docker compose up --build -d
 docker compose --profile demo run --rm demo-seed
 ```
 
-`migrate` 会先执行 Alembic，`api` 健康检查通过后提供工作台。`demo-seed` 仅在显式运行时补齐固定的虚构数据，以及 `demo_operator`、`demo_reviewer`、`demo_admin` 在 `demo_operations` 的三种本地角色映射；默认工作台使用 `demo_reviewer`。种子可重复执行，不会删除或覆盖操作者在本地库中的后续操作。
+`migrate` 会先执行 Alembic，`api` 健康检查通过后提供工作台。`demo-seed` 仅在显式运行时补齐固定的虚构数据，以及 `demo_operator`、`demo_reviewer`、`demo_admin` 在 `demo_operations` 的三种本地角色映射；默认工作台使用 `demo_reviewer`。种子可重复执行，不会删除或覆盖操作者在本地库中的后续操作；若旧库已由 RBAC 迁移建立同码部门目录，种子会复用该目录项并补齐映射。
 
 打开 [http://127.0.0.1:8000/operator-workbench/](http://127.0.0.1:8000/operator-workbench/)。若修改 `API_PORT`，请使用对应端口。
 
@@ -26,7 +26,7 @@ docker compose --profile demo run --rm demo-seed
 1. **人工回复草稿**：打开“Alex Demo”，查看历史上下文、AI 建议和可编辑草稿；批准后草稿会锁定为待人工交接。
 2. **模型生成失败**：打开“Blair Demo”，查看校验失败留痕；可从空白草稿人工起草，或明确启用 Worker 后重试。Worker 有模型 Key 时调用 Provider；无 Key 时会生成受限本地 fallback 草稿。
 3. **草稿生成中**：打开“Casey Demo”，查看数据库队列中的待处理 run。基础演示不会启动 Worker；一旦显式启动，Casey 会被处理并离开“草稿生成中”。
-4. **明确拒绝**：打开“Drew Demo”，确认终态项只能查看，不能起草、批准、复制或下载。
+4. **明确拒绝待确认**：打开“Drew Demo”。reviewer/admin 须在二次确认后将达人标记为 `dropped`、关闭同部门 open/pending 待办并留下不可变审计；该项不会显示草稿、重试、复制、下载或发送入口，operator 只能查看。
 5. **DNC 待确认**：打开“Evan Demo”，确认永久停联或驳回后重新进入人工审核；在待确认期间不会展示可交接草稿。
 6. **已锁定待交接草稿**：打开“Fran Demo”，复制或下载批准后的草稿；动作会写入导出审计快照。
 

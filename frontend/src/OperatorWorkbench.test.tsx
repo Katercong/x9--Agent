@@ -101,6 +101,19 @@ const dncItem: ReviewQueueItem = {
   dnc_confirmation: { id: "dnc_1", reason: "explicit_opt_out", status: "pending_confirmation", created_at: "2026-07-22T11:00:00" },
 };
 
+const declineItem: ReviewQueueItem = {
+  ...dncItem,
+  review_type: "decline",
+  reply: {
+    ...dncItem.reply,
+    id: "reply_decline",
+    creator_id: "creator_decline",
+    body: "No thanks, I am not interested.",
+    reply_category: "not_interested",
+  },
+  dnc_confirmation: null,
+};
+
 const confirmedDncItem: ReviewQueueItem = {
   ...dncItem,
   dnc_confirmation: { ...dncItem.dnc_confirmation!, status: "confirmed" },
@@ -334,6 +347,76 @@ describe("OperatorWorkbench", () => {
     await user.click(confirmationButtons.at(-1)!);
     await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith("/dnc-confirmations/dnc_1/approve") && init?.method === "POST")).toBe(true));
     expect(fetchMock.mock.calls.some(([url]) => /send/i.test(String(url)))).toBe(false);
+  });
+
+  it("lets a reviewer confirm an explicit decline without exposing draft, handoff, or sending controls", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 0, items: [] });
+      if (url.includes("review_type=decline")) return jsonResponse({ ok: true, total: 1, items: [declineItem] });
+      if (url.endsWith("/review-items/reply_decline/confirm-decline") && init?.method === "POST") {
+        return jsonResponse({
+          ok: true,
+          confirmation: {
+            id: "decline_1",
+            department_code: "cross_border",
+            creator_id: "creator_decline",
+            inbound_reply_id: "reply_decline",
+            actor_id: "auth_user_demo_admin",
+            confirmed_at: "2026-07-29T21:00:00",
+            created_at: "2026-07-29T21:00:00",
+          },
+          creator: { id: "creator_decline", current_status: "dropped", do_not_contact_status: "none" },
+          reply: { ...declineItem.reply, processing_status: "reviewed" },
+          closed_followup_task_ids: ["task_1"],
+        });
+      }
+      if (url.includes("/review-items/reply_decline")) return jsonResponse(detailFor(declineItem));
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    renderWorkbench();
+
+    await user.click(await screen.findByRole("button", { name: /拒绝待确认/ }));
+    expect(await screen.findByText("明确拒绝待人工确认")).toBeInTheDocument();
+    expect(screen.queryByLabelText("最终草稿")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制草稿" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "下载 .txt" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "发送（暂未接入）" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "确认拒绝" }));
+    const confirmationButtons = await screen.findAllByRole("button", { name: "确认拒绝" });
+    await user.click(confirmationButtons.at(-1)!);
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) => String(url).endsWith("/review-items/reply_decline/confirm-decline") && init?.method === "POST",
+      );
+      expect(call).toBeDefined();
+      expect(JSON.parse(call?.[1].body as string)).toEqual({});
+    });
+    expect(fetchMock.mock.calls.some(([url]) => /send/i.test(String(url)))).toBe(false);
+  });
+
+  it("keeps an explicit decline read-only for an operator without review decision capability", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 0, items: [] });
+      if (url.includes("review_type=decline")) return jsonResponse({ ok: true, total: 1, items: [declineItem] });
+      if (url.includes("/review-items/reply_decline")) return jsonResponse(detailFor(declineItem));
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    renderWorkbench({
+      user_id: "auth_user_operator",
+      display_name: "Scoped Operator",
+      departments: [{ code: "cross_border", role: "operator" }],
+      capabilities: ["review:read", "draft:export"],
+    });
+
+    await user.click(await screen.findByRole("button", { name: /拒绝待确认/ }));
+    expect(await screen.findByText("当前身份没有终态确认权限，仅可查看该拒绝记录。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "确认拒绝" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("confirm-decline"))).toBe(false);
   });
 
   it("labels a confirmed DNC distinctly from a pending DNC confirmation", async () => {
