@@ -8,7 +8,7 @@ PostgreSQL 由 Docker Compose 管理，数据保存在 Docker 命名卷 `x9-repl
 
 服务只绑定 `127.0.0.1`，不会直接暴露到局域网。`.env` 已被 Git 忽略，真实密码、数据库 URL 和模型密钥不得写入代码或文档。
 
-`.env.example` 的 `APP_ENV=demo` 与 `RBAC_AUTH_MODE=demo` 仅服务于本机 loopback 演示：API 使用虚构本地身份，不接收 X9 Cookie。受管部署必须显式配置 X9 的短期签名断言 Adapter；不能把 demo 配置带入生产。
+`.env.example` 的 `APP_ENV=demo` 与 `RBAC_AUTH_MODE=demo` 仅服务于本机 loopback 演示：API 使用虚构本地身份，不接收 X9 Cookie。未配置 X9 HMAC 密钥时，Compose 会向容器传入有效空 JSON；因为 demo Adapter 不读取该密钥，工作台身份仍可正常解析。受管部署必须显式配置 X9 的短期签名断言 Adapter 与受管密钥；不能把 demo 配置带入生产。
 
 ## 首次启动
 

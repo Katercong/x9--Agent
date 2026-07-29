@@ -2588,6 +2588,12 @@ def test_compose_uses_explicit_url_encoded_container_database_url():
     assert "@postgres:5432/" in env_example
     assert compose.count("DATABASE_URL: ${DATABASE_URL_CONTAINER:?Set DATABASE_URL_CONTAINER in .env}") == 4
     assert "DATABASE_URL: postgresql+psycopg://${POSTGRES_USER" not in compose
+    # Compose's local demo must emit valid JSON for the unconfigured X9 key
+    # set. Escaping braces here would put the literal ``\{\}`` in the
+    # container and make every identity-protected route fail closed.
+    assert "RBAC_AUTH_MODE: ${RBAC_AUTH_MODE:-demo}" in compose
+    assert "X9_IDENTITY_HMAC_KEYS_JSON: ${X9_IDENTITY_HMAC_KEYS_JSON:-{}}" in compose
+    assert "X9_IDENTITY_HMAC_KEYS_JSON: ${X9_IDENTITY_HMAC_KEYS_JSON:-\\{\\}}" not in compose
 
 
 def test_alembic_current_accepts_percent_encoded_database_url(tmp_path):

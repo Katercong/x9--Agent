@@ -4,7 +4,7 @@
 
 - 已安装 Docker Desktop，并确保 Docker Engine 已启动。
 - 从 `.env.example` 创建本机 `.env`，填写 PostgreSQL 变量。不要提交 `.env`，也不需要为基础演示填写模型 Key。
-- `.env.example` 的 `APP_ENV=demo` 与 `RBAC_AUTH_MODE=demo` 只适用于本机 loopback Docker 演示：它使用虚构 `demo_reviewer` 身份和本地授权目录，绝不接收 X9 Cookie。生产或联调必须显式改为受信 X9 签名断言配置。
+- `.env.example` 的 `APP_ENV=demo` 与 `RBAC_AUTH_MODE=demo` 只适用于本机 loopback Docker 演示：它使用虚构 `demo_reviewer` 身份和本地授权目录，绝不接收 X9 Cookie。未填写 X9 HMAC 密钥时，Compose 会传入有效空 JSON，demo Adapter 仍可正常工作。生产或联调必须显式改为受信 X9 签名断言配置和受管密钥。
 
 ## 启动与载入样例
 

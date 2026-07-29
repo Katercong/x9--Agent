@@ -1,6 +1,6 @@
 # RBAC Foundation 与 X9 身份适配计划
 
-> 当前进度（2026-07-29）：PR1 至 PR5 已完成并推送；PR6 已完成工作台身份展示、受控 demo 身份与文档更新，等待 review 后进行最终提交。真实 X9 签名断言出口仍是外部前置条件。
+> 当前进度（2026-07-29）：PR1 至 PR6 已完成并推送；已完成独立 Docker Compose 的迁移、健康检查、工作台、demo 身份、六类队列和重复 seed 幂等性演练。本机 demo 的未配置 X9 密钥使用有效空 JSON 默认值，不会影响 `demo` Adapter；真实 X9 签名断言出口仍是外部前置条件。
 
 ## 目标与固定决策
 
@@ -84,6 +84,7 @@ Adapter 仅使用 `.env` 或受管 Secrets 中的密钥。签名、issuer、audi
 - 移除硬编码 `demo_operator` 与前端请求体 `actor_id`；demo seed 创建虚构角色和部门成员。
 - Docker 演示仅在本机 demo 模式启用 Fake Adapter；更新启动说明、交接记录、缺口复盘和 X9 联调说明。
 - 运行 Python 全量测试、前端测试/构建、Docker PostgreSQL 迁移与不同角色演示。
+- Compose 在未配置 X9 HMAC 密钥时传入有效空 JSON 对象；只有显式切换到 `x9_assertion` 时才要求受管密钥，避免本机 demo 因未使用的 X9 配置失败。
 
 ## 验收与外部前置条件
 

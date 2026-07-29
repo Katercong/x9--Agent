@@ -16,8 +16,8 @@
 | RBAC Foundation | Agent 本地 `AuthUser`、`Department`、成员关系和追加式授权审计已落库；角色为 `operator`、`reviewer`、`admin`。除 `/health` 外的业务 API 均解析 Principal，并按部门范围执行 `401`、`403` 或跨部门 `404`。 |
 | 身份适配 | Agent 不接收 X9 Cookie、不读 X9 数据库。生产预留短期 HMAC 身份断言；本地 demo/test 才允许 Fake Adapter。`/auth/me` 仅返回 Agent 本地显示身份、角色和能力。 |
 | 管理员授权 | 管理员只能在自身授权部门内创建/软停用用户、部门和成员关系；每次变更追加 `authorization_audit_events`，没有物理删除接口。 |
-| 容器化演示 | 提供多阶段镜像、API 静态托管 `/operator-workbench/`、`worker` profile 和显式 `demo-seed` profile。Compose 的 loopback demo 使用虚构本地 operator/reviewer/admin；种子幂等、不调用模型、不创建出站指令。 |
-| 验证 | Python 全量测试为 `120 passed`，前端 Vitest 为 `10 passed`；已验证前端构建。Docker 迁移、健康检查、静态资源和重复 demo seed 的完整 RBAC 演练尚未完成：本轮本机 Docker Engine 不可用。仅有既有 FastAPI `on_event` 弃用警告。 |
+| 容器化演示 | 提供多阶段镜像、API 静态托管 `/operator-workbench/`、`worker` profile 和显式 `demo-seed` profile。Compose 的 loopback demo 使用虚构本地 operator/reviewer/admin；未配置 X9 HMAC 密钥时传入有效空 JSON 并继续使用 demo Adapter；种子幂等、不调用模型、不创建出站指令。 |
+| 验证 | Python 全量测试为 `120 passed`，前端 Vitest 为 `10 passed`；已验证前端构建。已使用独立 Compose 项目完成 Docker 迁移、健康检查、静态资源、demo 身份、六类队列与重复 demo seed（第二次新增 `0` 条）的完整 RBAC 演练。仅有既有 FastAPI `on_event` 弃用警告。 |
 
 ## 已实现但与目标仍有差距
 

@@ -40,3 +40,7 @@ docker compose --profile demo run --rm demo-seed
 ```
 
 随后打开 `http://127.0.0.1:8000/operator-workbench/`。`.env.example` 默认只为此 loopback 演示启用虚构 `demo_reviewer` 本地身份；它不使用 X9 Cookie，也不能替代生产身份集成。完整的样例说明、演示路径和停止方式见 [运营工作台演示指南](docs/operator-workbench-demo.md)；RBAC 与未来 X9 断言契约见 [RBAC Foundation 计划](docs/rbac-foundation-plan.md)。基础演示不会启动 Worker、调用模型或发送任何消息。
+
+本机 demo 的 `RBAC_AUTH_MODE=demo` 会使用虚构本地成员映射；未配置 X9 HMAC 密钥时，Compose 会传入有效的空 JSON 对象，而不会阻断工作台身份解析。生产或真实 X9 联调必须显式切换到 `x9_assertion` 并通过受管 Secrets 配置密钥，不能沿用 demo 配置。
+
+截至 2026-07-29，已在独立 Compose 环境验证镜像构建、Alembic 迁移、API 健康检查、工作台静态资源、demo 身份、六类队列和重复 seed 幂等性；详细验证基线见 [项目交接记录](docs/project-handoff.md)。
