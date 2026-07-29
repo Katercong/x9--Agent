@@ -16,7 +16,7 @@
 
 ## 当前模块进度
 
-Operator Workbench 的四个阶段均已合并到 `main`：GitHub PR #4 交付读模型、审核闭环与人工交接，GitHub PR #5 交付受控 demo seed、Docker、API 静态托管和演示材料。当前 `feat/rbac-foundation` 已完成本地 RBAC、HMAC Adapter 契约、读写部门隔离、管理员审计与工作台身份展示，等待 review。详细范围分别见 [Operator Workbench 四阶段计划与进度](operator-workbench-four-pr-plan.md) 与 [RBAC Foundation 计划](rbac-foundation-plan.md)。
+Operator Workbench 的四个阶段均已合并到 `main`：GitHub PR #4 交付读模型、审核闭环与人工交接，GitHub PR #5 交付受控 demo seed、Docker、API 静态托管和演示材料。RBAC Foundation 已随 GitHub PR #7 合并到 `main`，覆盖本地授权目录、HMAC Adapter 契约、读写部门隔离、管理员审计与工作台身份展示；相应功能分支已清理。详细范围分别见 [Operator Workbench 四阶段计划与进度](operator-workbench-four-pr-plan.md) 与 [RBAC Foundation 计划](rbac-foundation-plan.md)。
 
 ## 文档治理
 

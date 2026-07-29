@@ -1,6 +1,6 @@
 # RBAC Foundation 与 X9 身份适配计划
 
-> 当前进度（2026-07-29）：PR1 至 PR6、P1 历史部门码修复与 P2 并发部门创建 `409` 修复均已完成并推送；已完成独立 Docker Compose 的迁移、健康检查、工作台、demo 身份、六类队列和重复 seed 幂等性演练。本轮 P2 migration 规则冻结修复在当前工作区等待 review：已发布部门码 revision 经稳定兼容导出绑定到不可变 V1 规则；未来规则变更必须新增版本模块和新的迁移，不得改写 V1。本机 demo 的未配置 X9 密钥使用有效空 JSON 默认值，不会影响 `demo` Adapter；真实 X9 签名断言出口仍是外部前置条件。
+> 当前进度（2026-07-29）：PR1 至 PR6、部门目录 P1 与迁移规则冻结 P2 均已随 GitHub PR #7 Squash merge 到 `main`；`feat/rbac-foundation` 的本地与远端分支已删除。已完成独立 Docker Compose 的迁移、健康检查、工作台、demo 身份、六类队列和重复 seed 幂等性演练。本机 demo 的未配置 X9 密钥使用有效空 JSON 默认值，不会影响 `demo` Adapter；真实 X9 签名断言出口仍是外部前置条件。
 
 ## 目标与固定决策
 
@@ -50,7 +50,7 @@ Adapter 仅使用 `.env` 或受管 Secrets 中的密钥。签名、issuer、audi
 
 ## 六个顺序 PR
 
-### PR1：授权数据与纯策略层（当前分支）
+### PR1：授权数据与纯策略层（已合并）
 
 - 新增授权目录模型、Alembic revision、完整 downgrade 和显式首管理员 bootstrap CLI。
 - 新增不依赖 FastAPI、X9 或 Worker 的 `Principal`、角色、能力和部门策略模块。
@@ -90,7 +90,7 @@ Adapter 仅使用 `.env` 或受管 Secrets 中的密钥。签名、issuer、audi
 - 运行 Python 全量测试、前端测试/构建、Docker PostgreSQL 迁移与不同角色演示。
 - Compose 在未配置 X9 HMAC 密钥时传入有效空 JSON 对象；只有显式切换到 `x9_assertion` 时才要求受管密钥，避免本机 demo 因未使用的 X9 配置失败。
 
-### P1：部门目录与业务归属边界修复（当前分支，待 review）
+### P1：部门目录与业务归属边界修复（已合并）
 
 - 新增 Alembic revision：从所有含 `department_code` 的领域表回填规范化部门码；只创建启用目录项，不创建成员关系或授权审计。后续前向 revision 会规范化目录和全部历史业务行，确保严格 SQL 部门范围筛选与目录码一致；最新前向 revision 使用与 API 相同的 ASCII slug 契约，先拒绝非 ASCII/非法历史码，再用 Python 写入规范值，并检查目录码碰撞与入站幂等键碰撞。所有相关 revision 的 downgrade 均保留规范化后的目录/业务数据，避免破坏后续授权关系或重新引入越权。
 - 已发布的部门码 revision 通过 `app.department_codes` 的冻结兼容导出使用 `department_codes_v1`；该 V1 模块不得修改。后续规则需新建版本模块并由新 revision 显式采用，避免未来应用改动改变历史迁移行为。
