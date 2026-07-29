@@ -26,7 +26,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.schema import CreateTable
 
 from app.authorization import Capability, DepartmentMembership, Principal, Role, principal_from_memberships
-from app.database import Base, SessionLocal, engine
+from app.database import Base, SessionLocal, engine, get_db
 from app.demo_seed import DEMO_ACCESS_USERS, DEMO_DEPARTMENT, DEMO_REVIEWER_AUTH_USER_ID, seed_demo_data
 from app.identity import ensure_capability, get_current_principal
 from app.main import app
@@ -1274,8 +1274,11 @@ def test_rbac_foundation_migration_upgrades_and_downgrades_sqlite(tmp_path: Path
         assert "authorization_audit_events" not in tables
 
 
-def test_department_catalog_backfill_migration_preserves_business_scope_and_downgrade_data(tmp_path: Path):
-    """Every persisted business department code becomes an ungranted catalog entry."""
+def test_department_catalog_backfill_migration_preserves_business_scope_and_downgrade_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Catalog backfill and row normalization must keep historical data readable."""
 
     root = Path(__file__).resolve().parents[1]
     db_path = tmp_path / "department_catalog_backfill.sqlite"
@@ -1307,10 +1310,11 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
                 channel="simulation",
                 external_message_id="backfill-reply",
                 body="Backfill reply",
+                processing_status="need_ai_review",
             )
             run = AgentFollowupRun(
                 id="backfill_run",
-                department_code="dept_runs",
+                department_code=" DEPT_RUNS ",
                 creator_id=creator.id,
                 inbound_reply_id=reply.id,
                 execution_status="succeeded",
@@ -1379,12 +1383,82 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
         "dept_decisions",
         "dept_exports",
     }
-    run_alembic("upgrade", "head")
+    # The first P1 revision registered the canonical directory namespace but
+    # intentionally did not rewrite legacy business rows.  The follow-up
+    # revision must close that read-scope gap without changing memberships.
+    run_alembic("upgrade", "e8f9a0b1c2d3")
     with sqlite3.connect(db_path) as connection:
         catalog_codes = {row[0] for row in connection.execute("SELECT code FROM departments")}
         assert catalog_codes == expected_codes
+        assert connection.execute(
+            "SELECT department_code FROM inbound_replies WHERE id = 'backfill_reply'"
+        ).fetchone()[0] == "DEPT_REPLIES"
         assert connection.execute("SELECT COUNT(*) FROM user_department_memberships").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM authorization_audit_events").fetchone()[0] == 0
+
+    run_alembic("upgrade", "head")
+    expected_codes_by_table = {
+        "creators": "dept_creators",
+        "do_not_contact_confirmations": "dept_dnc",
+        "inbound_replies": "dept_replies",
+        "outreach_emails": "dept_outreach",
+        "creator_outreach_events": "dept_events",
+        "followup_tasks": "dept_tasks",
+        "agent_followup_runs": "dept_runs",
+        "human_review_decisions": "dept_decisions",
+        "draft_export_records": "dept_exports",
+    }
+    with sqlite3.connect(db_path) as connection:
+        for table_name, expected_code in expected_codes_by_table.items():
+            assert connection.execute(f"SELECT department_code FROM {table_name}").fetchone()[0] == expected_code
+
+    access_engine = create_engine(database_url)
+    AccessSession = sessionmaker(bind=access_engine, future=True)
+    try:
+        with AccessSession() as db:
+            department = db.scalar(select(Department).where(Department.code == "dept_replies"))
+            assert department is not None
+            user = AuthUser(
+                id="backfill_auth_admin",
+                identity_source="x9",
+                external_subject="x9-backfill-admin",
+                display_name="Backfill Admin",
+            )
+            db.add_all(
+                [
+                    user,
+                    UserDepartmentMembership(
+                        id="backfill_membership_admin",
+                        auth_user_id=user.id,
+                        department_id=department.id,
+                        role=Role.ADMIN.value,
+                    ),
+                ]
+            )
+            db.commit()
+
+        def migrated_database() -> object:
+            db = AccessSession()
+            try:
+                yield db
+            finally:
+                db.close()
+
+        app.dependency_overrides[get_db] = migrated_database
+        _configure_x9_assertion(monkeypatch)
+        client = TestClient(app)
+        headers = _signed_x9_headers(subject_id="x9-backfill-admin")
+        assert client.get("/api/followup-agent/review-items/backfill_reply", headers=headers).status_code == 200
+        queue = client.get(
+            "/api/followup-agent/review-queue?department_code=dept_replies",
+            headers=headers,
+        )
+        assert queue.status_code == 200
+        assert queue.json()["total"] == 1
+        assert queue.json()["items"][0]["reply"]["id"] == "backfill_reply"
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        access_engine.dispose()
 
     # This revision deliberately leaves backfilled catalog rows intact.  It is
     # therefore safe to migrate down one step without deleting later grants or
