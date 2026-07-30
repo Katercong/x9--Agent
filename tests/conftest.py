@@ -18,6 +18,8 @@ def _configure_test_database() -> None:
 
     global _SQLITE_TEST_PATH
 
+    # This must happen before any application import calls load_project_environment().
+    os.environ["X9_TEST_ISOLATED"] = "1"
     backend = os.getenv("X9_TEST_DATABASE_BACKEND", "sqlite")
     if backend == "sqlite":
         database_file = tempfile.NamedTemporaryFile(delete=False, suffix=".db")

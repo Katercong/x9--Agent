@@ -139,6 +139,7 @@ def run_alembic() -> Callable[..., subprocess.CompletedProcess[str]]:
         environment = os.environ.copy()
         environment["DATABASE_URL"] = database_url
         environment["SILICONFLOW_API_KEY"] = ""
+        environment["X9_TEST_ISOLATED"] = "1"
         return subprocess.run(
             [sys.executable, "-m", "alembic", *arguments],
             cwd=PROJECT_ROOT,

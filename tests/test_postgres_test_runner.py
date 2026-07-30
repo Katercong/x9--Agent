@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from app import config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNNER_SCRIPT = PROJECT_ROOT / "scripts" / "run-postgres-tests.ps1"
@@ -70,6 +71,15 @@ def _run_runner(tmp_path: Path, *, docker_exit_code: int, include_port: bool) ->
         check=False,
     )
     return result, command_log.read_text(encoding="utf-8").splitlines()
+
+
+def test_isolated_test_environment_skips_project_dotenv(monkeypatch: pytest.MonkeyPatch):
+    """Test runs must not import APP_ENV, RBAC, X9 or any other settings from .env."""
+
+    monkeypatch.setenv("X9_TEST_ISOLATED", "1")
+    monkeypatch.setattr(config, "load_dotenv", lambda *_args, **_kwargs: pytest.fail(".env must not be loaded in tests"))
+
+    assert config.load_project_environment() is False
 
 
 @pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is required to exercise the local test runner")

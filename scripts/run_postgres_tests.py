@@ -92,6 +92,7 @@ def main() -> int:
                 "DATABASE_URL": database_url,
                 "POSTGRES_TEST_DATABASE_URL": database_url,
                 "X9_TEST_DATABASE_BACKEND": "postgres",
+                "X9_TEST_ISOLATED": "1",
                 # Compatibility bridge until stage 2 moves the existing Worker test
                 # to the shared PostgreSQL fixture.
                 "RUN_POSTGRES_INTEGRATION": "1",
