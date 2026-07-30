@@ -16,7 +16,7 @@
 
 ## 当前模块进度
 
-Operator Workbench 的四个阶段均已合并到 `main`：GitHub PR #4 交付读模型、审核闭环与人工交接，GitHub PR #5 交付受控 demo seed、Docker、API 静态托管和演示材料。RBAC Foundation 已随 GitHub PR #7 合并到 `main`；PostgreSQL 原子多 Worker 领取与 Worker 审计已随 GitHub PR #9 合并。当前测试基础保留 SQLite 快速回归，并用一次性随机数据库运行真实 PostgreSQL 核心套件；详细范围见 [PostgreSQL 部署说明](postgresql.md)。
+Operator Workbench 的四个阶段均已合并到 `main`：GitHub PR #4 交付读模型、审核闭环与人工交接，GitHub PR #5 交付受控 demo seed、Docker、API 静态托管和演示材料。RBAC Foundation 已随 GitHub PR #7 合并到 `main`；PostgreSQL 原子多 Worker 领取与 Worker 审计已随 GitHub PR #9 合并。当前后端测试基础统一通过一次性随机 PostgreSQL 数据库运行完整套件；详细范围见 [PostgreSQL 部署说明](postgresql.md)。
 
 ## 文档治理
 

@@ -55,7 +55,7 @@ Adapter 仅使用 `.env` 或受管 Secrets 中的密钥。签名、issuer、audi
 - 新增授权目录模型、Alembic revision、完整 downgrade 和显式首管理员 bootstrap CLI。
 - 新增不依赖 FastAPI、X9 或 Worker 的 `Principal`、角色、能力和部门策略模块。
 - CLI 需要 `--confirm`，幂等地创建或恢复首个管理员、部门和成员关系；只在发生变更时记录 bootstrap 审计。
-- 测试 SQLite 实际迁移升级/降级、约束、删除限制、CLI 幂等性、角色矩阵和 PostgreSQL DDL 编译。
+- 测试真实 PostgreSQL 迁移升级/降级、约束、删除限制、CLI 幂等性与角色矩阵。
 
 ### PR2：身份 Adapter 与当前主体
 
@@ -97,7 +97,7 @@ Adapter 仅使用 `.env` 或受管 Secrets 中的密钥。签名、issuer、audi
 - `POST /access/departments` 同时检查目录与所有既有业务部门码；已存在或已使用的码一律返回 `409`，不能借创建接口扩大读取范围。
 - 并发创建相同的全新部门时，数据库唯一约束是最终裁决；后到请求会回滚失败事务并返回同一语义的 `409`，不留下部门、成员关系或授权审计残留。
 - 创建达人、PUT/PATCH 迁移达人时，先校验目标 `creator:manage`，再校验目标目录存在且启用；未知、停用或未授权码均不得成为新的业务归属。
-- 回归覆盖遗留业务码认领、全新部门创建、活跃目录、未知/停用目录、API schema 的 ASCII slug 拒绝、SQLite upgrade/downgrade 回填与规范化、含制表符/换行的授权后历史回复详情/队列可访问性、历史非 ASCII 部门码升级阻断、规范化前的入站幂等键碰撞拦截、隔离 PostgreSQL 空库升级与全部前后端测试。
+- 回归覆盖遗留业务码认领、全新部门创建、活跃目录、未知/停用目录、API schema 的 ASCII slug 拒绝、PostgreSQL upgrade/downgrade 回填与规范化、含制表符/换行的授权后历史回复详情/队列可访问性、历史非 ASCII 部门码升级阻断、规范化前的入站幂等键碰撞拦截、隔离 PostgreSQL 空库升级与全部前后端测试。
 
 ## 验收与外部前置条件
 

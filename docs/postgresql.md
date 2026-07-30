@@ -66,27 +66,26 @@ docker compose stop postgres
 docker compose start postgres
 alembic current
 alembic upgrade head
-python -m pytest -q -m "not postgres_integration"
+.\scripts\run-postgres-tests.ps1
 ```
 
 所有 schema 修改必须先新增 Alembic migration，再执行 `alembic upgrade head`。应用启动不会自动建表或修改 PostgreSQL schema。
 
 ## PostgreSQL 专用测试
 
-SQLite 快速回归与真实 PostgreSQL 集成测试刻意分开。前者不依赖 Docker；后者覆盖高风险的迁移、部分唯一约束、审计限制、跨部门终态边界和多 Worker `SKIP LOCKED` 领取，不会双跑全部 API 用例。
+后端自动化测试统一在真实 PostgreSQL 上运行，覆盖 API、RBAC、迁移、部分唯一约束、审计限制、跨部门终态边界和多 Worker `SKIP LOCKED` 领取。
 
 ```powershell
-python -m pytest -q -m "not postgres_integration"
 .\scripts\run-postgres-tests.ps1
 ```
 
-`run-postgres-tests.ps1` 每次执行使用 `x9-replychat-test-$PID` 的 Compose 项目名；未显式传入 `-Port` 时会动态选择空闲的 loopback 端口（直接手动运行 Compose 时仍可使用配置文件默认的 `55432`）。因此并行终端或 worktree 的测试容器、网络、volume 和端口彼此隔离。运行器再调用 `scripts/run_postgres_tests.py`，仅接受该服务的 `postgres` 控制库 URL，创建随机 `x9_replychat_test_*` 数据库、先执行 `alembic upgrade head`，再将生成的数据库 URL 传给带 `postgres_integration` marker 的测试。无论成功或失败，都会断开连接并删除本次数据库；PowerShell 包装器只会删除本次成功启动的测试容器、网络和 volume。
+`run-postgres-tests.ps1` 每次执行使用 `x9-replychat-test-$PID` 的 Compose 项目名；未显式传入 `-Port` 时会动态选择空闲的 loopback 端口（直接手动运行 Compose 时仍可使用配置文件默认的 `55432`）。因此并行终端或 worktree 的测试容器、网络、volume 和端口彼此隔离。运行器再调用 `scripts/run_postgres_tests.py`，仅接受该服务的 `postgres` 控制库 URL，创建随机 `x9_replychat_test_*` 数据库、先执行 `alembic upgrade head`，再运行完整后端套件。无论成功或失败，都会断开连接并删除本次数据库；PowerShell 包装器只会删除本次成功启动的测试容器、网络和 volume。
 
-该过程通过 `X9_TEST_ISOLATED=1` 在配置层跳过 `.env` 加载，不使用开发/演示数据库、不启动 API/Worker、不调用模型，也不创建任何出站指令。请勿直接运行 `pytest -m postgres_integration`：没有专用运行器时测试会明确失败，避免误指向非测试数据库后静默通过。GitHub Actions 使用同一 Python 运行器配合独立 `postgres:16-alpine` service 和公开的测试专用凭据。
+该过程通过 `X9_TEST_ISOLATED=1` 在配置层跳过 `.env` 加载，不使用开发/演示数据库、不启动 API/Worker、不调用模型，也不创建任何出站指令。请勿直接运行 `pytest`：没有专用运行器配置时测试会明确失败，避免误指向非测试数据库后静默通过。GitHub Actions 使用同一 Python 运行器配合独立 `postgres:16-alpine` service 和公开的测试专用凭据。
 
 ## 当前迁移的完整性约束
 
-当前初始迁移已与 ORM 对齐，并在 PostgreSQL 与 SQLite 验证以下约束：
+当前初始迁移已与 ORM 对齐，并在真实 PostgreSQL 验证以下约束：
 
 - `inbound_replies.external_message_id` 必填；重复稳定外部消息 ID 被拒绝。
 - `agent_followup_runs.creator_id`、`inbound_reply_id` 必填且受外键约束；孤儿 run 被拒绝。
@@ -106,4 +105,4 @@ docker compose up --build -d
 
 ## 生产演进提醒
 
-生产环境必须使用受管 PostgreSQL、受管 Secrets、备份恢复、监控和告警。当前 API 已独立容器运行，Worker 也有可选容器 profile；多 Worker 已通过 PostgreSQL `FOR UPDATE SKIP LOCKED` 实现事务级原子领取，并由 SQLite 快速回归、真实 PostgreSQL 核心套件和 CI 分别验证。渠道同步、镜像发布、监控告警、受管多副本部署和生产运行策略仍未实现。
+生产环境必须使用受管 PostgreSQL、受管 Secrets、备份恢复、监控和告警。当前 API 已独立容器运行，Worker 也有可选容器 profile；多 Worker 已通过 PostgreSQL `FOR UPDATE SKIP LOCKED` 实现事务级原子领取，并由真实 PostgreSQL 全量套件和 CI 验证。渠道同步、镜像发布、监控告警、受管多副本部署和生产运行策略仍未实现。

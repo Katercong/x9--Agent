@@ -31,7 +31,7 @@ Copy-Item .env.example .env
 
 编辑未提交的 `.env`，设置原始 `POSTGRES_PASSWORD`、本机 `DATABASE_URL` 和容器 `DATABASE_URL_CONTAINER`，以及需要真实模型调用时的 `SILICONFLOW_API_KEY`。两条 URL 中的用户名/密码必须对 URL 保留字符进行百分号编码；密钥不得写入代码、测试、文档或提交记录。
 
-PostgreSQL 的详细步骤见 [postgresql.md](postgresql.md)。未配置 `DATABASE_URL` 时，应用可使用可丢弃的 SQLite 开发库；生产环境必须使用 PostgreSQL。
+PostgreSQL 的详细步骤见 [postgresql.md](postgresql.md)。`DATABASE_URL` 是必填的 PostgreSQL URL；缺失或使用其他数据库 URL 时，API 与 Worker 会在导入阶段明确失败。
 
 ### 2. 数据库、API 与 Worker
 
@@ -61,17 +61,13 @@ python -m app.worker --worker-id local-worker-a
 
 ### 3. 测试与评测
 
-```powershell
-python -m pytest -q -m "not postgres_integration"
-```
-
-PostgreSQL 核心集成套件只针对可丢弃的隔离数据库显式执行。PowerShell 入口会启动专用 `postgres:16-alpine` 容器、创建随机 `x9_replychat_test_*` 数据库并在 `finally` 中删除数据库、容器和测试 volume；不会读取 `.env`、不会启动 API/Worker，也不会调用模型或发送能力：
+后端自动化测试仅针对可丢弃的隔离 PostgreSQL 数据库执行。PowerShell 入口会启动专用 `postgres:16-alpine` 容器、创建随机 `x9_replychat_test_*` 数据库并在 `finally` 中删除数据库、容器和测试 volume；不会读取 `.env`、不会启动 API/Worker，也不会调用模型或发送能力：
 
 ```powershell
 .\scripts\run-postgres-tests.ps1
 ```
 
-不要直接运行 `pytest -m postgres_integration`，也不要将开发、演示或生产库 URL 填入 `POSTGRES_TEST_ADMIN_URL`。运行器只接受专用 PostgreSQL 服务的 `postgres` 控制库，并只删除本次生成的随机测试库。CI 使用相同的 Python 运行器和公开的测试专用凭据；详细隔离规则见 [postgresql.md](postgresql.md#postgresql-专用测试)。
+不要直接运行 `pytest`，也不要将开发、演示或生产库 URL 填入 `POSTGRES_TEST_ADMIN_URL`。运行器只接受专用 PostgreSQL 服务的 `postgres` 控制库，并只删除本次生成的随机测试库。CI 使用相同的 Python 运行器和公开的测试专用凭据；详细隔离规则见 [postgresql.md](postgresql.md#postgresql-专用测试)。
 
 真实模型评测需要显式传入 `--live`，结果只写入被 Git 忽略的 `evaluation_reports/`，不写业务数据库：
 
@@ -123,12 +119,12 @@ POST /simulate-reply
 
 - `inbound_replies.external_message_id` 非空；重复外部消息会被拒绝。
 - `agent_followup_runs.creator_id`、`inbound_reply_id` 非空且受外键保护；孤儿 run 会被拒绝。
-- 同一 `inbound_reply_id` 在 `queued` 或 `running` 状态最多存在一个 run（PostgreSQL 与 SQLite 均验证）。
+- 同一 `inbound_reply_id` 在 `queued` 或 `running` 状态最多存在一个 run（在真实 PostgreSQL 约束中验证）。
 - DNC、回复、待办、出站指令等审计关联均不使用级联删除；删除存在审计关联的达人或回复会被数据库拒绝。
 
 ## Worker 可靠性语义
 
-1. PostgreSQL Worker 在短事务中按创建顺序使用 `FOR UPDATE SKIP LOCKED` 原子领取；SQLite 自动化测试保留条件更新回退。领取会写入 `claim_token`、当前 `claimed_by_worker_id` 和 120 秒 `lease_expires_at` 后立即提交。
+1. Worker 在短事务中按创建顺序使用 PostgreSQL `FOR UPDATE SKIP LOCKED` 原子领取。领取会写入 `claim_token`、当前 `claimed_by_worker_id` 和 120 秒 `lease_expires_at` 后立即提交。
 2. Worker 身份优先级为 `--worker-id`、`WORKER_ID`、`hostname:pid`。当前身份只在 run 处于 `running` 时保存；终态历史写入不可变 `worker_run_events`。
 3. LLM 调用不持有数据库写锁。完成或失败回写必须同时匹配 run ID、`claim_token`、`running` 和未过期 lease；旧 token、已过期 lease 或已处理 run 只会追加 `claim_result_discarded`，不能覆盖当前状态。
 4. 每次轮询先回收过期租约。PostgreSQL 回收同样使用 `SKIP LOCKED`，只有一个 Worker 能写入 `failed/worker_lost` 与 `lease_expired_recovered`；系统不自动重跑，人工必须显式新建 run。
@@ -175,6 +171,6 @@ POST /simulate-reply
 ## 变更纪律
 
 1. 先核对最终需求与实现缺口，明确本次变更是补齐目标还是调整需求。
-2. 数据库 schema 变更必须新增 Alembic migration，并同时覆盖 PostgreSQL 和 SQLite 约束测试。
+2. 数据库 schema 变更必须新增 Alembic migration，并覆盖隔离 PostgreSQL 的真实约束与迁移测试。
 3. 代码模块完成后先运行测试，提交前由负责人 review；提交信息使用中文。
 4. `.env`、真实密钥、评测报告、可识别的业务数据和历史面试材料不得误纳入提交。

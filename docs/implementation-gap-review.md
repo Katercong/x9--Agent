@@ -6,18 +6,18 @@
 
 | 模块 | 当前能力 |
 | --- | --- |
-| 数据库与迁移 | Docker Compose PostgreSQL、`.env` 配置、Alembic `4d5e6f7a8b9c` 开发 head；SQLite 自动化测试兼容。Compose 默认编排 PostgreSQL、一次性 `migrate` 和 API。 |
+| 数据库与迁移 | Docker Compose PostgreSQL、`.env` 配置、Alembic `4d5e6f7a8b9c` 开发 head；运行时与自动化测试均仅支持 PostgreSQL。Compose 默认编排 PostgreSQL、一次性 `migrate` 和 API。 |
 | 数据完整性 | 外部消息 ID 非空与幂等；run 外键非空；审计关联禁止级联删除；每条回复最多一个活跃 run。 |
 | 核心数据 | 达人、产品、参考资料版本、入站回复、Agent run、DNC、待办、事件、人工审核决定、不可变 `DeclineConfirmation`、不可变 `WorkerRunEvent`、草稿导出记录与历史模拟出站指令。 |
-| AI 与 Worker | PostgreSQL 数据库队列支持按 `created_at, id` 的 `FOR UPDATE SKIP LOCKED` 原子并发领取；SQLite 保留条件更新回退。run 在 `running` 时记录 `claimed_by_worker_id`、120 秒 lease 与 claim token，完成/失败回写同时校验状态、token 与未过期 lease。过期回收同样使用 PostgreSQL 锁定机制，转为 `failed/worker_lost` 后只能人工显式重试；不自动重排队或调用模型。`worker_run_events` 追加 `claim_acquired`、`claim_finished`、`lease_expired_recovered`、`claim_result_discarded` 的最小留痕，不含 token、提示词、邮件内容或密钥。默认模型为 `reply_followup_v2` + `deepseek-ai/DeepSeek-V3.2`，传 `extra_body={"enable_thinking": false}`。未配置模型 Key 时 Worker 使用本地受限 fallback，仍完成 run 并进入人工审核。 |
+| AI 与 Worker | PostgreSQL 数据库队列支持按 `created_at, id` 的 `FOR UPDATE SKIP LOCKED` 原子并发领取。run 在 `running` 时记录 `claimed_by_worker_id`、120 秒 lease 与 claim token，完成/失败回写同时校验状态、token 与未过期 lease。过期回收同样使用 PostgreSQL 锁定机制，转为 `failed/worker_lost` 后只能人工显式重试；不自动重排队或调用模型。`worker_run_events` 追加 `claim_acquired`、`claim_finished`、`lease_expired_recovered`、`claim_result_discarded` 的最小留痕，不含 token、提示词、邮件内容或密钥。默认模型为 `reply_followup_v2` + `deepseek-ai/DeepSeek-V3.2`，传 `extra_body={"enable_thinking": false}`。未配置模型 Key 时 Worker 使用本地受限 fallback，仍完成 run 并进入人工审核。 |
 | 人工审核 API | 审核队列支持普通回复、模型失败、生成中、拒绝、DNC、已批准草稿和 `reply_ready` 聚合；筛选、分类、排序、分页与关联预加载均由集合 SQL 完成，单次列表读取固定为总数与页面两条查询。`GET /review-items/{reply_id}` 返回上下文与完整 run 留痕。普通项可批准最终草稿或关闭；模型失败可人工重试，活跃 run 冲突返回 `409`。reviewer/admin 可显式确认明确拒绝：一次性创建 `DeclineConfirmation`，将达人置为 `dropped`、源回复置为 `reviewed`、关闭同部门 open/pending 待办并追加事件审计；不调用 LLM、不发送消息，重复或并发确认返回 `409`。 |
 | DNC 安全边界 | DNC 确认与驳回均需人工显式调用接口。待确认/已确认 DNC 优先阻断新 run、草稿、复制、下载、导出和既有普通待办；同一 DNC 只在源回复上显示为可操作队列项，历史会话标记为 `dnc_blocked`。 |
 | 运营工作台 | React + Vite + TypeScript + Ant Design + TanStack Query 三栏工作台，提供会话上下文、AI 建议、草稿编辑、批准/关闭、明确拒绝确认、DNC 确认或驳回、模型失败重试、复制和 `.txt` 下载审计。拒绝项没有草稿、重试、复制、下载或发送入口；没有发送能力。 |
-| RBAC Foundation | Agent 本地 `AuthUser`、`Department`、成员关系和追加式授权审计已落库；角色为 `operator`、`reviewer`、`admin`。除 `/health` 外的业务 API 均解析 Principal，并按部门范围执行 `401`、`403` 或跨部门 `404`。历史业务部门码已回填为无授权目录项并规范化目录与历史业务行，禁止管理员认领已使用的部门码且保持已授权历史数据可访问；同名新部门的并发唯一约束冲突会回滚并转换为 `409`。部门码使用 ASCII slug，迁移预检拒绝历史非法值，避免依赖 SQLite/PostgreSQL 不一致的 Unicode 大小写；已发布 revision 经冻结 V1 兼容导出保持原始规则，不受未来应用 helper 改动影响。 |
+| RBAC Foundation | Agent 本地 `AuthUser`、`Department`、成员关系和追加式授权审计已落库；角色为 `operator`、`reviewer`、`admin`。除 `/health` 外的业务 API 均解析 Principal，并按部门范围执行 `401`、`403` 或跨部门 `404`。历史业务部门码已回填为无授权目录项并规范化目录与历史业务行，禁止管理员认领已使用的部门码且保持已授权历史数据可访问；同名新部门的并发唯一约束冲突会回滚并转换为 `409`。部门码使用 ASCII slug，迁移预检拒绝历史非法值，避免依赖数据库 Unicode 大小写；已发布 revision 经冻结 V1 兼容导出保持原始规则，不受未来应用 helper 改动影响。 |
 | 身份适配 | Agent 不接收 X9 Cookie、不读 X9 数据库。生产预留短期 HMAC 身份断言；本地 demo/test 才允许 Fake Adapter。`/auth/me` 仅返回 Agent 本地显示身份、角色和能力。 |
 | 管理员授权 | 管理员只能在自身授权部门内创建/软停用用户、部门和成员关系；每次变更追加 `authorization_audit_events`，没有物理删除接口。 |
 | 容器化演示 | 提供多阶段镜像、API 静态托管 `/operator-workbench/`、`worker` profile 和显式 `demo-seed` profile。Compose 的 loopback demo 使用虚构本地 operator/reviewer/admin；未配置 X9 HMAC 密钥时传入有效空 JSON 并继续使用 demo Adapter；种子幂等、不调用模型、不创建出站指令。若旧库已由 RBAC 迁移创建同码部门目录，种子会复用该目录项而不覆盖它。 |
-| 验证 | SQLite 快速回归使用独立临时数据库，当前为 `152 passed, 8 deselected`；真实 PostgreSQL 核心套件通过专用运行器创建随机测试库，当前为 `8 passed`。根测试入口和 PostgreSQL/Alembic 子进程均设置 `X9_TEST_ISOLATED=1`，配置层会跳过 `.env`，不会继承本机的 APP_ENV、RBAC、X9、数据库或模型设置。该套件实际验证完整 Alembic 升级/历史修复路径、部分唯一索引、审计触发器与外键限制、跨部门终态边界，以及两事务 `SKIP LOCKED` 领取、单任务防重复领取、并发过期回收和旧/过期 Worker 结果丢弃；模拟出站指令数保持 `0`。本地入口还验证 Docker 启动失败时不会继续连接端口或清理非本次成功启动的容器；每次执行使用独立 Compose 项目和动态 loopback 端口，避免并行测试互相清理资源。GitHub Actions 将 SQLite 与 PostgreSQL 分 job 运行。前端 Vitest 基线为 `12 passed`，并已验证前端构建。仅有既有 FastAPI `on_event` 弃用警告和 Vite 既有的大 bundle 提示。 |
+| 验证 | PostgreSQL 全量套件通过专用运行器创建随机测试库，当前为 `164 passed`。根测试入口和 PostgreSQL/Alembic 子进程均设置 `X9_TEST_ISOLATED=1`，配置层会跳过 `.env`，不会继承本机的 APP_ENV、RBAC、X9、数据库或模型设置。该套件实际验证完整 Alembic 升级/历史修复路径、部分唯一索引、审计触发器与外键限制、跨部门终态边界、API/Worker PostgreSQL fail-fast，以及两事务 `SKIP LOCKED` 领取、单任务防重复领取、并发过期回收和旧/过期 Worker 结果丢弃；模拟出站指令数保持 `0`。本地入口还验证 Docker 启动失败时不会继续连接端口或清理非本次成功启动的容器；每次执行使用独立 Compose 项目和动态 loopback 端口，避免并行测试互相清理资源。GitHub Actions 使用一个 PostgreSQL 全量 job。前端 Vitest 基线为 `12 passed`，并已验证前端构建。仅有既有 FastAPI `on_event` 弃用警告和 Vite 既有的大 bundle 提示。 |
 
 ## 已实现但与目标仍有差距
 
