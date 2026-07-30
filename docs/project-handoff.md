@@ -5,9 +5,9 @@
 ## 代码基线
 
 - 已合并的 `main` 基线为 `527c08d Feat/postgres multi worker claim (#9)`，其中包含 V2/V3.2 默认配置、集合 SQL 审核队列、React 工作台、DNC/明确拒绝审核、人工导出交接、Dockerfile/Compose `migrate`/API/Worker profile、前端静态托管、受控 demo seed、RBAC Foundation，以及 PostgreSQL 原子多 Worker 领取与不可变事件留痕。
-- PostgreSQL 测试基础将 SQLite 快速回归与真实 PostgreSQL 核心套件分离：前者由统一 fixture 使用临时 SQLite 文件；后者只经 `scripts/run-postgres-tests.ps1` 或 `scripts/run_postgres_tests.py` 创建随机 `x9_replychat_test_*` 数据库、执行 Alembic 并在结束时删除。PowerShell 入口为每次执行生成独立 Compose 项目名和动态 loopback 端口，避免并行本机/worktree 测试互相关闭容器或删除 volume。没有运行器时显式 marker 测试会失败，不会误用 `.env`、开发或演示库。
-- 最近验证：SQLite 快速回归为 `152 passed, 8 deselected`；真实 PostgreSQL 核心套件为 `8 passed`，覆盖完整/历史 Alembic 路径、部分唯一索引、不可变审计触发器、跨部门终态边界与多 Worker 竞争/回收/旧结果丢弃。根测试入口和 PostgreSQL/Alembic 子进程均以 `X9_TEST_ISOLATED=1` 跳过 `.env`，不会继承本机 APP_ENV、RBAC 或 X9 设置。PowerShell 入口还覆盖 Docker 启动失败即中止，既不连接指定端口也不清理非本次成功启动的容器，并覆盖进程隔离的 Compose 项目与动态端口。GitHub Actions 将两者分 job 执行。前端 Vitest 基线为 `12 passed`，`npm run build` 已通过。已用隔离 Compose 项目完成迁移到 `4d5e6f7a8b9c`、API 健康检查、`/operator-workbench/` 静态资源、demo 身份、六类队列、成功确认拒绝，以及模拟出站指令数保持 `0`。demo seed 也验证可在旧库已有同码部门目录时复用该目录项、补齐缺失本地映射而不覆盖数据。
-- 本地数据库：Docker Compose 管理 PostgreSQL。默认服务为 PostgreSQL、一次性 `migrate` 和 API；`worker` 与 `demo-seed` 是显式 profile。`.env.example` 的 Docker 默认值只启用 loopback demo Fake Adapter，且未配置 X9 HMAC 密钥时传入有效空 JSON；生产必须改为 X9 签名断言和受管密钥。SQLite 只用于自动化测试和可丢弃的本地 MVP 数据。
+- PostgreSQL 测试基础通过 `scripts/run-postgres-tests.ps1` 或 `scripts/run_postgres_tests.py` 创建随机 `x9_replychat_test_*` 数据库、执行 Alembic `head` 并在结束时删除。PowerShell 入口为每次执行生成独立 Compose 项目名和动态 loopback 端口，避免并行本机/worktree 测试互相关闭容器或删除 volume。没有运行器配置时直接执行 `pytest` 会失败，不会误用 `.env`、开发或演示库。
+- 最近验证：后端 PostgreSQL 全量套件为 `164 passed`，覆盖完整/历史 Alembic 路径、部分唯一索引、不可变审计触发器、跨部门终态边界、API/Worker PostgreSQL fail-fast 与多 Worker 竞争/回收/旧结果丢弃。根测试入口和 PostgreSQL/Alembic 子进程均以 `X9_TEST_ISOLATED=1` 跳过 `.env`，不会继承本机 APP_ENV、RBAC 或 X9 设置。PowerShell 入口还覆盖 Docker 启动失败即中止，既不连接指定端口也不清理非本次成功启动的容器，并覆盖进程隔离的 Compose 项目与动态端口。GitHub Actions 使用一个 PostgreSQL 全量 job。前端 Vitest 基线为 `12 passed`，`npm run build` 已通过。已用隔离 Compose 项目完成迁移到 `4d5e6f7a8b9c`、API 健康检查、`/operator-workbench/` 静态资源、demo 身份、六类队列、成功确认拒绝，以及模拟出站指令数保持 `0`。demo seed 也验证可在旧库已有同码部门目录时复用该目录项、补齐缺失本地映射而不覆盖数据。
+- 本地数据库：Docker Compose 管理 PostgreSQL。默认服务为 PostgreSQL、一次性 `migrate` 和 API；`worker` 与 `demo-seed` 是显式 profile。`.env.example` 的 Docker 默认值只启用 loopback demo Fake Adapter，且未配置 X9 HMAC 密钥时传入有效空 JSON；生产必须改为 X9 签名断言和受管密钥。API、Worker 与自动化测试均只支持 PostgreSQL。
 
 ## 当前系统能力
 
@@ -27,7 +27,7 @@
 - `departments` 是受保护的业务部门码目录：回填迁移会为历史业务码创建无成员关系的启用目录项，后续迁移会规范化目录与全部历史业务行的部门码。规范码只允许小写 ASCII 字母、数字和 `-`/`_` 分隔的 slug 段；API、授权主体、碰撞预检和最新前向迁移共用该规则。历史非 ASCII 或内部空白部门码会安全阻断迁移，而不会在运行时形成不可访问的授权范围。管理员只能创建从未使用的部门码；创建或迁移达人时，目标目录必须存在、启用且调用者在目标范围具备 `creator:manage`，防止管理员认领其他部门的既有业务数据，并保证已授予范围可读取历史数据。并发同名新部门以数据库唯一约束为最终裁决，接口会回滚失败事务并返回 `409`。
 - DNC 是最高优先级安全边界：待确认或已确认后隐藏既有 AI 草稿和所有交接入口。DNC 确认永久阻断后续业务处理；驳回会显式新建审核 run，但不会发送消息。明确拒绝须由 reviewer/admin 显式确认：一次性审计后将达人置为 `dropped`、源回复置为 `reviewed`，并关闭同部门 open/pending 待办；不调用 LLM、不发送消息。
 - AI 只能提供分类、上下文、草稿和建议；所有非终态推进须人工确认。复制/下载只写导出审计，不会调用真实渠道。没有 Gmail、IMAP、X9 或自动发送能力。
-- 当前 Worker 在 PostgreSQL 以 `FOR UPDATE SKIP LOCKED` 短事务领取，在 SQLite 使用条件更新回退；使用 120 秒 lease、claim token、当前 Worker ID 与条件回写。领取、完成、过期回收、旧结果丢弃均记录不可变最小事件；过期后标为 `failed/worker_lost`，只允许人工显式重试。手动重试的并发活跃 run 返回业务 `409`；无模型 Key 时仍使用本地受限 fallback 完成 queued run，配置 Key 后才调用 Provider。
+- 当前 Worker 以 PostgreSQL `FOR UPDATE SKIP LOCKED` 短事务领取；使用 120 秒 lease、claim token、当前 Worker ID 与条件回写。领取、完成、过期回收、旧结果丢弃均记录不可变最小事件；过期后标为 `failed/worker_lost`，只允许人工显式重试。手动重试的并发活跃 run 返回业务 `409`；无模型 Key 时仍使用本地受限 fallback 完成 queued run，配置 Key 后才调用 Provider。
 - `demo-seed` 仅写入固定虚构样例，不调用模型或 Worker，不创建任何出站指令；基础 Docker 演示也不会启动 Worker。
 
 ## 代码定位
@@ -41,7 +41,7 @@
 | `app/demo_seed.py` | 可重复、无外部副作用的工作台演示数据。 |
 | `frontend/` | React + Vite + Ant Design + TanStack Query Operator Workbench。 |
 | `Dockerfile` / `compose.yaml` | 前端构建、API 静态托管、迁移、PostgreSQL 和可选 Worker。 |
-| `alembic/` / `tests/` | schema migration、SQLite 快速回归和 PostgreSQL 核心集成覆盖。 |
+| `alembic/` / `tests/` | schema migration 与完整 PostgreSQL 自动化覆盖。 |
 | `scripts/run_postgres_tests.py` / `scripts/run-postgres-tests.ps1` / `compose.postgres-test.yaml` | 随机测试库、隔离迁移、可靠清理与本地 PostgreSQL 测试容器入口。 |
 
 ## 近期已完成的关键提交

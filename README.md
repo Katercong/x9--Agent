@@ -29,11 +29,10 @@ python -m app.worker
 运行测试：
 
 ```powershell
-python -m pytest -q -m "not postgres_integration"
 .\scripts\run-postgres-tests.ps1
 ```
 
-第一条是无需 Docker 的 SQLite 快速回归；第二条会启动独立、可丢弃的 PostgreSQL 测试容器，创建随机测试库并在结束后清理。不要向测试命令传入开发、演示或生产库 URL。详细步骤见 [PostgreSQL 部署说明](docs/postgresql.md)。真实密钥只可放在未提交的 `.env` 中。
+该命令会启动独立、可丢弃的 PostgreSQL 测试容器，创建随机测试库并在结束后清理。后端测试仅支持这个入口；不要向测试命令传入开发、演示或生产库 URL。详细步骤见 [PostgreSQL 部署说明](docs/postgresql.md)。真实密钥只可放在未提交的 `.env` 中。
 
 ## 容器化工作台演示
 

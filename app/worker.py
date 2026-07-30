@@ -1,4 +1,4 @@
-"""SQLite MVP 的单进程 LLM 任务 worker。"""
+"""PostgreSQL-backed LLM task Worker."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def resolve_worker_id(explicit_worker_id: str | None = None) -> str:
 
 
 def process_once(*, worker_id: str | None = None) -> str | None:
-    """用三个短会话完成回收、领取和回写，模型调用期间不持有 SQLite 写事务。"""
+    """Use short PostgreSQL transactions for recovery, claim, and final writeback."""
 
     with SessionLocal() as db:
         try:

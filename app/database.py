@@ -1,22 +1,19 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Generator
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import load_project_environment
 
 
-DATA_DIR = Path("data")
-DEFAULT_DB_URL = f"sqlite:///{(DATA_DIR / 'replychat_agent.sqlite').as_posix()}"
 load_project_environment()
 
 
 def _normalise_database_url(url: str) -> str:
-    """Convert the legacy PostgreSQL scheme into SQLAlchemy's psycopg scheme."""
+    """Convert legacy PostgreSQL schemes to SQLAlchemy's psycopg scheme."""
 
     if url.startswith("postgres://"):
         return f"postgresql+psycopg://{url.removeprefix('postgres://')}"
@@ -25,30 +22,18 @@ def _normalise_database_url(url: str) -> str:
     return url
 
 
-DATABASE_URL = _normalise_database_url(os.getenv("DATABASE_URL", DEFAULT_DB_URL))
-IS_SQLITE = DATABASE_URL.startswith("sqlite")
-
-connect_args = {"check_same_thread": False} if IS_SQLITE else {}
-engine = create_engine(
-    DATABASE_URL,
-    connect_args=connect_args,
-    future=True,
-    pool_pre_ping=not IS_SQLITE,
-)
+def _require_postgresql_url() -> str:
+    raw_url = os.getenv("DATABASE_URL")
+    if not raw_url:
+        raise RuntimeError("DATABASE_URL must be configured with a PostgreSQL URL")
+    database_url = _normalise_database_url(raw_url)
+    if not database_url.startswith("postgresql"):
+        raise RuntimeError("DATABASE_URL must use a PostgreSQL URL")
+    return database_url
 
 
-if IS_SQLITE:
-    @event.listens_for(engine, "connect")
-    def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
-        """Keep local SQLite tests aligned with PostgreSQL foreign-key semantics."""
-
-        cursor = dbapi_connection.cursor()
-        try:
-            cursor.execute("PRAGMA foreign_keys=ON")
-        finally:
-            cursor.close()
-
-
+DATABASE_URL = _require_postgresql_url()
+engine = create_engine(DATABASE_URL, future=True, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 
@@ -65,14 +50,7 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    from . import models  # noqa: F401
+    """Verify the Alembic-managed PostgreSQL schema is reachable."""
 
-    if IS_SQLITE:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        Base.metadata.create_all(bind=engine)
-        return
-
-    # Production schema changes are applied explicitly with Alembic before the
-    # application is started. This makes multi-process deployments predictable.
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))

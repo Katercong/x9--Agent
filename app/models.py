@@ -341,7 +341,7 @@ class AgentFollowupRun(Base):
             text("id DESC"),
         ),
         Index("ix_agent_followup_runs_department_created", "department_code", "created_at"),
-        # SQLite MVP 由单 worker 轮询该索引；迁移 PostgreSQL 后可沿用它做并发领取。
+        # PostgreSQL Worker uses this index for ordered concurrent claims.
         Index("ix_agent_followup_runs_execution_created", "execution_status", "created_at"),
         Index("ix_agent_followup_runs_execution_lease", "execution_status", "lease_expires_at"),
         Index(
@@ -349,7 +349,6 @@ class AgentFollowupRun(Base):
             "inbound_reply_id",
             unique=True,
             postgresql_where=text("execution_status IN ('queued', 'running')"),
-            sqlite_where=text("execution_status IN ('queued', 'running')"),
         ),
     )
 
@@ -373,7 +372,7 @@ class AgentFollowupRun(Base):
     started_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
     finished_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # 字符数是 SQLite MVP 的成本代理指标；真实 token 用量后续接 Provider usage 再补充。
+    # Character count is a local proxy until provider usage is integrated.
     prompt_characters: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_characters: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -432,7 +431,7 @@ class HumanReviewDecision(Base):
         # 同一 run 只能被人工完成一次，避免重复确认产生相互矛盾的最终草稿。
         UniqueConstraint("agent_followup_run_id", name="uq_human_review_decisions_run"),
         # 当前没有重新审核/版本化流程，因此同一回复也只能有一个最终人工决定。
-        # 使用唯一索引而非应用层预查，确保 PostgreSQL 与 SQLite 都能抵御并发写入。
+        # The unique index is the database-level concurrent-write guard.
         Index("uq_human_review_decisions_reply", "inbound_reply_id", unique=True),
         Index("ix_human_review_decisions_department_decided", "department_code", "decided_at"),
         Index(

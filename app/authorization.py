@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
 
-from .department_codes import validate_department_code
+from .department_codes_current import validate_department_code
 
 
 class Role(str, Enum):

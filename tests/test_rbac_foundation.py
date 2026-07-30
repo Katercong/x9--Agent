@@ -1,31 +1,32 @@
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 import hashlib
 import hmac
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Iterator
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import create_engine, delete, func, select, text
-from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.schema import CreateTable
 
 from app.authorization import Capability, DepartmentMembership, Principal, Role, principal_from_memberships
-from app.database import Base, SessionLocal, engine, get_db
-from app import department_codes, department_codes_v1
+from app.database import SessionLocal, get_db
+from app import department_codes, department_codes_current, department_codes_v1
 from app.demo_seed import DEMO_ACCESS_USERS, DEMO_DEPARTMENT, DEMO_REVIEWER_AUTH_USER_ID, seed_demo_data
 from app.identity import ensure_capability, get_current_principal
 from app.main import app
@@ -62,12 +63,25 @@ from app.schemas import (
 )
 
 
+@contextmanager
+def _migration_connection(database_url: str) -> Iterator[object]:
+    """Expose text-query compatibility for PostgreSQL migration assertions."""
+
+    migration_engine = create_engine(database_url, future=True)
+    try:
+        with migration_engine.connect() as connection:
+            class ConnectionAdapter:
+                def execute(self, statement: str):
+                    return connection.execute(text(statement))
+
+            yield ConnectionAdapter()
+    finally:
+        migration_engine.dispose()
+
+
 @pytest.fixture(autouse=True)
 def reset_rbac_database():
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
     yield
-    Base.metadata.drop_all(bind=engine)
 
 
 def _principal(role: Role) -> Principal:
@@ -757,7 +771,10 @@ def test_write_endpoints_enforce_role_department_scope_and_server_audit_subject(
     assert export_response.json()["export"]["actor_id"] == "auth_user_cross_operator"
 
 
-def test_dnc_and_retry_writes_require_reviewer_and_use_principal_for_audit(monkeypatch: pytest.MonkeyPatch):
+def test_dnc_and_retry_writes_require_reviewer_and_use_principal_for_audit(
+    monkeypatch: pytest.MonkeyPatch,
+    clear_postgres_data,
+):
     _provision_scoped_read_data()
     _configure_x9_assertion(monkeypatch)
     client = TestClient(app)
@@ -792,8 +809,7 @@ def test_dnc_and_retry_writes_require_reviewer_and_use_principal_for_audit(monke
     assert dnc_confirmation.json()["confirmation"]["reviewed_by"] == "auth_user_cross_reviewer"
 
     # Rebuild a fresh scoped dataset for a non-terminal model-failure retry.
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
+    clear_postgres_data()
     _provision_scoped_read_data()
     with SessionLocal() as db:
         failed_run = db.get(AgentFollowupRun, "run_cross_pending")
@@ -1083,6 +1099,8 @@ def test_historical_department_code_migration_exports_are_frozen_v1():
     assert department_codes.normalise_department_code is department_codes_v1.normalise_department_code
     assert department_codes.validate_department_code is department_codes_v1.validate_department_code
     assert department_codes.normalised_department_code_expression is department_codes_v1.normalised_department_code_expression
+    assert department_codes_current.validate_department_code is not department_codes_v1.validate_department_code
+    assert department_codes_current.normalised_postgresql_department_code_expression is not None
 
 
 def test_access_department_creation_maps_concurrent_unique_conflict_to_409(monkeypatch: pytest.MonkeyPatch):
@@ -1102,7 +1120,7 @@ def test_access_department_creation_maps_concurrent_unique_conflict_to_409(monke
             raise IntegrityError(
                 "INSERT INTO departments",
                 {"code": "race-department"},
-                sqlite3.IntegrityError("UNIQUE constraint failed: departments.code"),
+                RuntimeError("duplicate department code"),
             )
         return original_flush(session, *args, **kwargs)
 
@@ -1349,12 +1367,10 @@ def test_authorization_models_enforce_unique_roles_and_restrict_deletes():
         db.rollback()
 
 
-def test_authorization_tables_compile_for_sqlite_and_postgresql_with_restrict_foreign_keys():
+def test_authorization_tables_compile_for_postgresql_with_restrict_foreign_keys():
     tables = (AuthUser.__table__, Department.__table__, UserDepartmentMembership.__table__, AuthorizationAuditEvent.__table__)
     for table in tables:
-        sqlite_sql = str(CreateTable(table).compile(dialect=sqlite.dialect()))
         postgresql_sql = str(CreateTable(table).compile(dialect=postgresql.dialect()))
-        assert "CREATE TABLE" in sqlite_sql
         assert "CREATE TABLE" in postgresql_sql
 
     membership_postgresql_sql = str(CreateTable(UserDepartmentMembership.__table__).compile(dialect=postgresql.dialect()))
@@ -1419,9 +1435,8 @@ def test_bootstrap_admin_is_explicit_idempotent_and_audited(capsys):
     assert '"department_code": "foreign_trade"' in capsys.readouterr().out
 
 
-def test_rbac_foundation_migration_upgrades_and_downgrades_sqlite(tmp_path: Path):
-    db_path = tmp_path / "rbac_migration.sqlite"
-    database_url = f"sqlite:///{db_path.as_posix()}"
+def test_rbac_foundation_migration_upgrades_and_downgrades_postgresql(temporary_postgres_database: str):
+    database_url = temporary_postgres_database
     environment = os.environ.copy()
     environment["DATABASE_URL"] = database_url
 
@@ -1437,28 +1452,41 @@ def test_rbac_foundation_migration_upgrades_and_downgrades_sqlite(tmp_path: Path
 
     run_alembic("upgrade", "c4d5e6f7a8b9")
     run_alembic("upgrade", "head")
-    with sqlite3.connect(db_path) as connection:
-        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    with _migration_connection(database_url) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+            )
+        }
         assert {"auth_users", "departments", "user_department_memberships", "authorization_audit_events"} <= tables
-        foreign_keys = connection.execute("PRAGMA foreign_key_list(user_department_memberships)").fetchall()
-        assert {row[6] for row in foreign_keys} == {"RESTRICT"}
+        foreign_keys = connection.execute(
+            "SELECT rc.delete_rule FROM information_schema.referential_constraints rc "
+            "JOIN information_schema.table_constraints tc ON tc.constraint_name = rc.constraint_name "
+            "WHERE tc.table_name = 'user_department_memberships'"
+        ).fetchall()
+        assert {row[0] for row in foreign_keys} == {"RESTRICT"}
 
     run_alembic("downgrade", "c4d5e6f7a8b9")
-    with sqlite3.connect(db_path) as connection:
-        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    with _migration_connection(database_url) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+            )
+        }
         assert "auth_users" not in tables
         assert "authorization_audit_events" not in tables
 
 
 def test_department_catalog_backfill_migration_preserves_business_scope_and_downgrade_data(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    temporary_postgres_database: str,
 ):
     """Catalog backfill and row normalization must keep historical data readable."""
 
     root = Path(__file__).resolve().parents[1]
-    db_path = tmp_path / "department_catalog_backfill.sqlite"
-    database_url = f"sqlite:///{db_path.as_posix()}"
+    database_url = temporary_postgres_database
     environment = os.environ.copy()
     environment["DATABASE_URL"] = database_url
 
@@ -1548,16 +1576,19 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
                         task_type="backfill",
                     ),
                     decision,
-                    DraftExportRecord(
-                        id="backfill_export",
-                        department_code="\tdept_exports\n",
-                        human_review_decision_id=decision.id,
-                        creator_id=creator.id,
-                        inbound_reply_id=reply.id,
-                        exported_content="Backfill export",
-                        actor_id="backfill_actor",
-                    ),
                 ]
+            )
+            db.flush()
+            db.add(
+                DraftExportRecord(
+                    id="backfill_export",
+                    department_code="\tdept_exports\n",
+                    human_review_decision_id=decision.id,
+                    creator_id=creator.id,
+                    inbound_reply_id=reply.id,
+                    exported_content="Backfill export",
+                    actor_id="backfill_actor",
+                )
             )
             db.commit()
     finally:
@@ -1579,7 +1610,7 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
     # the tab/newline row through that historical migration to reproduce the
     # strict-scope gap before the forward repair is applied.
     run_alembic("upgrade", "e8f9a0b1c2d3")
-    with sqlite3.connect(db_path) as connection:
+    with _migration_connection(database_url) as connection:
         catalog_codes = {row[0] for row in connection.execute("SELECT code FROM departments")}
         assert catalog_codes == expected_codes
         assert connection.execute(
@@ -1589,7 +1620,7 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
         assert connection.execute("SELECT COUNT(*) FROM authorization_audit_events").fetchone()[0] == 0
 
     run_alembic("upgrade", "f9a0b1c2d3e4")
-    with sqlite3.connect(db_path) as connection:
+    with _migration_connection(database_url) as connection:
         assert connection.execute(
             "SELECT department_code FROM inbound_replies WHERE id = 'backfill_reply'"
         ).fetchone()[0] == "\tdept_replies\n"
@@ -1606,7 +1637,7 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
         "human_review_decisions": "dept_decisions",
         "draft_export_records": "dept_exports",
     }
-    with sqlite3.connect(db_path) as connection:
+    with _migration_connection(database_url) as connection:
         for table_name, expected_code in expected_codes_by_table.items():
             assert connection.execute(f"SELECT department_code FROM {table_name}").fetchone()[0] == expected_code
 
@@ -1662,19 +1693,20 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
     # therefore safe to migrate down one step without deleting later grants or
     # audit records, and an upgrade back to head remains idempotent.
     run_alembic("downgrade", "d7e8f9a0b1c2")
-    with sqlite3.connect(db_path) as connection:
+    with _migration_connection(database_url) as connection:
         assert {row[0] for row in connection.execute("SELECT code FROM departments")} == expected_codes
     run_alembic("upgrade", "head")
-    with sqlite3.connect(db_path) as connection:
+    with _migration_connection(database_url) as connection:
         assert {row[0] for row in connection.execute("SELECT code FROM departments")} == expected_codes
 
 
-def test_department_code_boundary_whitespace_migration_rejects_idempotency_collision(tmp_path: Path):
+def test_department_code_boundary_whitespace_migration_rejects_idempotency_collision(
+    temporary_postgres_database: str,
+):
     """Tab/newline variants must be checked before a canonical scope rewrite."""
 
     root = Path(__file__).resolve().parents[1]
-    db_path = tmp_path / "department_code_collision.sqlite"
-    database_url = f"sqlite:///{db_path.as_posix()}"
+    database_url = temporary_postgres_database
     environment = os.environ.copy()
     environment["DATABASE_URL"] = database_url
 
@@ -1729,19 +1761,22 @@ def test_department_code_boundary_whitespace_migration_rejects_idempotency_colli
 
     assert result.returncode != 0
     assert "cannot normalize inbound_replies: idempotency key collision" in result.stdout + result.stderr
-    with sqlite3.connect(db_path) as connection:
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "f9a0b1c2d3e4"
+    with _migration_connection(database_url) as connection:
+        # PostgreSQL upgrades are transactional: the collision rolls the
+        # whole chained attempt back to the starting historical revision.
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "d7e8f9a0b1c2"
         assert connection.execute(
             "SELECT department_code FROM inbound_replies WHERE id = 'collision_reply_first'"
         ).fetchone()[0] == "\tforeign_trade\n"
 
 
-def test_department_code_ascii_migration_rejects_non_ascii_historical_values(tmp_path: Path):
-    """Do not rely on SQLite/PostgreSQL Unicode LOWER() behavior for scope."""
+def test_department_code_ascii_migration_rejects_non_ascii_historical_values(
+    temporary_postgres_database: str,
+):
+    """Historical scope normalization must reject non-ASCII values deterministically."""
 
     root = Path(__file__).resolve().parents[1]
-    db_path = tmp_path / "department_code_non_ascii.sqlite"
-    database_url = f"sqlite:///{db_path.as_posix()}"
+    database_url = temporary_postgres_database
     environment = os.environ.copy()
     environment["DATABASE_URL"] = database_url
 
@@ -1784,8 +1819,10 @@ def test_department_code_ascii_migration_rejects_non_ascii_historical_values(tmp
 
     assert result.returncode != 0
     assert "department code(s) are not valid ASCII slugs" in result.stdout + result.stderr
-    with sqlite3.connect(db_path) as connection:
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0a1b2c3d4e5f"
+    with _migration_connection(database_url) as connection:
+        # PostgreSQL upgrades are transactional, so the strict ASCII gate
+        # leaves the legacy database at the starting revision.
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "d7e8f9a0b1c2"
         assert connection.execute(
             "SELECT department_code FROM inbound_replies WHERE id = 'non_ascii_reply'"
-        ).fetchone()[0] == "Äpfel"
+        ).fetchone()[0] == "\tÄPFEL\n"
