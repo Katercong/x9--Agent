@@ -12,10 +12,6 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.NamedTemporaryFile(delete=False, suffix='.db').name}"
-# 单元测试必须使用本地 fallback，避免读取开发者 .env 后意外消耗真实模型额度。
-os.environ["SILICONFLOW_API_KEY"] = ""
-
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from pydantic import ValidationError  # noqa: E402

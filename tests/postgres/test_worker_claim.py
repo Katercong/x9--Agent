@@ -1,23 +1,13 @@
-"""Explicit PostgreSQL concurrency coverage for the Worker claim protocol.
+"""Real PostgreSQL coverage for the multi-Worker claim protocol."""
 
-Run only against an isolated database, for example after starting a temporary
-Docker Compose PostgreSQL service:
-
-    RUN_POSTGRES_INTEGRATION=1 POSTGRES_INTEGRATION_DATABASE_URL=... \
-        python -m pytest -q tests/test_postgres_multi_worker_claim.py
-"""
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
 import uuid
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import services
@@ -25,36 +15,6 @@ from app.models import AgentFollowupRun, Creator, InboundReply, SimulatedOutboun
 
 
 pytestmark = pytest.mark.postgres_integration
-
-
-@pytest.fixture(scope="module")
-def postgres_sessions() -> sessionmaker[Session]:
-    if os.getenv("RUN_POSTGRES_INTEGRATION") != "1":
-        pytest.skip("set RUN_POSTGRES_INTEGRATION=1 to run PostgreSQL concurrency coverage")
-    database_url = os.getenv("POSTGRES_INTEGRATION_DATABASE_URL")
-    if not database_url:
-        pytest.fail("POSTGRES_INTEGRATION_DATABASE_URL must point to an isolated PostgreSQL database")
-
-    root = Path(__file__).resolve().parents[1]
-    environment = os.environ.copy()
-    environment["DATABASE_URL"] = database_url
-    migrated = subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
-        cwd=root,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    assert migrated.returncode == 0, migrated.stdout + migrated.stderr
-
-    engine = create_engine(database_url, future=True, pool_pre_ping=True)
-    assert engine.dialect.name == "postgresql"
-    try:
-        yield sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
-    finally:
-        engine.dispose()
 
 
 def _seed_run(
@@ -81,9 +41,6 @@ def _seed_run(
         lease_expires_at=lease_expires_at,
     )
     with sessions() as db:
-        # The ORM models intentionally do not define relationship properties;
-        # flush parents explicitly so PostgreSQL checks the audit foreign keys
-        # in the same order a real ingestion flow writes them.
         db.add(Creator(id=creator_id, department_code="cross_border", handle=f"pg_handle_{suffix}"))
         db.flush()
         db.add(
@@ -120,8 +77,6 @@ def test_postgresql_multi_worker_claim_recovery_and_stale_result_protection(
     try:
         first_claim = services.claim_next_queued_run(first_worker, worker_id="postgres_worker_one")
         assert first_claim is not None
-        # Keep this update uncommitted.  The next transaction must skip its row
-        # and claim the second queued run rather than blocking or duplicating it.
         second_claim = services.claim_next_queued_run(second_worker, worker_id="postgres_worker_two")
         assert second_claim is not None
         assert {first_claim.run_id, second_claim.run_id} == {first_queued.id, second_queued.id}
@@ -157,8 +112,6 @@ def test_postgresql_multi_worker_claim_recovery_and_stale_result_protection(
     second_recovery = postgres_sessions()
     try:
         assert services.recover_expired_runs(first_recovery) == 1
-        # The first transaction owns the expired row until commit, so the
-        # second worker skips it and cannot append a duplicate recovery event.
         assert services.recover_expired_runs(second_recovery) == 0
         second_recovery.commit()
         first_recovery.commit()
@@ -217,3 +170,44 @@ def test_postgresql_multi_worker_claim_recovery_and_stale_result_protection(
         )
         assert all("claim_token" not in (event.metadata_json or "") for event in events)
         assert db.scalar(select(func.count()).select_from(SimulatedOutboundInstruction)) == 0
+
+
+def test_postgresql_unexpected_write_discards_lease_that_expires_after_precheck(
+    postgres_sessions: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The final PostgreSQL UPDATE must enforce lease validity after Python prechecks."""
+
+    queued = _seed_run(postgres_sessions, suffix="lease_write_race")
+    with postgres_sessions() as db:
+        claimed = services.claim_next_queued_run(db, worker_id="postgres_lease_race_worker")
+        assert claimed is not None and claimed.run_id == queued.id
+        db.commit()
+
+    original_discard_reason = services._claim_discard_reason
+
+    def expire_lease_after_precheck(run, current_claimed, *, now):
+        reason = original_discard_reason(run, current_claimed, now=now)
+        if reason is None:
+            assert run is not None
+            run.lease_expires_at = now - timedelta(seconds=1)
+            session = inspect(run).session
+            assert session is not None
+            session.flush()
+        return reason
+
+    monkeypatch.setattr(services, "_claim_discard_reason", expire_lease_after_precheck)
+    assert services.persist_unexpected_claim_error(claimed, RuntimeError("lease write race")) is None
+
+    with postgres_sessions() as db:
+        run = db.get(AgentFollowupRun, queued.id)
+        assert run is not None and run.execution_status == "running"
+        assert run.claim_token == claimed.claim_token
+        event = db.scalar(
+            select(WorkerRunEvent)
+            .where(WorkerRunEvent.agent_followup_run_id == queued.id)
+            .order_by(WorkerRunEvent.event_at.desc(), WorkerRunEvent.id.desc())
+        )
+        assert event is not None
+        assert event.event_type == "claim_result_discarded"
+        assert json.loads(event.metadata_json or "{}") == {"reason": "conditional_unexpected_error_write_lost"}
