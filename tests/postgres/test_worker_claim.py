@@ -14,9 +14,6 @@ from app import services
 from app.models import AgentFollowupRun, Creator, InboundReply, SimulatedOutboundInstruction, WorkerRunEvent
 
 
-pytestmark = pytest.mark.postgres_integration
-
-
 def _seed_run(
     sessions: sessionmaker[Session],
     *,
@@ -49,7 +46,7 @@ def _seed_run(
                 department_code="cross_border",
                 creator_id=creator_id,
                 direction="inbound",
-                channel="postgres_integration",
+                channel="postgres_worker_claim",
                 external_message_id=f"pg_external_{suffix}",
                 body="PostgreSQL worker concurrency test message.",
                 processing_status="need_ai_review",

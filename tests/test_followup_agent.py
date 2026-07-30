@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -15,11 +14,11 @@ from types import SimpleNamespace
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
-from sqlalchemy import delete, event, func, inspect, select  # noqa: E402
-from sqlalchemy.dialects import postgresql, sqlite  # noqa: E402
+from sqlalchemy import create_engine, delete, event, func, inspect, select, text  # noqa: E402
+from sqlalchemy.dialects import postgresql  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 
-from app.database import Base, SessionLocal, engine, init_db  # noqa: E402
+from app.database import SessionLocal, engine, init_db  # noqa: E402
 from app.demo_seed import seed_demo_data  # noqa: E402
 from app.authorization import DepartmentMembership, Role, principal_from_memberships  # noqa: E402
 from app.identity import get_current_principal  # noqa: E402
@@ -44,8 +43,6 @@ from app.services import classify_reply  # noqa: E402
 def reset_database():
     """每个用例使用干净表结构，避免上一条回复影响本用例的状态和计数。"""
 
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
     if hasattr(models, "Product"):
         with SessionLocal() as db:
             # Unit-test principals intentionally receive these scopes, but the
@@ -2761,46 +2758,19 @@ def test_compose_uses_explicit_url_encoded_container_database_url():
     assert "X9_IDENTITY_HMAC_KEYS_JSON: ${X9_IDENTITY_HMAC_KEYS_JSON:-\\{\\}}" not in compose
 
 
-def test_alembic_current_accepts_percent_encoded_database_url(tmp_path):
+def test_alembic_configuration_keeps_percent_encoded_postgresql_urls_literal():
     """Alembic 必须接受 .env 中标准的 %xx URL 编码。"""
-    root = Path(__file__).resolve().parents[1]
-    database_path = tmp_path / "review%40safe%3Apass%2F2026.sqlite"
-    encoded_url = f"sqlite:///{database_path.as_posix()}"
-    environment = os.environ.copy()
-    environment["DATABASE_URL"] = encoded_url
+    from alembic.config import Config
 
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "current"],
-        cwd=root,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
+    encoded_url = "postgresql+psycopg://review%40safe%3Apass@localhost:5432/x9_replychat_test_url_encoding"
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", encoded_url.replace("%", "%%"))
+    assert config.get_main_option("sqlalchemy.url") == encoded_url
 
 
-def test_alembic_upgrade_creates_review_queue_query_indexes(tmp_path):
+def test_postgresql_schema_has_review_queue_query_indexes(postgres_engine):
     """新 revision 必须在实际迁移数据库中创建审核队列所需的复合索引。"""
 
-    root = Path(__file__).resolve().parents[1]
-    database_path = tmp_path / "review_queue_indexes.sqlite"
-    environment = os.environ.copy()
-    environment["DATABASE_URL"] = f"sqlite:///{database_path.as_posix()}"
-
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
-        cwd=root,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
     expected_indexes = {
         "inbound_replies": {
             "ix_inbound_replies_review_queue_status_created",
@@ -2810,111 +2780,89 @@ def test_alembic_upgrade_creates_review_queue_query_indexes(tmp_path):
         "do_not_contact_confirmations": {"ix_dnc_confirmations_review_queue_creator_created"},
         "human_review_decisions": {"ix_human_review_decisions_review_queue_outcome_department_reply"},
     }
-    with sqlite3.connect(database_path) as connection:
-        for table_name, expected_names in expected_indexes.items():
-            actual_names = {row[1] for row in connection.execute(f"PRAGMA index_list('{table_name}')")}
-            assert expected_names <= actual_names
+    inspector = inspect(postgres_engine)
+    for table_name, expected_names in expected_indexes.items():
+        actual_names = {index["name"] for index in inspector.get_indexes(table_name)}
+        assert expected_names <= actual_names
 
 
-def test_decline_confirmation_audit_migration_upgrades_and_downgrades_sqlite(tmp_path):
+def test_decline_confirmation_audit_migration_upgrades_and_downgrades_postgresql(
+    temporary_postgres_database,
+    run_alembic,
+):
     """拒绝确认审计表必须有唯一回复约束和不可级联删除的外键。"""
 
-    root = Path(__file__).resolve().parents[1]
-    database_path = tmp_path / "decline_confirmation_audit.sqlite"
-    environment = os.environ.copy()
-    environment["DATABASE_URL"] = f"sqlite:///{database_path.as_posix()}"
-
-    def run_alembic(*args: str) -> None:
-        result = subprocess.run(
-            [sys.executable, "-m", "alembic", *args],
-            cwd=root,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-
-    run_alembic("upgrade", "head")
-    with sqlite3.connect(database_path) as connection:
-        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert "decline_confirmations" in tables
-        foreign_keys = connection.execute("PRAGMA foreign_key_list('decline_confirmations')").fetchall()
-        assert {(row[3], row[2], row[6]) for row in foreign_keys} == {
+    result = run_alembic(temporary_postgres_database, "upgrade", "head")
+    assert result.returncode == 0, result.stdout + result.stderr
+    migration_engine = create_engine(temporary_postgres_database, future=True)
+    try:
+        inspector = inspect(migration_engine)
+        assert "decline_confirmations" in inspector.get_table_names()
+        foreign_keys = inspector.get_foreign_keys("decline_confirmations")
+        assert {(key["constrained_columns"][0], key["referred_table"], key["options"].get("ondelete")) for key in foreign_keys} == {
             ("creator_id", "creators", "RESTRICT"),
             ("inbound_reply_id", "inbound_replies", "RESTRICT"),
         }
-        indexes = connection.execute("PRAGMA index_list('decline_confirmations')").fetchall()
-        assert "ix_decline_confirmations_department_confirmed" in {row[1] for row in indexes}
-        unique_indexes = [row[1] for row in indexes if row[2]]
-        assert any(
-            [row[2] for row in connection.execute(f"PRAGMA index_info('{index_name}')").fetchall()]
-            == ["inbound_reply_id"]
-            for index_name in unique_indexes
-        )
+        indexes = inspector.get_indexes("decline_confirmations")
+        assert "ix_decline_confirmations_department_confirmed" in {index["name"] for index in indexes}
+        unique_constraints = inspector.get_unique_constraints("decline_confirmations")
+        assert any(constraint["column_names"] == ["inbound_reply_id"] for constraint in unique_constraints)
+    finally:
+        migration_engine.dispose()
 
-    run_alembic("downgrade", "2b3c4d5e6f7a")
-    with sqlite3.connect(database_path) as connection:
-        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert "decline_confirmations" not in tables
+    result = run_alembic(temporary_postgres_database, "downgrade", "2b3c4d5e6f7a")
+    assert result.returncode == 0, result.stdout + result.stderr
+    migration_engine = create_engine(temporary_postgres_database, future=True)
+    try:
+        assert "decline_confirmations" not in inspect(migration_engine).get_table_names()
+    finally:
+        migration_engine.dispose()
 
 
-def test_worker_claim_audit_migration_upgrades_and_downgrades_sqlite(tmp_path):
+def test_worker_claim_audit_migration_upgrades_and_downgrades_postgresql(
+    temporary_postgres_database,
+    run_alembic,
+):
     """Worker 身份、事件索引和不可变持久化守卫必须随 revision 完整升级和回退。"""
 
-    root = Path(__file__).resolve().parents[1]
-    database_path = tmp_path / "worker_claim_audit.sqlite"
-    environment = os.environ.copy()
-    environment["DATABASE_URL"] = f"sqlite:///{database_path.as_posix()}"
-
-    def run_alembic(*args: str) -> None:
-        result = subprocess.run(
-            [sys.executable, "-m", "alembic", *args],
-            cwd=root,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-
-    run_alembic("upgrade", "head")
-    with sqlite3.connect(database_path) as connection:
-        run_columns = {row[1] for row in connection.execute("PRAGMA table_info('agent_followup_runs')")}
+    result = run_alembic(temporary_postgres_database, "upgrade", "head")
+    assert result.returncode == 0, result.stdout + result.stderr
+    migration_engine = create_engine(temporary_postgres_database, future=True)
+    try:
+        inspector = inspect(migration_engine)
+        run_columns = {column["name"] for column in inspector.get_columns("agent_followup_runs")}
         assert "claimed_by_worker_id" in run_columns
-        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert "worker_run_events" in tables
-        foreign_keys = connection.execute("PRAGMA foreign_key_list('worker_run_events')").fetchall()
-        assert {(row[3], row[2], row[6]) for row in foreign_keys} == {
+        assert "worker_run_events" in inspector.get_table_names()
+        foreign_keys = inspector.get_foreign_keys("worker_run_events")
+        assert {(key["constrained_columns"][0], key["referred_table"], key["options"].get("ondelete")) for key in foreign_keys} == {
             ("agent_followup_run_id", "agent_followup_runs", "RESTRICT")
         }
-        indexes = {row[1] for row in connection.execute("PRAGMA index_list('worker_run_events')")}
+        indexes = {index["name"] for index in inspector.get_indexes("worker_run_events")}
         assert {
             "ix_worker_run_events_run_event_at",
             "ix_worker_run_events_department_event_at",
             "ix_worker_run_events_type_event_at",
         } <= indexes
-        triggers = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
-        assert {"trg_worker_run_events_no_update", "trg_worker_run_events_no_delete"} <= triggers
-        connection.execute(
-            """
-            INSERT INTO worker_run_events (id, agent_followup_run_id, department_code, worker_id, event_type)
-            VALUES ('worker_event_immutable_migration', 'legacy_run', 'cross_border', 'worker_migration', 'claim_acquired')
-            """
-        )
-        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
-            connection.execute(
-                "UPDATE worker_run_events SET event_type = 'tampered' WHERE id = 'worker_event_immutable_migration'"
+        with migration_engine.connect() as connection:
+            triggers = set(
+                connection.scalars(
+                    text("SELECT tgname FROM pg_trigger WHERE tgrelid = 'worker_run_events'::regclass AND NOT tgisinternal")
+                )
             )
+        assert {"trg_worker_run_events_no_update", "trg_worker_run_events_no_delete"} <= triggers
+    finally:
+        migration_engine.dispose()
 
-    run_alembic("downgrade", "3c4d5e6f7a8b")
-    with sqlite3.connect(database_path) as connection:
-        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert "worker_run_events" not in tables
-        run_columns = {row[1] for row in connection.execute("PRAGMA table_info('agent_followup_runs')")}
+    result = run_alembic(temporary_postgres_database, "downgrade", "3c4d5e6f7a8b")
+    assert result.returncode == 0, result.stdout + result.stderr
+    migration_engine = create_engine(temporary_postgres_database, future=True)
+    try:
+        inspector = inspect(migration_engine)
+        assert "worker_run_events" not in inspector.get_table_names()
+        run_columns = {column["name"] for column in inspector.get_columns("agent_followup_runs")}
         assert "claimed_by_worker_id" not in run_columns
+    finally:
+        migration_engine.dispose()
 
 
 def test_decline_confirmation_schema_and_serializer_are_audit_only():
@@ -2944,8 +2892,8 @@ def test_decline_confirmation_schema_and_serializer_are_audit_only():
     }
 
 
-def test_review_queue_sql_compiles_for_postgresql_and_sqlite():
-    """集合队列查询必须同时兼容生产 PostgreSQL 与 SQLite 自动化测试。"""
+def test_review_queue_sql_compiles_for_postgresql():
+    """集合队列查询必须可编译为生产 PostgreSQL SQL。"""
 
     statement, review_type_expression = _review_queue_base_statement("cross_border")
     statement = _apply_review_queue_filters(
@@ -2955,10 +2903,9 @@ def test_review_queue_sql_compiles_for_postgresql_and_sqlite():
         include_dnc_blocked=False,
     )
 
-    for dialect in (postgresql.dialect(), sqlite.dialect()):
-        compiled = str(statement.compile(dialect=dialect))
-        assert "ROW_NUMBER" in compiled.upper()
-        assert "review_candidate_reply_ids" in compiled
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+    assert "ROW_NUMBER" in compiled.upper()
+    assert "review_candidate_reply_ids" in compiled
 
 
 def test_evaluation_suite_is_synthetic_and_has_the_planned_pilot_size():
@@ -3483,44 +3430,14 @@ def test_postgresql_expired_recovery_statement_uses_skip_locked():
     assert "ORDER BY agent_followup_runs.lease_expires_at ASC" in compiled
 
 
-def test_sqlite_claim_fallback_claims_distinct_queued_runs():
-    """SQLite keeps compare-and-swap semantics while PostgreSQL owns the lock-aware path."""
+def test_postgresql_claim_does_not_claim_one_run_twice():
+    """已提交的单条 PostgreSQL 领取不能被第二个 Worker 重复取得。"""
 
     client = TestClient(app)
-    _create_creator(client, "creator_sqlite_claim_first")
-    _create_creator(client, "creator_sqlite_claim_second")
-    first = client.post(
-        "/api/followup-agent/simulate-reply",
-        json={"creator_id": "creator_sqlite_claim_first", "body": "Sounds interesting.", "run_agent": True},
-    )
-    second = client.post(
-        "/api/followup-agent/simulate-reply",
-        json={"creator_id": "creator_sqlite_claim_second", "body": "Sounds interesting.", "run_agent": True},
-    )
-    assert first.status_code == 200, first.text
-    assert second.status_code == 200, second.text
-
-    with SessionLocal() as db:
-        first_claim = services.claim_next_queued_run(db)
-        assert first_claim is not None
-        db.commit()
-    with SessionLocal() as db:
-        second_claim = services.claim_next_queued_run(db)
-        assert second_claim is not None
-        db.commit()
-
-    assert {first_claim.run_id, second_claim.run_id} == {first.json()["run"]["id"], second.json()["run"]["id"]}
-    assert first_claim.run_id != second_claim.run_id
-
-
-def test_sqlite_claim_fallback_does_not_claim_one_run_twice():
-    """已提交的单条领取不能被第二个 SQLite Worker 重复取得。"""
-
-    client = TestClient(app)
-    _create_creator(client, "creator_sqlite_single_claim")
+    _create_creator(client, "creator_postgresql_single_claim")
     created = client.post(
         "/api/followup-agent/simulate-reply",
-        json={"creator_id": "creator_sqlite_single_claim", "body": "Sounds interesting.", "run_agent": True},
+        json={"creator_id": "creator_postgresql_single_claim", "body": "Sounds interesting.", "run_agent": True},
     )
     assert created.status_code == 200, created.text
 

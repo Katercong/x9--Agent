@@ -1,4 +1,4 @@
-"""Create one disposable PostgreSQL database and run marked integration tests.
+"""Create one disposable PostgreSQL database and run the complete backend suite.
 
 The caller supplies an admin URL for the dedicated test PostgreSQL service.  This
 script never reads .env, never uses the application/demo database, and removes
@@ -91,12 +91,7 @@ def main() -> int:
             {
                 "DATABASE_URL": database_url,
                 "POSTGRES_TEST_DATABASE_URL": database_url,
-                "X9_TEST_DATABASE_BACKEND": "postgres",
                 "X9_TEST_ISOLATED": "1",
-                # Compatibility bridge until stage 2 moves the existing Worker test
-                # to the shared PostgreSQL fixture.
-                "RUN_POSTGRES_INTEGRATION": "1",
-                "POSTGRES_INTEGRATION_DATABASE_URL": database_url,
                 "SILICONFLOW_API_KEY": "",
             }
         )
@@ -104,7 +99,7 @@ def main() -> int:
         if _run([sys.executable, "-m", "alembic", "upgrade", "head"], environment=environment, secrets=secrets) != 0:
             return 1
         return _run(
-            [sys.executable, "-m", "pytest", "-q", "-m", "postgres_integration", *sys.argv[1:]],
+            [sys.executable, "-m", "pytest", "-q", *sys.argv[1:]],
             environment=environment,
             secrets=secrets,
         )

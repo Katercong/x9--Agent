@@ -10,9 +10,6 @@ from sqlalchemy.orm import sessionmaker
 from app.models import Creator, InboundReply
 
 
-pytestmark = pytest.mark.postgres_integration
-
-
 def _assert_success(result) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 

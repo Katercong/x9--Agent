@@ -24,9 +24,6 @@ from app.models import (
 )
 
 
-pytestmark = pytest.mark.postgres_integration
-
-
 def _seed_creator_reply(db: Session, *, creator_id: str, reply_id: str, department_code: str = "cross_border") -> None:
     db.add(Creator(id=creator_id, department_code=department_code, handle=creator_id))
     db.flush()
