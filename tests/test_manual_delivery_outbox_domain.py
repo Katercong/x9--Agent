@@ -170,12 +170,16 @@ def _approved_decision(
 
 
 def _account_and_reservation(db, *, request: ManualDeliveryRequest, at: datetime) -> ManualDeliveryDailyQuota:
-    owner = AuthUser(
-        id=f"auth_outbox_{request.id}",
-        identity_source="test",
-        external_subject=f"outbox-{request.id}",
-        display_name="Outbox Owner",
-    )
+    owner = db.get(AuthUser, request.approved_by_auth_user_id)
+    if owner is None:
+        owner = AuthUser(
+            id=request.approved_by_auth_user_id,
+            identity_source="test",
+            external_subject=f"outbox-{request.id}",
+            display_name="Outbox Owner",
+        )
+        db.add(owner)
+        db.flush()
     account = ManualDeliveryAccount(
         id=f"account_outbox_{request.id}",
         department_code=request.department_code,
@@ -183,22 +187,23 @@ def _account_and_reservation(db, *, request: ManualDeliveryRequest, at: datetime
         display_name="Outbox Gmail",
         email=f"{request.id}@mail.example",
     )
-    quota = ManualDeliveryDailyQuota(
-        id=f"quota_outbox_{request.id}",
-        manual_delivery_account_id=account.id,
-        quota_date=manual_delivery_quota_date(at),
-        reserved_count=1,
-    )
-    db.add_all((owner, account, quota))
+    db.add(account)
     db.flush()
-    request.manual_delivery_account_id = account.id
-    request.account_email_snapshot = account.email
-    request.account_owner_auth_user_id_snapshot = owner.id
-    request.second_confirmed_by_auth_user_id = owner.id
-    request.second_confirmed_at = at
-    request.quota_reserved = True
-    request.quota_reservation_date = quota.quota_date
+    reserve_and_queue_manual_delivery_request(
+        db,
+        request=request,
+        account=account,
+        actor_id=request.approved_by_auth_user_id,
+        now=at,
+    )
     db.commit()
+    quota = db.scalar(
+        select(ManualDeliveryDailyQuota).where(
+            ManualDeliveryDailyQuota.manual_delivery_account_id == account.id,
+            ManualDeliveryDailyQuota.quota_date == manual_delivery_quota_date(at),
+        )
+    )
+    assert quota is not None
     return quota
 
 
@@ -287,6 +292,115 @@ def test_missing_reliable_thread_reference_remains_pending_and_cannot_be_misrepr
             )
         db.flush()
         assert request.status == "pending_second_confirmation"
+        assert db.scalar(
+            select(func.count(ManualDeliveryEvent.id)).where(ManualDeliveryEvent.manual_delivery_request_id == request.id)
+        ) == event_count_before
+        assert db.scalar(select(func.count(SimulatedOutboundInstruction.id))) == 0
+
+
+def test_direct_queue_transition_cannot_bypass_second_confirmation_or_write_an_event():
+    with SessionLocal() as db:
+        _creator, _reply, _decision, request = _approved_decision(
+            db,
+            suffix="queue-bypass",
+            metadata={
+                "reply_to": "creator@example.test",
+                "gmail_thread_id": "thread-queue-bypass",
+                "rfc_message_id": "<queue-bypass@example.test>",
+            },
+        )
+        event_count_before = db.scalar(
+            select(func.count(ManualDeliveryEvent.id)).where(ManualDeliveryEvent.manual_delivery_request_id == request.id)
+        )
+        with pytest.raises(ValueError, match="confirmed delivery account"):
+            transition_manual_delivery_request(
+                db,
+                request=request,
+                target_status="queued",
+                actor_id="outbox_reviewer",
+            )
+        db.flush()
+        assert request.status == "pending_second_confirmation"
+        assert db.scalar(
+            select(func.count(ManualDeliveryEvent.id)).where(ManualDeliveryEvent.manual_delivery_request_id == request.id)
+        ) == event_count_before
+        assert db.scalar(select(func.count(SimulatedOutboundInstruction.id))) == 0
+
+
+def test_reserve_and_queue_enforces_approver_account_owner_and_department_invariants():
+    with SessionLocal() as db:
+        _creator, _reply, _decision, request = _approved_decision(
+            db,
+            suffix="reserve-invariants",
+            metadata={
+                "gmail_thread_id": "thread-reserve-invariants",
+                "rfc_message_id": "<reserve-invariants@example.test>",
+            },
+        )
+        approving_user = AuthUser(
+            id=request.approved_by_auth_user_id,
+            identity_source="test",
+            external_subject="reserve-approving-user",
+            display_name="Approving reviewer",
+        )
+        other_user = AuthUser(
+            id="outbox_other_reviewer",
+            identity_source="test",
+            external_subject="reserve-other-user",
+            display_name="Other reviewer",
+        )
+        correct_account = ManualDeliveryAccount(
+            id="account_reserve_correct",
+            department_code=request.department_code,
+            owner_auth_user_id=approving_user.id,
+            display_name="Correct account",
+            email="reserve-correct@example.test",
+        )
+        wrong_owner_account = ManualDeliveryAccount(
+            id="account_reserve_wrong_owner",
+            department_code=request.department_code,
+            owner_auth_user_id=other_user.id,
+            display_name="Other reviewer account",
+            email="reserve-wrong-owner@example.test",
+        )
+        wrong_department_account = ManualDeliveryAccount(
+            id="account_reserve_wrong_department",
+            department_code="other_department",
+            owner_auth_user_id=approving_user.id,
+            display_name="Other department account",
+            email="reserve-wrong-department@example.test",
+        )
+        db.add_all((approving_user, other_user, correct_account, wrong_owner_account, wrong_department_account))
+        db.flush()
+        event_count_before = db.scalar(
+            select(func.count(ManualDeliveryEvent.id)).where(ManualDeliveryEvent.manual_delivery_request_id == request.id)
+        )
+
+        with pytest.raises(ValueError, match="approving reviewer"):
+            reserve_and_queue_manual_delivery_request(
+                db,
+                request=request,
+                account=correct_account,
+                actor_id=other_user.id,
+            )
+        with pytest.raises(ValueError, match="not owned by the approving reviewer"):
+            reserve_and_queue_manual_delivery_request(
+                db,
+                request=request,
+                account=wrong_owner_account,
+                actor_id=approving_user.id,
+            )
+        with pytest.raises(ValueError, match="department does not match"):
+            reserve_and_queue_manual_delivery_request(
+                db,
+                request=request,
+                account=wrong_department_account,
+                actor_id=approving_user.id,
+            )
+        db.flush()
+        assert request.status == "pending_second_confirmation"
+        assert request.manual_delivery_account_id is None
+        assert request.quota_reserved is False
         assert db.scalar(
             select(func.count(ManualDeliveryEvent.id)).where(ManualDeliveryEvent.manual_delivery_request_id == request.id)
         ) == event_count_before
@@ -738,7 +852,8 @@ def test_delivery_state_graph_allows_only_explicit_lifecycle_transitions():
             suffix="state-graph",
             metadata={"gmail_thread_id": "thread-graph", "rfc_message_id": "<graph@example.test>"},
         )
-        transition_manual_delivery_request(db, request=request, target_status="queued", actor_id="outbox_reviewer")
+        _account_and_reservation(db, request=request, at=datetime.utcnow())
+        assert request.status == "queued"
         transition_manual_delivery_request(db, request=request, target_status="sending", actor_id="delivery-worker-not-started")
         transition_manual_delivery_request(db, request=request, target_status="sent", actor_id="delivery-worker-not-started")
         db.commit()

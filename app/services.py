@@ -496,11 +496,12 @@ def transition_manual_delivery_request(
         raise ValueError("unknown manual delivery status")
     if target_status not in MANUAL_DELIVERY_TRANSITIONS[request.status]:
         raise ValueError(f"manual delivery cannot transition from {request.status} to {target_status}")
-    # This is the domain-level delivery boundary, not merely an API concern.
-    # A request without a locked single-recipient thread reference must never
-    # become queueable through another future caller or worker path.
-    if target_status == "queued" and not manual_delivery_snapshot_is_reliable(request):
-        raise ValueError("manual delivery request lacks reliable reply references")
+    if target_status == "queued":
+        _validate_manual_delivery_queue_confirmation(
+            db,
+            request=request,
+            actor_id=actor_id,
+        )
     current_time = now or datetime.utcnow()
     previous_status = request.status
     request.status = target_status
@@ -617,8 +618,8 @@ def reserve_and_queue_manual_delivery_request(
 ) -> None:
     """Reserve one account-day slot and move an eligible item into ``queued``.
 
-    The API caller must have already locked the request and account rows and
-    checked DNC plus ownership.  This function persists no network work: its
+    The caller may lock rows and check DNC first, but this function validates
+    the approval/ownership invariants itself. It persists no network work: its
     only result is a local state transition and an append-only event.
     """
 
@@ -626,6 +627,12 @@ def reserve_and_queue_manual_delivery_request(
         raise ValueError("manual delivery request is not awaiting second confirmation")
     if request.quota_reserved or request.manual_delivery_account_id is not None:
         raise ValueError("manual delivery request already has a quota reservation")
+    if actor_id != request.approved_by_auth_user_id:
+        raise ValueError("second confirmation must be performed by the approving reviewer")
+    if actor_id != account.owner_auth_user_id:
+        raise ValueError("manual delivery account is not owned by the approving reviewer")
+    if account.department_code != request.department_code:
+        raise ValueError("manual delivery account department does not match the request")
     if not account.is_active:
         raise ValueError("manual delivery account is inactive")
     if not manual_delivery_snapshot_is_reliable(request):
@@ -672,6 +679,57 @@ def reserve_and_queue_manual_delivery_request(
         now=current_time,
         metadata={"delivery_account_id": account.id, "quota_date": quota_date.isoformat()},
     )
+
+
+def _validate_manual_delivery_queue_confirmation(
+    db: Session,
+    *,
+    request: ManualDeliveryRequest,
+    actor_id: str | None,
+) -> None:
+    """Require the complete local second-confirmation record before queuing.
+
+    ``queued`` is the sole state a future Delivery Worker may consume.  Keeping
+    these checks in the generic state transition protects that boundary from
+    future callers that accidentally bypass ``reserve_and_queue...``.
+    """
+
+    if not manual_delivery_snapshot_is_reliable(request):
+        raise ValueError("manual delivery request lacks reliable reply references")
+    if request.manual_delivery_account_id is None:
+        raise ValueError("manual delivery request lacks a confirmed delivery account")
+    if not request.account_email_snapshot or not request.account_owner_auth_user_id_snapshot:
+        raise ValueError("manual delivery request lacks confirmed account snapshots")
+    if not request.quota_reserved or request.quota_reservation_date is None:
+        raise ValueError("manual delivery request lacks a quota reservation")
+    if not request.second_confirmed_by_auth_user_id or request.second_confirmed_at is None:
+        raise ValueError("manual delivery request lacks a second confirmation")
+    if actor_id is None or actor_id != request.approved_by_auth_user_id:
+        raise ValueError("queue transition must be performed by the approving reviewer")
+    if actor_id != request.second_confirmed_by_auth_user_id:
+        raise ValueError("queue transition actor does not match the second confirmation")
+    if actor_id != request.account_owner_auth_user_id_snapshot:
+        raise ValueError("queue transition actor does not own the confirmed account")
+
+    account = db.get(ManualDeliveryAccount, request.manual_delivery_account_id)
+    if account is None:
+        raise ValueError("manual delivery request references an unknown delivery account")
+    if not account.is_active:
+        raise ValueError("manual delivery request references an inactive delivery account")
+    if account.department_code != request.department_code:
+        raise ValueError("manual delivery account department does not match the request")
+    if account.email != request.account_email_snapshot or account.owner_auth_user_id != request.account_owner_auth_user_id_snapshot:
+        raise ValueError("manual delivery account no longer matches its confirmation snapshot")
+    quota = db.scalar(
+        select(ManualDeliveryDailyQuota)
+        .where(
+            ManualDeliveryDailyQuota.manual_delivery_account_id == account.id,
+            ManualDeliveryDailyQuota.quota_date == request.quota_reservation_date,
+        )
+        .with_for_update()
+    )
+    if quota is None or quota.reserved_count < 1:
+        raise ValueError("manual delivery quota reservation is inconsistent")
 
 
 def _append_manual_delivery_event(
