@@ -17,7 +17,7 @@
 | 身份适配 | Agent 不接收 X9 Cookie、不读 X9 数据库。生产预留短期 HMAC 身份断言；本地 demo/test 才允许 Fake Adapter。`/auth/me` 仅返回 Agent 本地显示身份、角色和能力。 |
 | 管理员授权 | 管理员只能在自身授权部门内创建/软停用用户、部门和成员关系；每次变更追加 `authorization_audit_events`，没有物理删除接口。 |
 | 容器化演示 | 提供多阶段镜像、API 静态托管 `/operator-workbench/`、`worker` profile 和显式 `demo-seed` profile。Compose 的 loopback demo 使用虚构本地 operator/reviewer/admin；未配置 X9 HMAC 密钥时传入有效空 JSON 并继续使用 demo Adapter；种子幂等、不调用模型、不创建出站指令。若旧库已由 RBAC 迁移创建同码部门目录，种子会复用该目录项而不覆盖它。 |
-| 验证 | SQLite 快速回归使用独立临时数据库，当前为 `149 passed, 8 deselected`；真实 PostgreSQL 核心套件通过专用运行器创建随机测试库，当前为 `8 passed`。该套件实际验证完整 Alembic 升级/历史修复路径、部分唯一索引、审计触发器与外键限制、跨部门终态边界，以及两事务 `SKIP LOCKED` 领取、单任务防重复领取、并发过期回收和旧/过期 Worker 结果丢弃；模拟出站指令数保持 `0`。GitHub Actions 将 SQLite 与 PostgreSQL 分 job 运行。前端 Vitest 基线为 `12 passed`，并已验证前端构建。仅有既有 FastAPI `on_event` 弃用警告和 Vite 既有的大 bundle 提示。 |
+| 验证 | SQLite 快速回归使用独立临时数据库，当前为 `150 passed, 8 deselected`；真实 PostgreSQL 核心套件通过专用运行器创建随机测试库，当前为 `8 passed`。该套件实际验证完整 Alembic 升级/历史修复路径、部分唯一索引、审计触发器与外键限制、跨部门终态边界，以及两事务 `SKIP LOCKED` 领取、单任务防重复领取、并发过期回收和旧/过期 Worker 结果丢弃；模拟出站指令数保持 `0`。本地入口还验证 Docker 启动失败时不会继续连接端口或清理非本次成功启动的容器。GitHub Actions 将 SQLite 与 PostgreSQL 分 job 运行。前端 Vitest 基线为 `12 passed`，并已验证前端构建。仅有既有 FastAPI `on_event` 弃用警告和 Vite 既有的大 bundle 提示。 |
 
 ## 已实现但与目标仍有差距
 
