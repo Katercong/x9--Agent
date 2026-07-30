@@ -110,6 +110,11 @@ button, input, textarea { font: inherit; }
 .locked-draft-card { border-color: #a6f4c5; background: #f6fef9; }
 .locked-draft-icon { color: #039855; font-size: 18px; }
 .locked-draft-content { margin: 0 !important; padding: 10px; border: 1px solid #d0f7df; border-radius: 8px; background: #fff; white-space: pre-wrap; }
+.manual-delivery-card { border-color: #b2ccff; background: #f8fbff; }
+.manual-delivery-icon { color: #155eef; font-size: 17px; }
+.manual-delivery-details { padding: 10px; border: 1px solid #d0d5dd; border-radius: 8px; background: #fff; }
+.manual-delivery-details .ant-descriptions-item { padding-bottom: 5px; }
+.manual-delivery-details .ant-descriptions-item:last-child { padding-bottom: 0; }
 
 .copilot-panel { overflow: auto; }
 .copilot-panel .panel-heading h5 .anticon { margin-right: 6px; color: #7f56d9; }

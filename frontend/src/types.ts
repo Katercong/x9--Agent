@@ -215,6 +215,93 @@ export interface FailedReviewRetryResponse {
   reply: InboundReply;
 }
 
+export type ManualDeliveryStatus =
+  | "pending_second_confirmation"
+  | "queued"
+  | "sending"
+  | "sent"
+  | "failed"
+  | "unknown"
+  | "expired"
+  | "blocked_by_dnc";
+
+export interface ManualDeliveryAccount {
+  id: string;
+  department_code: string;
+  owner_auth_user_id: string;
+  display_name: string;
+  email: string;
+  is_active: boolean;
+  daily_limit: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ManualDeliverySnapshot {
+  draft_content: string;
+  draft_sha256: string;
+  recipient_email: string | null;
+  subject: string | null;
+  gmail_thread_id: string | null;
+  rfc_message_id: string | null;
+  references: string | null;
+  account_email: string | null;
+  account_owner_auth_user_id: string | null;
+}
+
+export interface ManualDeliveryRequest {
+  id: string;
+  human_review_decision_id: string;
+  creator_id: string;
+  inbound_reply_id: string;
+  department_code: string;
+  status: ManualDeliveryStatus;
+  stored_status: ManualDeliveryStatus;
+  status_reason: string | null;
+  dnc_blocked: boolean;
+  snapshot_available: boolean;
+  snapshot: ManualDeliverySnapshot | null;
+  approved_by_auth_user_id: string;
+  second_confirmed_by_auth_user_id: string | null;
+  second_confirmed_at: string | null;
+  expires_at: string | null;
+  quota_reserved: boolean;
+  quota_reservation_date: string | null;
+  queued_at: string | null;
+  sending_started_at: string | null;
+  completed_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  account: ManualDeliveryAccount | null;
+}
+
+export interface ManualDeliveryEvent {
+  id: string;
+  manual_delivery_request_id: string;
+  department_code: string;
+  actor_id: string | null;
+  event_type: string;
+  metadata: Record<string, unknown>;
+  event_at: string | null;
+  created_at: string | null;
+}
+
+export interface ManualDeliveryRequestResponse {
+  ok: true;
+  delivery: ManualDeliveryRequest;
+  events: ManualDeliveryEvent[];
+}
+
+export interface ManualDeliveryAccountListResponse {
+  items: ManualDeliveryAccount[];
+}
+
+export interface ManualDeliveryConfirmationResponse {
+  ok: true;
+  delivery: ManualDeliveryRequest;
+  message: string;
+}
+
 export type DepartmentRole = "operator" | "reviewer" | "admin";
 
 export interface CurrentPrincipal {

@@ -10,7 +10,7 @@ const adminPrincipal: CurrentPrincipal = {
   user_id: "auth_user_demo_admin",
   display_name: "Demo Admin",
   departments: [{ code: "cross_border", role: "admin" }],
-  capabilities: ["review:read", "review:decide", "run:retry", "dnc:decide", "draft:export"],
+  capabilities: ["review:read", "review:decide", "run:retry", "dnc:decide", "draft:export", "delivery:confirm"],
 };
 
 const standardItem: ReviewQueueItem = {
@@ -170,6 +170,70 @@ function detailFor(item: ReviewQueueItem): ReviewItemDetail {
   };
 }
 
+function manualDeliveryResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    ok: true,
+    delivery: {
+      id: "delivery_approved",
+      human_review_decision_id: "decision_approved",
+      creator_id: "creator_1",
+      inbound_reply_id: "reply_approved",
+      department_code: "cross_border",
+      status: "pending_second_confirmation",
+      stored_status: "pending_second_confirmation",
+      status_reason: null,
+      dnc_blocked: false,
+      snapshot_available: true,
+      snapshot: {
+        draft_content: "Approved final draft for manual handoff.",
+        draft_sha256: "synthetic-hash",
+        recipient_email: "creator@example.test",
+        subject: "Re: Campaign",
+        gmail_thread_id: "gmail-thread-1",
+        rfc_message_id: "<message-1@example.test>",
+        references: "<message-0@example.test>",
+        account_email: null,
+        account_owner_auth_user_id: null,
+      },
+      approved_by_auth_user_id: "auth_user_demo_admin",
+      second_confirmed_by_auth_user_id: null,
+      second_confirmed_at: null,
+      expires_at: "2099-07-30T12:00:00",
+      quota_reserved: false,
+      quota_reservation_date: null,
+      queued_at: null,
+      sending_started_at: null,
+      completed_at: null,
+      created_at: "2026-07-22T12:00:00",
+      updated_at: "2026-07-22T12:00:00",
+      account: null,
+      ...overrides,
+    },
+    events: [{
+      id: "delivery-event-created",
+      manual_delivery_request_id: "delivery_approved",
+      department_code: "cross_border",
+      actor_id: "auth_user_demo_admin",
+      event_type: "delivery_request_created",
+      metadata: {},
+      event_at: "2026-07-22T12:00:00",
+      created_at: "2026-07-22T12:00:00",
+    }],
+  };
+}
+
+const ownDeliveryAccount = {
+  id: "delivery_account_1",
+  department_code: "cross_border",
+  owner_auth_user_id: "auth_user_demo_admin",
+  display_name: "我的 Workspace 邮箱",
+  email: "bd@example.test",
+  is_active: true,
+  daily_limit: 40,
+  created_at: "2026-07-22T12:00:00",
+  updated_at: "2026-07-22T12:00:00",
+};
+
 function jsonResponse(payload: unknown) {
   return Promise.resolve(new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } }));
 }
@@ -304,6 +368,8 @@ describe("OperatorWorkbench", () => {
       const url = String(input);
       if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 1, items: [approvedDraftItem] });
       if (url.includes("/review-items/reply_approved")) return jsonResponse(detailFor(approvedDraftItem));
+      if (url.endsWith("/review-decisions/decision_approved/delivery-request")) return jsonResponse(manualDeliveryResponse());
+      if (url.endsWith("/manual-delivery-accounts/mine")) return jsonResponse({ items: [ownDeliveryAccount] });
       if (url.endsWith("/review-decisions/decision_approved/exports") && init?.method === "POST") {
         return jsonResponse({ ok: true, export: { id: "export_1", delivery_status: "not_sent_by_system" } });
       }
@@ -314,7 +380,8 @@ describe("OperatorWorkbench", () => {
 
     expect(await screen.findByText("Approved final draft for manual handoff.")).toBeInTheDocument();
     expect(screen.queryByLabelText("最终草稿")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "发送（暂未接入）" })).toBeDisabled();
+    expect(await screen.findByText("本地投递二次确认")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /发送/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /复制草稿/ }));
     await user.click(screen.getByRole("button", { name: /下载 .txt/ }));
 
@@ -323,7 +390,103 @@ describe("OperatorWorkbench", () => {
     expect(revokeObjectUrl).toHaveBeenCalledWith("blob:approved-draft");
     const exportCalls = fetchMock.mock.calls.filter(([url, init]) => String(url).endsWith("/review-decisions/decision_approved/exports") && init?.method === "POST");
     expect(exportCalls).toHaveLength(2);
-    expect(fetchMock.mock.calls.some(([url]) => /send/i.test(String(url)))).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => /gmail|send/i.test(String(url)))).toBe(false);
+  });
+
+  it("lets the approving reviewer select only a local account and explicitly queue a locked draft without Gmail", async () => {
+    let queued = false;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 1, items: [approvedDraftItem] });
+      if (url.includes("/review-items/reply_approved")) return jsonResponse(detailFor(approvedDraftItem));
+      if (url.endsWith("/manual-delivery-accounts/mine")) return jsonResponse({ items: [ownDeliveryAccount] });
+      if (url.endsWith("/review-decisions/decision_approved/delivery-request")) {
+        return jsonResponse(manualDeliveryResponse(queued ? {
+          status: "queued",
+          stored_status: "queued",
+          account: ownDeliveryAccount,
+          second_confirmed_by_auth_user_id: "auth_user_demo_admin",
+          second_confirmed_at: "2026-07-22T12:05:00",
+          queued_at: "2026-07-22T12:05:00",
+          quota_reserved: true,
+          quota_reservation_date: "2026-07-22",
+        } : {}));
+      }
+      if (url.endsWith("/review-decisions/decision_approved/delivery-confirmations") && init?.method === "POST") {
+        queued = true;
+        return jsonResponse({
+          ok: true,
+          delivery: manualDeliveryResponse({
+            status: "queued",
+            stored_status: "queued",
+            account: ownDeliveryAccount,
+          }).delivery,
+          message: "delivery was queued locally; no Gmail request was made",
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    renderWorkbench();
+
+    expect(await screen.findByText("收件人")).toBeInTheDocument();
+    expect(screen.getAllByText("creator@example.test").length).toBeGreaterThan(1);
+    const queueButton = screen.getByRole("button", { name: "确认进入投递队列" });
+    await waitFor(() => expect(queueButton).toBeEnabled());
+    expect(screen.getByText("我的 Workspace 邮箱 · bd@example.test")).toBeInTheDocument();
+    await user.click(queueButton);
+    await user.click(await screen.findByRole("button", { name: "确认入队" }));
+
+    await waitFor(() => {
+      const confirmationCall = fetchMock.mock.calls.find(
+        ([url, init]) => String(url).endsWith("/review-decisions/decision_approved/delivery-confirmations") && init?.method === "POST",
+      );
+      expect(confirmationCall).toBeDefined();
+      expect(JSON.parse(confirmationCall?.[1].body as string)).toEqual({ delivery_account_id: "delivery_account_1" });
+    });
+    expect(await screen.findByText("已进入本地投递队列")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => /gmail|send/i.test(String(url)))).toBe(false);
+  });
+
+  it("disables local queue confirmation when the locked snapshot lacks reliable thread references", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 1, items: [approvedDraftItem] });
+      if (url.includes("/review-items/reply_approved")) return jsonResponse(detailFor(approvedDraftItem));
+      if (url.endsWith("/manual-delivery-accounts/mine")) return jsonResponse({ items: [ownDeliveryAccount] });
+      if (url.endsWith("/review-decisions/decision_approved/delivery-request")) {
+        return jsonResponse(manualDeliveryResponse({
+          snapshot: { ...manualDeliveryResponse().delivery.snapshot, gmail_thread_id: null },
+        }));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderWorkbench();
+
+    expect(await screen.findByText("缺少可靠线程引用")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认进入投递队列" })).toBeDisabled();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("delivery-confirmations"))).toBe(false);
+  });
+
+  it("keeps the local delivery request read-only for a non-reviewer and does not load their accounts", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 1, items: [approvedDraftItem] });
+      if (url.includes("/review-items/reply_approved")) return jsonResponse(detailFor(approvedDraftItem));
+      if (url.endsWith("/review-decisions/decision_approved/delivery-request")) return jsonResponse(manualDeliveryResponse());
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderWorkbench({
+      user_id: "auth_user_operator",
+      display_name: "Scoped Operator",
+      departments: [{ code: "cross_border", role: "operator" }],
+      capabilities: ["review:read", "draft:export"],
+    });
+
+    expect(await screen.findByText("当前身份仅可查看")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "确认进入投递队列" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/manual-delivery-accounts/mine"))).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("delivery-confirmations"))).toBe(false);
   });
 
   it("keeps DNC in a terminal review flow with confirmation and rejection, never draft or handoff controls", async () => {
