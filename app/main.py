@@ -63,6 +63,7 @@ from .schemas import (
 )
 from .services import (
     build_followup_context,
+    create_pending_manual_delivery_request,
     classify_reply_result,
     enqueue_followup_run,
     ensure_pending_followup,
@@ -1288,9 +1289,23 @@ def create_human_review_decision(
         actor_id=principal.user_id,
     )
     db.add(decision)
-    # 人工审核完成只结束本次回复的审核，不采纳模型 suggested_status，也不修改达人业务状态。
-    reply.processing_status = "reviewed"
     try:
+        # The decision and its immutable outbox snapshot are one transaction.
+        # A snapshot is only created for an approved draft; it remains pending
+        # a separate human confirmation and never causes an external request.
+        db.flush()
+        if decision.outcome == "approve_draft":
+            creator = db.get(Creator, decision.creator_id)
+            if creator is None:
+                raise HTTPException(status_code=409, detail="human review decision has no creator")
+            create_pending_manual_delivery_request(
+                db,
+                decision=decision,
+                reply=reply,
+                creator=creator,
+            )
+        # 人工审核完成只结束本次回复的审核，不采纳模型 suggested_status，也不修改达人业务状态。
+        reply.processing_status = "reviewed"
         db.commit()
     except IntegrityError:
         db.rollback()

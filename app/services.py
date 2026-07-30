@@ -5,8 +5,9 @@ import os
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -23,6 +24,9 @@ from .models import (
     FollowupTask,
     HumanReviewDecision,
     InboundReply,
+    ManualDeliveryDailyQuota,
+    ManualDeliveryEvent,
+    ManualDeliveryRequest,
     OutreachEmail,
     Product,
     ReferenceMaterial,
@@ -33,6 +37,31 @@ from .schemas import AgentSuggestion, REPLY_CATEGORIES, ReplyClassification
 
 
 WORKER_LEASE_SECONDS = 120
+MANUAL_DELIVERY_CONFIRMATION_TTL = timedelta(hours=24)
+MANUAL_DELIVERY_DEFAULT_DAILY_LIMIT = 40
+MANUAL_DELIVERY_TIMEZONE = ZoneInfo("Asia/Shanghai")
+MANUAL_DELIVERY_STATUSES = frozenset(
+    {
+        "pending_second_confirmation",
+        "queued",
+        "sending",
+        "sent",
+        "failed",
+        "unknown",
+        "expired",
+        "blocked_by_dnc",
+    }
+)
+MANUAL_DELIVERY_TRANSITIONS: dict[str, frozenset[str]] = {
+    "pending_second_confirmation": frozenset({"queued", "expired", "blocked_by_dnc"}),
+    "queued": frozenset({"sending", "blocked_by_dnc"}),
+    "sending": frozenset({"sent", "failed", "unknown"}),
+    "sent": frozenset(),
+    "failed": frozenset(),
+    "unknown": frozenset(),
+    "expired": frozenset(),
+    "blocked_by_dnc": frozenset(),
+}
 
 
 @dataclass(frozen=True)
@@ -332,6 +361,285 @@ def is_creator_contact_blocked(creator: Creator | None) -> bool:
     """DNC 待确认即采取保守阻断，防止误判期间继续生成或导出业务草稿。"""
 
     return creator is not None and creator.do_not_contact_status in {"pending_confirmation", "confirmed"}
+
+
+def build_manual_delivery_snapshot(reply: InboundReply, final_draft: str) -> dict[str, str | None]:
+    """Freeze the only fields a future Gmail reply would be allowed to use.
+
+    The function is deliberately local and side-effect free.  Missing or
+    unreliable source references are represented as null snapshots; a later
+    second-confirmation action must reject them rather than falling back to a
+    new message.
+    """
+
+    metadata = _load_json_object(reply.metadata_json)
+    recipient = _first_non_empty(metadata.get("reply_to"), metadata.get("from_email"), reply.from_email)
+    gmail_thread_id = _first_non_empty(metadata.get("gmail_thread_id"), metadata.get("thread_id"))
+    rfc_message_id = _first_non_empty(
+        metadata.get("rfc_message_id"),
+        metadata.get("rfc_message_id_header"),
+        metadata.get("message_id"),
+    )
+    references = _first_non_empty(metadata.get("references"), metadata.get("references_header"), rfc_message_id)
+    return {
+        "draft_content": final_draft,
+        "recipient_email": recipient,
+        "subject": reply.subject or "",
+        "gmail_thread_id": gmail_thread_id,
+        "rfc_message_id": rfc_message_id,
+        "references": references,
+    }
+
+
+def create_pending_manual_delivery_request(
+    db: Session,
+    *,
+    decision: HumanReviewDecision,
+    reply: InboundReply,
+    creator: Creator,
+    now: datetime | None = None,
+) -> ManualDeliveryRequest:
+    """Create exactly one immutable outbox snapshot for an approved draft.
+
+    The caller owns the transaction.  Therefore a decision and its outbox item
+    either commit together or neither persists.  This function never queues,
+    sends, calls a model, or contacts an external system.
+    """
+
+    if decision.outcome != "approve_draft" or not (decision.final_draft or "").strip():
+        raise ValueError("only an approved non-empty draft can create a manual delivery request")
+    current_time = now or datetime.utcnow()
+    snapshot = build_manual_delivery_snapshot(reply, decision.final_draft)
+    blocked = is_creator_contact_blocked(creator)
+    request = ManualDeliveryRequest(
+        id=new_id("mdr"),
+        department_code=decision.department_code,
+        human_review_decision_id=decision.id,
+        creator_id=decision.creator_id,
+        inbound_reply_id=decision.inbound_reply_id,
+        draft_content_snapshot=snapshot["draft_content"] or "",
+        draft_sha256=_sha256(snapshot["draft_content"] or ""),
+        recipient_email_snapshot=snapshot["recipient_email"],
+        subject_snapshot=snapshot["subject"] or "",
+        gmail_thread_id_snapshot=snapshot["gmail_thread_id"],
+        rfc_message_id_snapshot=snapshot["rfc_message_id"],
+        references_snapshot=snapshot["references"],
+        approved_by_auth_user_id=decision.actor_id,
+        status="blocked_by_dnc" if blocked else "pending_second_confirmation",
+        status_reason="do_not_contact" if blocked else None,
+        expires_at=current_time + MANUAL_DELIVERY_CONFIRMATION_TTL,
+        created_at=current_time,
+    )
+    db.add(request)
+    db.flush()
+    _append_manual_delivery_event(
+        db,
+        request=request,
+        event_type="delivery_blocked_by_dnc" if blocked else "delivery_request_created",
+        actor_id=decision.actor_id,
+        event_at=current_time,
+        metadata={"source": "approved_human_review_decision"},
+    )
+    return request
+
+
+def manual_delivery_snapshot_is_reliable(request: ManualDeliveryRequest) -> bool:
+    """Return whether the immutable snapshot can only be sent as a thread reply."""
+
+    recipient = (request.recipient_email_snapshot or "").strip()
+    thread_id = (request.gmail_thread_id_snapshot or "").strip()
+    message_id = (request.rfc_message_id_snapshot or "").strip()
+    references = (request.references_snapshot or "").strip()
+    return (
+        bool(recipient)
+        and "," not in recipient
+        and ";" not in recipient
+        and recipient.count("@") == 1
+        and not any(character.isspace() for character in recipient)
+        and bool(thread_id)
+        and bool(message_id)
+        and message_id.startswith("<")
+        and message_id.endswith(">")
+        and bool(references)
+    )
+
+
+def manual_delivery_quota_date(value: datetime) -> date:
+    """Map a UTC-naive persistence timestamp to the product's Shanghai day."""
+
+    utc_value = value.replace(tzinfo=timezone.utc)
+    return utc_value.astimezone(MANUAL_DELIVERY_TIMEZONE).date()
+
+
+def transition_manual_delivery_request(
+    db: Session,
+    *,
+    request: ManualDeliveryRequest,
+    target_status: str,
+    actor_id: str | None,
+    now: datetime | None = None,
+    reason: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Apply one explicit outbox state transition and append its audit event.
+
+    This domain primitive performs no I/O beyond its caller's database session.
+    It deliberately has no route that can transition directly to ``sent``.
+    """
+
+    if target_status not in MANUAL_DELIVERY_STATUSES:
+        raise ValueError("unknown manual delivery status")
+    if target_status not in MANUAL_DELIVERY_TRANSITIONS[request.status]:
+        raise ValueError(f"manual delivery cannot transition from {request.status} to {target_status}")
+    current_time = now or datetime.utcnow()
+    previous_status = request.status
+    request.status = target_status
+    request.status_reason = reason
+    if target_status == "queued":
+        request.queued_at = current_time
+    elif target_status == "sending":
+        request.sending_started_at = current_time
+    elif target_status in {"sent", "failed", "unknown", "expired", "blocked_by_dnc"}:
+        request.completed_at = current_time
+    if target_status in {"expired", "blocked_by_dnc"} and previous_status != "sending":
+        release_manual_delivery_quota(db, request=request)
+    _append_manual_delivery_event(
+        db,
+        request=request,
+        event_type=f"delivery_{target_status}",
+        actor_id=actor_id,
+        event_at=current_time,
+        metadata={"previous_status": previous_status, **(metadata or {})},
+    )
+
+
+def expire_due_deliveries(db: Session, *, now: datetime | None = None) -> list[str]:
+    """Expire a request whose 24-hour second-confirmation window elapsed.
+
+    A future Delivery Worker may call this function periodically.  It does not
+    schedule itself and it never invokes Gmail.
+    """
+
+    current_time = now or datetime.utcnow()
+    due = list(
+        db.scalars(
+            select(ManualDeliveryRequest)
+            .where(
+                ManualDeliveryRequest.status == "pending_second_confirmation",
+                ManualDeliveryRequest.expires_at <= current_time,
+            )
+            .with_for_update()
+        ).all()
+    )
+    for request in due:
+        transition_manual_delivery_request(
+            db,
+            request=request,
+            target_status="expired",
+            actor_id=None,
+            now=current_time,
+            reason="second_confirmation_expired",
+        )
+    return [request.id for request in due]
+
+
+def block_manual_delivery_requests_for_creator(
+    db: Session,
+    *,
+    creator_id: str,
+    actor_id: str | None,
+    now: datetime | None = None,
+) -> list[str]:
+    """DNC safety boundary: block every still pre-send outbox item for one creator."""
+
+    current_time = now or datetime.utcnow()
+    pending = list(
+        db.scalars(
+            select(ManualDeliveryRequest)
+            .where(
+                ManualDeliveryRequest.creator_id == creator_id,
+                ManualDeliveryRequest.status.in_(("pending_second_confirmation", "queued")),
+            )
+            .with_for_update()
+        ).all()
+    )
+    for request in pending:
+        transition_manual_delivery_request(
+            db,
+            request=request,
+            target_status="blocked_by_dnc",
+            actor_id=actor_id,
+            now=current_time,
+            reason="do_not_contact",
+        )
+    return [request.id for request in pending]
+
+
+def release_manual_delivery_quota(db: Session, *, request: ManualDeliveryRequest) -> None:
+    """Release a pre-send reservation exactly once; a sending item keeps capacity."""
+
+    if not request.quota_reserved:
+        return
+    if request.manual_delivery_account_id is None or request.quota_reservation_date is None:
+        raise ValueError("reserved manual delivery request has incomplete quota references")
+    quota = db.scalar(
+        select(ManualDeliveryDailyQuota)
+        .where(
+            ManualDeliveryDailyQuota.manual_delivery_account_id == request.manual_delivery_account_id,
+            ManualDeliveryDailyQuota.quota_date == request.quota_reservation_date,
+        )
+        .with_for_update()
+    )
+    if quota is None or quota.reserved_count < 1:
+        raise ValueError("manual delivery quota reservation is inconsistent")
+    quota.reserved_count -= 1
+    request.quota_reserved = False
+    request.quota_reservation_date = None
+
+
+def _append_manual_delivery_event(
+    db: Session,
+    *,
+    request: ManualDeliveryRequest,
+    event_type: str,
+    actor_id: str | None,
+    event_at: datetime,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    db.add(
+        ManualDeliveryEvent(
+            id=new_id("mde"),
+            manual_delivery_request_id=request.id,
+            department_code=request.department_code,
+            actor_id=actor_id,
+            event_type=event_type,
+            metadata_json=json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
+            event_at=event_at,
+        )
+    )
+
+
+def _first_non_empty(*values: object) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _load_json_object(value: str | None) -> dict[str, object]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _sha256(value: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def claim_next_queued_run(db: Session, *, worker_id: str = "manual") -> ClaimedRun | None:

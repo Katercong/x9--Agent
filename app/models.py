@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, event, func, text
+from sqlalchemy import CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, event, func, inspect, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -472,3 +472,158 @@ class DraftExportRecord(Base):
     actor_id: Mapped[str] = mapped_column(String(120), index=True)
     exported_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
     created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+class ManualDeliveryAccount(Base):
+    """Credential-free directory entry for a future owner-bound Gmail account.
+
+    This table intentionally stores only routing, ownership and quota metadata.
+    OAuth credentials and any Gmail client configuration are outside this domain.
+    """
+
+    __tablename__ = "manual_delivery_accounts"
+    __table_args__ = (
+        UniqueConstraint("email", name="uq_manual_delivery_accounts_email"),
+        CheckConstraint("daily_limit >= 1", name="ck_manual_delivery_accounts_positive_daily_limit"),
+        Index("ix_manual_delivery_accounts_department_owner_active", "department_code", "owner_auth_user_id", "is_active"),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    department_code: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    owner_auth_user_id: Mapped[str] = mapped_column(
+        String(120), ForeignKey("auth_users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False, index=True)
+    daily_limit: Mapped[int] = mapped_column(Integer, default=40, nullable=False)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), nullable=False, index=True)
+    updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class ManualDeliveryDailyQuota(Base):
+    """One account's reserved delivery capacity for one Asia/Shanghai calendar day."""
+
+    __tablename__ = "manual_delivery_daily_quotas"
+    __table_args__ = (
+        UniqueConstraint("manual_delivery_account_id", "quota_date", name="uq_manual_delivery_daily_quotas_account_date"),
+        CheckConstraint("reserved_count >= 0", name="ck_manual_delivery_daily_quotas_non_negative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    manual_delivery_account_id: Mapped[str] = mapped_column(
+        String(120), ForeignKey("manual_delivery_accounts.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    quota_date: Mapped[object] = mapped_column(Date, nullable=False, index=True)
+    reserved_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), nullable=False, index=True)
+    updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class ManualDeliveryRequest(Base):
+    """Auditable, owner-confirmed outbox item; it never invokes an external channel."""
+
+    __tablename__ = "manual_delivery_requests"
+    __table_args__ = (
+        UniqueConstraint("human_review_decision_id", name="uq_manual_delivery_requests_decision"),
+        CheckConstraint(
+            "status IN ('pending_second_confirmation', 'queued', 'sending', 'sent', 'failed', 'unknown', 'expired', 'blocked_by_dnc')",
+            name="ck_manual_delivery_requests_status",
+        ),
+        Index("ix_manual_delivery_requests_department_status_created", "department_code", "status", "created_at"),
+        Index("ix_manual_delivery_requests_creator_status", "creator_id", "status"),
+        Index("ix_manual_delivery_requests_expiry_status", "expires_at", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    department_code: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    human_review_decision_id: Mapped[str] = mapped_column(
+        String(120), ForeignKey("human_review_decisions.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    creator_id: Mapped[str] = mapped_column(
+        String(120), ForeignKey("creators.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    inbound_reply_id: Mapped[str] = mapped_column(
+        String(120), ForeignKey("inbound_replies.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    manual_delivery_account_id: Mapped[str | None] = mapped_column(
+        String(120), ForeignKey("manual_delivery_accounts.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    draft_content_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
+    draft_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    recipient_email_snapshot: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    subject_snapshot: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    gmail_thread_id_snapshot: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    rfc_message_id_snapshot: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    references_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approved_by_auth_user_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    second_confirmed_by_auth_user_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    account_email_snapshot: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    account_owner_auth_user_id_snapshot: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="pending_second_confirmation", nullable=False, index=True)
+    status_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    expires_at: Mapped[object] = mapped_column(DateTime, nullable=False, index=True)
+    quota_reserved: Mapped[bool] = mapped_column(default=False, nullable=False, index=True)
+    quota_reservation_date: Mapped[object | None] = mapped_column(Date, nullable=True, index=True)
+    second_confirmed_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
+    queued_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
+    sending_started_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
+    completed_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), nullable=False, index=True)
+    updated_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class ManualDeliveryEvent(Base):
+    """Append-only outbox audit event; it contains no message body or credential."""
+
+    __tablename__ = "manual_delivery_events"
+    __table_args__ = (
+        Index("ix_manual_delivery_events_request_event_at", "manual_delivery_request_id", "event_at"),
+        Index("ix_manual_delivery_events_department_event_at", "department_code", "event_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    manual_delivery_request_id: Mapped[str] = mapped_column(
+        String(120), ForeignKey("manual_delivery_requests.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    department_code: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    actor_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    event_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), nullable=False, index=True)
+    created_at: Mapped[object] = mapped_column(DateTime, server_default=func.now(), nullable=False, index=True)
+
+
+@event.listens_for(ManualDeliveryEvent, "before_update")
+def _prevent_manual_delivery_event_update(_mapper: object, _connection: object, _target: ManualDeliveryEvent) -> None:
+    raise ValueError("manual delivery events are immutable")
+
+
+@event.listens_for(ManualDeliveryEvent, "before_delete")
+def _prevent_manual_delivery_event_delete(_mapper: object, _connection: object, _target: ManualDeliveryEvent) -> None:
+    raise ValueError("manual delivery events are immutable")
+
+
+_MANUAL_DELIVERY_IMMUTABLE_SNAPSHOT_FIELDS = (
+    "human_review_decision_id",
+    "creator_id",
+    "inbound_reply_id",
+    "draft_content_snapshot",
+    "draft_sha256",
+    "recipient_email_snapshot",
+    "subject_snapshot",
+    "gmail_thread_id_snapshot",
+    "rfc_message_id_snapshot",
+    "references_snapshot",
+    "approved_by_auth_user_id",
+    "expires_at",
+)
+
+
+@event.listens_for(ManualDeliveryRequest, "before_update")
+def _prevent_manual_delivery_snapshot_mutation(_mapper: object, _connection: object, target: ManualDeliveryRequest) -> None:
+    """Keep the original reviewed draft and reply references immutable to ORM callers."""
+
+    state = inspect(target)
+    if any(state.attrs[field].history.has_changes() for field in _MANUAL_DELIVERY_IMMUTABLE_SNAPSHOT_FIELDS):
+        raise ValueError("manual delivery request snapshots are immutable")
