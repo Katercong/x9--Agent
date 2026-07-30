@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from .database import get_db, init_db
-from .department_codes import normalised_department_code_expression, validate_department_code
+from .department_codes_current import normalised_postgresql_department_code_expression, validate_department_code
 from .identity import ensure_capability, get_current_principal
 from .models import (
     AgentFollowupRun,
@@ -1448,11 +1448,10 @@ def _department_code_is_reserved(db: Session, department_code: str) -> bool:
         (HumanReviewDecision, HumanReviewDecision.department_code),
         (DraftExportRecord, DraftExportRecord.department_code),
     )
-    dialect_name = db.get_bind().dialect.name
     matches = union(
         *(
             select(model.id.label("record_id")).where(
-                normalised_department_code_expression(column, dialect_name=dialect_name) == department_code
+                normalised_postgresql_department_code_expression(column) == department_code
             )
             for model, column in sources
         )

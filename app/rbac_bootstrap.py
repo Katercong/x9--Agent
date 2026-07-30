@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from .authorization import Role
 from .database import SessionLocal
-from .department_codes import validate_department_code
+from .department_codes_current import validate_department_code
 from .models import AuthUser, AuthorizationAuditEvent, Department, UserDepartmentMembership
 from .services import new_id
 

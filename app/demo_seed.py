@@ -301,8 +301,8 @@ def seed_demo_data(db: Session) -> int:
         "demo_creator_approved",
         **_creator_values(handle="demo_approved", display_name="Fran Demo", email="fran.demo@example.invalid"),
     )
-    # 模型间没有 ORM relationship 声明；显式分段 flush 以保证 SQLite 与
-    # PostgreSQL 都先拥有被外键引用的达人记录。
+    # Models have no ORM relationship declarations; flush referenced creators
+    # before writing records with foreign keys.
     db.flush()
 
     standard_at = DEMO_NOW + timedelta(minutes=10)

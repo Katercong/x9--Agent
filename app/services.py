@@ -308,7 +308,7 @@ def enqueue_followup_run(
         llm_status="pending",
         execution_status="queued",
         created_by=created_by,
-        # SQLite 的 CURRENT_TIMESTAMP 精度只有秒；显式写入微秒时间避免连续重跑时“最新”顺序不确定。
+        # Persist microsecond precision so ordering stays deterministic across rapid retries.
         created_at=datetime.utcnow(),
     )
     db.add(row)
@@ -342,69 +342,26 @@ def claim_next_queued_run(db: Session, *, worker_id: str = "manual") -> ClaimedR
     claimed_at = datetime.utcnow()
     lease_expires_at = claimed_at + timedelta(seconds=WORKER_LEASE_SECONDS)
 
-    if db.get_bind().dialect.name == "postgresql":
-        row = db.execute(
-            _postgres_claim_next_queued_run_statement(
-                claim_token=claim_token,
-                worker_id=worker_id,
-                claimed_at=claimed_at,
-                lease_expires_at=lease_expires_at,
-            )
-        ).mappings().one_or_none()
-        if row is None or not row["inbound_reply_id"] or not row["department_code"]:
-            return None
-        claimed = ClaimedRun(
-            run_id=str(row["run_id"]),
-            inbound_reply_id=str(row["inbound_reply_id"]),
+    row = db.execute(
+        _postgres_claim_next_queued_run_statement(
             claim_token=claim_token,
             worker_id=worker_id,
-        )
-        _append_worker_run_event(
-            db,
-            run_id=claimed.run_id,
-            department_code=str(row["department_code"]),
-            worker_id=worker_id,
-            event_type="claim_acquired",
-            event_at=claimed_at,
-            metadata={"lease_seconds": WORKER_LEASE_SECONDS},
-        )
-        return claimed
-
-    # SQLite has no row-level SKIP LOCKED equivalent.  Keep the existing
-    # compare-and-swap fallback for unit tests and the local MVP: only the
-    # session that changes queued -> running owns the generated claim token.
-    candidate = db.execute(
-        select(AgentFollowupRun.id, AgentFollowupRun.inbound_reply_id, AgentFollowupRun.department_code)
-        .where(AgentFollowupRun.execution_status == "queued")
-        .order_by(AgentFollowupRun.created_at.asc(), AgentFollowupRun.id.asc())
-        .limit(1)
-    ).mappings().one_or_none()
-    if candidate is None or not candidate["inbound_reply_id"] or not candidate["department_code"]:
-        return None
-    claimed = db.execute(
-        update(AgentFollowupRun)
-        .where(AgentFollowupRun.id == candidate["id"])
-        .where(AgentFollowupRun.execution_status == "queued")
-        .values(
-            execution_status="running",
-            started_at=claimed_at,
-            claim_token=claim_token,
-            claimed_by_worker_id=worker_id,
+            claimed_at=claimed_at,
             lease_expires_at=lease_expires_at,
         )
-    )
-    if claimed.rowcount != 1:
+    ).mappings().one_or_none()
+    if row is None or not row["inbound_reply_id"] or not row["department_code"]:
         return None
     claimed_run = ClaimedRun(
-        run_id=str(candidate["id"]),
-        inbound_reply_id=str(candidate["inbound_reply_id"]),
+        run_id=str(row["run_id"]),
+        inbound_reply_id=str(row["inbound_reply_id"]),
         claim_token=claim_token,
         worker_id=worker_id,
     )
     _append_worker_run_event(
         db,
         run_id=claimed_run.run_id,
-        department_code=str(candidate["department_code"]),
+        department_code=str(row["department_code"]),
         worker_id=worker_id,
         event_type="claim_acquired",
         event_at=claimed_at,
@@ -513,13 +470,7 @@ def recover_expired_runs(db: Session) -> int:
     """将过期 running 任务标为 worker_lost，保留给人工处理且不自动重跑。"""
 
     now = datetime.utcnow()
-    if db.get_bind().dialect.name == "postgresql":
-        statement = _postgres_expired_running_runs_statement(now=now)
-    else:
-        statement = _sqlite_expired_running_runs_statement(now=now)
-    runs = list(
-        db.scalars(statement).all()
-    )
+    runs = list(db.scalars(_postgres_expired_running_runs_statement(now=now)).all())
     recovered = 0
     for run in runs:
         duration_ms = int((now - run.started_at).total_seconds() * 1000) if run.started_at else 0
@@ -559,7 +510,9 @@ def recover_expired_runs(db: Session) -> int:
     return recovered
 
 
-def _sqlite_expired_running_runs_statement(*, now: datetime):
+def _postgres_expired_running_runs_statement(*, now: datetime):
+    """Lock only recoverable PostgreSQL rows so concurrent workers skip each other."""
+
     return (
         select(AgentFollowupRun)
         .where(AgentFollowupRun.execution_status == "running")
@@ -570,13 +523,8 @@ def _sqlite_expired_running_runs_statement(*, now: datetime):
             AgentFollowupRun.created_at.asc(),
             AgentFollowupRun.id.asc(),
         )
+        .with_for_update(skip_locked=True)
     )
-
-
-def _postgres_expired_running_runs_statement(*, now: datetime):
-    """Lock only recoverable PostgreSQL rows so concurrent workers skip each other."""
-
-    return _sqlite_expired_running_runs_statement(now=now).with_for_update(skip_locked=True)
 
 
 def process_next_queued_run(db: Session, *, worker_id: str = "manual") -> AgentFollowupRun | None:

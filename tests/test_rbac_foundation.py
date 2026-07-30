@@ -26,7 +26,7 @@ from sqlalchemy.schema import CreateTable
 
 from app.authorization import Capability, DepartmentMembership, Principal, Role, principal_from_memberships
 from app.database import SessionLocal, get_db
-from app import department_codes, department_codes_v1
+from app import department_codes, department_codes_current, department_codes_v1
 from app.demo_seed import DEMO_ACCESS_USERS, DEMO_DEPARTMENT, DEMO_REVIEWER_AUTH_USER_ID, seed_demo_data
 from app.identity import ensure_capability, get_current_principal
 from app.main import app
@@ -1099,6 +1099,8 @@ def test_historical_department_code_migration_exports_are_frozen_v1():
     assert department_codes.normalise_department_code is department_codes_v1.normalise_department_code
     assert department_codes.validate_department_code is department_codes_v1.validate_department_code
     assert department_codes.normalised_department_code_expression is department_codes_v1.normalised_department_code_expression
+    assert department_codes_current.validate_department_code is not department_codes_v1.validate_department_code
+    assert department_codes_current.normalised_postgresql_department_code_expression is not None
 
 
 def test_access_department_creation_maps_concurrent_unique_conflict_to_409(monkeypatch: pytest.MonkeyPatch):

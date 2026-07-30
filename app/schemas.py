@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .department_codes import validate_department_code
+from .department_codes_current import validate_department_code
 
 
 REPLY_CATEGORIES = {
