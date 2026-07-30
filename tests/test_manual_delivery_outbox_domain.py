@@ -6,6 +6,7 @@ import threading
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import DatabaseError
@@ -13,6 +14,7 @@ from sqlalchemy.exc import DatabaseError
 from app.authorization import DepartmentMembership, Role, principal_from_memberships
 from app.database import SessionLocal
 from app.identity import get_current_principal
+import app.main as main_module
 from app.main import app
 from app.models import (
     AgentFollowupRun,
@@ -40,6 +42,7 @@ from app.services import (
     reserve_and_queue_manual_delivery_request,
     transition_manual_delivery_request,
 )
+from app.schemas import ManualDeliveryConfirmationCreateIn
 
 
 @pytest.fixture
@@ -781,6 +784,112 @@ def test_concurrent_second_confirmation_reserves_only_one_queued_request():
             select(func.count(ManualDeliveryEvent.id)).where(ManualDeliveryEvent.manual_delivery_request_id == request_id)
         ) == 2
         quota = db.scalar(select(ManualDeliveryDailyQuota).where(ManualDeliveryDailyQuota.manual_delivery_account_id == account_id))
+        assert quota is not None and quota.reserved_count == 1
+        assert db.scalar(select(func.count(SimulatedOutboundInstruction.id))) == 0
+
+
+def test_concurrent_confirmations_for_different_requests_compete_for_one_account_daily_slot(monkeypatch):
+    with SessionLocal() as db:
+        _provision_delivery_access(db, user_id="outbox_reviewer", role=Role.REVIEWER)
+        _creator_one, _reply_one, decision_one, request_one = _approved_decision(
+            db,
+            suffix="account-quota-one",
+            metadata={"gmail_thread_id": "thread-account-quota-one", "rfc_message_id": "<account-quota-one@example.test>"},
+        )
+        _creator_two, _reply_two, decision_two, request_two = _approved_decision(
+            db,
+            suffix="account-quota-two",
+            metadata={"gmail_thread_id": "thread-account-quota-two", "rfc_message_id": "<account-quota-two@example.test>"},
+        )
+        account = ManualDeliveryAccount(
+            id="account_outbox_daily_limit_one",
+            department_code="cross_border",
+            owner_auth_user_id="outbox_reviewer",
+            display_name="One-slot mailbox",
+            email="daily-limit-one@example.test",
+            daily_limit=1,
+        )
+        db.add(account)
+        db.commit()
+        account_id = account.id
+        decision_ids = (decision_one.id, decision_two.id)
+        request_ids = (request_one.id, request_two.id)
+
+    first_account_lock_acquired = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    second_finished = threading.Event()
+    outcomes: list[tuple[str, int, str | None]] = []
+    outcome_lock = threading.Lock()
+    original_reserve = main_module.reserve_and_queue_manual_delivery_request
+    reserve_call_count = 0
+
+    def hold_first_account_lock(*args, **kwargs):
+        nonlocal reserve_call_count
+        with outcome_lock:
+            reserve_call_count += 1
+            should_hold = reserve_call_count == 1
+        if should_hold:
+            # The route locks the account row before it calls this service.
+            first_account_lock_acquired.set()
+            assert release_first.wait(timeout=10)
+        return original_reserve(*args, **kwargs)
+
+    monkeypatch.setattr(main_module, "reserve_and_queue_manual_delivery_request", hold_first_account_lock)
+    principal = principal_from_memberships(
+        user_id="outbox_reviewer",
+        identity_source="test",
+        external_subject="outbox-reviewer",
+        display_name="Outbox Reviewer",
+        memberships=[DepartmentMembership("cross_border", Role.REVIEWER)],
+    )
+
+    def confirm(decision_id: str, *, is_second: bool) -> None:
+        if is_second:
+            second_started.set()
+        with SessionLocal() as db:
+            try:
+                response = main_module.confirm_manual_delivery_request(
+                    decision_id=decision_id,
+                    body=ManualDeliveryConfirmationCreateIn(delivery_account_id=account_id),
+                    db=db,
+                    principal=principal,
+                )
+                outcome = (decision_id, 200, response["delivery"]["status"])
+            except HTTPException as exc:
+                outcome = (decision_id, exc.status_code, None)
+            finally:
+                db.close()
+        with outcome_lock:
+            outcomes.append(outcome)
+        if is_second:
+            second_finished.set()
+
+    first = threading.Thread(target=confirm, args=(decision_ids[0],), kwargs={"is_second": False})
+    second = threading.Thread(target=confirm, args=(decision_ids[1],), kwargs={"is_second": True})
+    first.start()
+    assert first_account_lock_acquired.wait(timeout=10)
+    second.start()
+    assert second_started.wait(timeout=10)
+    # It can lock its own request, but it cannot pass the shared account lock.
+    assert second_finished.wait(timeout=0.2) is False
+    release_first.set()
+    first.join(timeout=10)
+    second.join(timeout=10)
+    assert not first.is_alive() and not second.is_alive()
+    assert sorted((status for _decision_id, status, _delivery_status in outcomes)) == [200, 409]
+    assert [delivery_status for _decision_id, status, delivery_status in outcomes if status == 200] == ["queued"]
+
+    with SessionLocal() as db:
+        requests = db.scalars(
+            select(ManualDeliveryRequest)
+            .where(ManualDeliveryRequest.id.in_(request_ids))
+            .order_by(ManualDeliveryRequest.id.asc())
+        ).all()
+        assert sorted(request.status for request in requests) == ["pending_second_confirmation", "queued"]
+        quota = db.scalar(
+            select(ManualDeliveryDailyQuota).where(ManualDeliveryDailyQuota.manual_delivery_account_id == account_id)
+        )
         assert quota is not None and quota.reserved_count == 1
         assert db.scalar(select(func.count(SimulatedOutboundInstruction.id))) == 0
 
