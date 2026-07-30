@@ -19,7 +19,7 @@ os.environ["SILICONFLOW_API_KEY"] = ""
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
-from sqlalchemy import delete, event, func, select  # noqa: E402
+from sqlalchemy import delete, event, func, inspect, select  # noqa: E402
 from sqlalchemy.dialects import postgresql, sqlite  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 
@@ -3650,6 +3650,106 @@ def test_expired_worker_claim_is_discarded_without_model_call_or_state_overwrite
     assert completed.status_code == 200
     assert completed.json()["worker_events"][-1]["event_type"] == "claim_result_discarded"
     assert completed.json()["worker_events"][-1]["metadata"] == {"reason": "lease_expired"}
+
+
+def test_completion_write_discards_claim_when_lease_expires_after_precheck(monkeypatch):
+    """最终 UPDATE 必须再次验证 lease，封住预检查与写回之间的竞态窗口。"""
+
+    client = TestClient(app)
+    _create_creator(client, "creator_completion_lease_write_race")
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_completion_lease_write_race", "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert queued.status_code == 200, queued.text
+    run_id = queued.json()["run"]["id"]
+    with SessionLocal() as db:
+        claimed = services.claim_next_queued_run(db, worker_id="worker_completion_lease_race")
+        assert claimed is not None
+        context = services.build_followup_context(db, claimed.inbound_reply_id)
+        db.commit()
+    prompt_package = services.build_prompt_package(context)
+
+    original_discard_reason = services._claim_discard_reason
+
+    def expire_lease_after_precheck(run, current_claimed, *, now):
+        reason = original_discard_reason(run, current_claimed, now=now)
+        if reason is None:
+            assert run is not None
+            run.lease_expires_at = now - timedelta(seconds=1)
+            session = inspect(run).session
+            assert session is not None
+            session.flush()
+        return reason
+
+    monkeypatch.setattr(services, "_claim_discard_reason", expire_lease_after_precheck)
+
+    assert (
+        services._complete_claimed_run(
+            claimed,
+            context=context,
+            prompt_package=prompt_package,
+            suggestion=None,
+            raw_output="{}",
+            llm_status="invalid_json",
+            execution_status="failed",
+            validation_error="test completion race",
+        )
+        is None
+    )
+
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, run_id)
+        assert run is not None
+        assert run.execution_status == "running"
+        assert run.claim_token == claimed.claim_token
+    completed = client.get(f"/api/followup-agent/runs/{run_id}")
+    assert completed.status_code == 200
+    assert completed.json()["worker_events"][-1]["event_type"] == "claim_result_discarded"
+    assert completed.json()["worker_events"][-1]["metadata"] == {"reason": "conditional_completion_write_lost"}
+
+
+def test_unexpected_error_write_discards_claim_when_lease_expires_after_precheck(monkeypatch):
+    """异常回写也必须使用同一 lease 条件，不能把过期任务写为最终失败。"""
+
+    client = TestClient(app)
+    _create_creator(client, "creator_unexpected_lease_write_race")
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_unexpected_lease_write_race", "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert queued.status_code == 200, queued.text
+    run_id = queued.json()["run"]["id"]
+    with SessionLocal() as db:
+        claimed = services.claim_next_queued_run(db, worker_id="worker_unexpected_lease_race")
+        assert claimed is not None
+        db.commit()
+
+    original_discard_reason = services._claim_discard_reason
+
+    def expire_lease_after_precheck(run, current_claimed, *, now):
+        reason = original_discard_reason(run, current_claimed, now=now)
+        if reason is None:
+            assert run is not None
+            run.lease_expires_at = now - timedelta(seconds=1)
+            session = inspect(run).session
+            assert session is not None
+            session.flush()
+        return reason
+
+    monkeypatch.setattr(services, "_claim_discard_reason", expire_lease_after_precheck)
+
+    assert services.persist_unexpected_claim_error(claimed, RuntimeError("test unexpected race")) is None
+
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, run_id)
+        assert run is not None
+        assert run.execution_status == "running"
+        assert run.claim_token == claimed.claim_token
+    completed = client.get(f"/api/followup-agent/runs/{run_id}")
+    assert completed.status_code == 200
+    assert completed.json()["worker_events"][-1]["event_type"] == "claim_result_discarded"
+    assert completed.json()["worker_events"][-1]["metadata"] == {"reason": "conditional_unexpected_error_write_lost"}
 
 
 def test_worker_persists_unexpected_context_error_without_waiting_for_lease(monkeypatch):

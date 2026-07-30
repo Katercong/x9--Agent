@@ -702,7 +702,7 @@ def _complete_claimed_run(
     block_reason: str | None = None,
     context_warnings: list[str] | None = None,
 ) -> AgentFollowupRun | None:
-    """以 id、claim_token 和 running 条件原子写回一次已领取任务的结果。"""
+    """以 id、claim_token、running 和有效 lease 条件原子写回一次已领取任务的结果。"""
 
     if suggestion is not None:
         review_reasons = list(dict.fromkeys([*suggestion.review_reasons, *(context_warnings or []), "human_approval_required"]))
@@ -733,6 +733,8 @@ def _complete_claimed_run(
             .where(AgentFollowupRun.id == claimed.run_id)
             .where(AgentFollowupRun.execution_status == "running")
             .where(AgentFollowupRun.claim_token == claimed.claim_token)
+            .where(AgentFollowupRun.lease_expires_at.is_not(None))
+            .where(AgentFollowupRun.lease_expires_at > now)
             .values(
                 reply_category=suggestion.reply_category if suggestion else str(context.get("reply_category") or "unclear"),
                 suggested_status=suggestion.suggested_status if suggestion else None,
@@ -810,6 +812,8 @@ def persist_unexpected_claim_error(claimed: ClaimedRun, error: Exception) -> Age
             .where(AgentFollowupRun.id == claimed.run_id)
             .where(AgentFollowupRun.execution_status == "running")
             .where(AgentFollowupRun.claim_token == claimed.claim_token)
+            .where(AgentFollowupRun.lease_expires_at.is_not(None))
+            .where(AgentFollowupRun.lease_expires_at > now)
             .values(
                 llm_status="worker_unexpected_error",
                 execution_status="failed",
