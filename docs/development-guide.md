@@ -62,18 +62,16 @@ python -m app.worker --worker-id local-worker-a
 ### 3. 测试与评测
 
 ```powershell
-python -m pytest -q
+python -m pytest -q -m "not postgres_integration"
 ```
 
-PostgreSQL 并发领取集成测试只针对可丢弃的隔离数据库显式执行；不要把日常演示库或生产库填入该变量：
+PostgreSQL 核心集成套件只针对可丢弃的隔离数据库显式执行。PowerShell 入口会启动专用 `postgres:16-alpine` 容器、创建随机 `x9_replychat_test_*` 数据库并在 `finally` 中删除数据库、容器和测试 volume；不会读取 `.env`、不会启动 API/Worker，也不会调用模型或发送能力：
 
 ```powershell
-$env:RUN_POSTGRES_INTEGRATION='1'
-$env:POSTGRES_INTEGRATION_DATABASE_URL='<本机隔离 PostgreSQL URL>'
-python -m pytest -q tests/test_postgres_multi_worker_claim.py
-Remove-Item Env:RUN_POSTGRES_INTEGRATION
-Remove-Item Env:POSTGRES_INTEGRATION_DATABASE_URL
+.\scripts\run-postgres-tests.ps1
 ```
+
+不要直接运行 `pytest -m postgres_integration`，也不要将开发、演示或生产库 URL 填入 `POSTGRES_TEST_ADMIN_URL`。运行器只接受专用 PostgreSQL 服务的 `postgres` 控制库，并只删除本次生成的随机测试库。CI 使用相同的 Python 运行器和公开的测试专用凭据；详细隔离规则见 [postgresql.md](postgresql.md#postgresql-专用测试)。
 
 真实模型评测需要显式传入 `--live`，结果只写入被 Git 忽略的 `evaluation_reports/`，不写业务数据库：
 

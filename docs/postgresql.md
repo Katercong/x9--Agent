@@ -66,10 +66,23 @@ docker compose stop postgres
 docker compose start postgres
 alembic current
 alembic upgrade head
-python -m pytest -q
+python -m pytest -q -m "not postgres_integration"
 ```
 
 所有 schema 修改必须先新增 Alembic migration，再执行 `alembic upgrade head`。应用启动不会自动建表或修改 PostgreSQL schema。
+
+## PostgreSQL 专用测试
+
+SQLite 快速回归与真实 PostgreSQL 集成测试刻意分开。前者不依赖 Docker；后者覆盖高风险的迁移、部分唯一约束、审计限制、跨部门终态边界和多 Worker `SKIP LOCKED` 领取，不会双跑全部 API 用例。
+
+```powershell
+python -m pytest -q -m "not postgres_integration"
+.\scripts\run-postgres-tests.ps1
+```
+
+`run-postgres-tests.ps1` 只启动 `compose.postgres-test.yaml` 中的专用 PostgreSQL 服务（默认 loopback 端口 `55432`），再调用 `scripts/run_postgres_tests.py`。运行器仅接受该服务的 `postgres` 控制库 URL，创建随机 `x9_replychat_test_*` 数据库、先执行 `alembic upgrade head`，再将生成的数据库 URL 传给带 `postgres_integration` marker 的测试。无论成功或失败，都会断开连接并删除本次数据库；PowerShell 包装器还会删除测试容器、网络和 volume。
+
+该过程不读取 `.env`、不使用开发/演示数据库、不启动 API/Worker、不调用模型，也不创建任何出站指令。请勿直接运行 `pytest -m postgres_integration`：没有专用运行器时测试会明确失败，避免误指向非测试数据库后静默通过。GitHub Actions 使用同一 Python 运行器配合独立 `postgres:16-alpine` service 和公开的测试专用凭据。
 
 ## 当前迁移的完整性约束
 
@@ -93,4 +106,4 @@ docker compose up --build -d
 
 ## 生产演进提醒
 
-生产环境必须使用受管 PostgreSQL、受管 Secrets、备份恢复、监控和告警。当前 API 已独立容器运行，Worker 也有可选容器 profile；多 Worker 原子领取、渠道同步、镜像发布、监控和生产运行策略尚未实现。多 Worker 领取任务时应采用 PostgreSQL 的 `FOR UPDATE SKIP LOCKED` 或等价原子机制。
+生产环境必须使用受管 PostgreSQL、受管 Secrets、备份恢复、监控和告警。当前 API 已独立容器运行，Worker 也有可选容器 profile；多 Worker 已通过 PostgreSQL `FOR UPDATE SKIP LOCKED` 实现事务级原子领取，并由 SQLite 快速回归、真实 PostgreSQL 核心套件和 CI 分别验证。渠道同步、镜像发布、监控告警、受管多副本部署和生产运行策略仍未实现。

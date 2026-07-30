@@ -1,6 +1,6 @@
 # X9 ReplyChat Agent 阶段性实现复盘
 
-> 对照：[最终需求规格](final-requirements.md)。本文记录事实状态，不等同于目标需求。本文截至 2026-07-29，覆盖已合并的工作台、容器化演示、审核队列 SQL 优化，以及已由 GitHub PR #7 Squash merge 到 `main` 的 RBAC Foundation。
+> 对照：[最终需求规格](final-requirements.md)。本文记录事实状态，不等同于目标需求。本文截至 2026-07-30，覆盖已合并的工作台、容器化演示、审核队列 SQL 优化、RBAC Foundation，以及 PostgreSQL 多 Worker 领取与专用测试基础。
 
 ## 已实现
 
@@ -17,7 +17,7 @@
 | 身份适配 | Agent 不接收 X9 Cookie、不读 X9 数据库。生产预留短期 HMAC 身份断言；本地 demo/test 才允许 Fake Adapter。`/auth/me` 仅返回 Agent 本地显示身份、角色和能力。 |
 | 管理员授权 | 管理员只能在自身授权部门内创建/软停用用户、部门和成员关系；每次变更追加 `authorization_audit_events`，没有物理删除接口。 |
 | 容器化演示 | 提供多阶段镜像、API 静态托管 `/operator-workbench/`、`worker` profile 和显式 `demo-seed` profile。Compose 的 loopback demo 使用虚构本地 operator/reviewer/admin；未配置 X9 HMAC 密钥时传入有效空 JSON 并继续使用 demo Adapter；种子幂等、不调用模型、不创建出站指令。若旧库已由 RBAC 迁移创建同码部门目录，种子会复用该目录项而不覆盖它。 |
-| 验证 | 当前分支 Python 默认全量测试为 `147 passed, 1 skipped`（显式 PostgreSQL 并发用例默认跳过）；前端 Vitest 基线为 `12 passed`，并已验证前端构建。已使用隔离 Compose 项目完成 PostgreSQL 升级到 `4d5e6f7a8b9c`、两事务 `SKIP LOCKED` 领取不同任务、单任务防重复领取、并发过期回收仅一次终态与事件、旧 Worker 结果丢弃且模拟出站指令数保持 `0`。此前也已验证 API 健康检查、静态资源、demo 身份、六类队列和确认拒绝。仅有既有 FastAPI `on_event` 弃用警告和 Vite 既有的大 bundle 提示。 |
+| 验证 | SQLite 快速回归使用独立临时数据库，当前为 `149 passed, 8 deselected`；真实 PostgreSQL 核心套件通过专用运行器创建随机测试库，当前为 `8 passed`。该套件实际验证完整 Alembic 升级/历史修复路径、部分唯一索引、审计触发器与外键限制、跨部门终态边界，以及两事务 `SKIP LOCKED` 领取、单任务防重复领取、并发过期回收和旧/过期 Worker 结果丢弃；模拟出站指令数保持 `0`。GitHub Actions 将 SQLite 与 PostgreSQL 分 job 运行。前端 Vitest 基线为 `12 passed`，并已验证前端构建。仅有既有 FastAPI `on_event` 弃用警告和 Vite 既有的大 bundle 提示。 |
 
 ## 已实现但与目标仍有差距
 
