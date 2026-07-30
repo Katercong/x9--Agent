@@ -246,6 +246,37 @@ class DraftExportCreateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ManualDeliveryAccountCreateIn(DepartmentCodeIn):
+    """Admin-managed credential-free account directory entry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    department_code: str
+    owner_auth_user_id: str = Field(min_length=1, max_length=120)
+    display_name: str = Field(min_length=1, max_length=200)
+    email: str = Field(min_length=3, max_length=320)
+
+    @field_validator("email")
+    @classmethod
+    def validate_delivery_account_email(cls, value: str) -> str:
+        email = value.strip().lower()
+        if email.count("@") != 1 or any(character.isspace() for character in email):
+            raise ValueError("email must be a single address")
+        return email
+
+
+class ManualDeliveryAccountDeactivateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ManualDeliveryConfirmationCreateIn(BaseModel):
+    """The requester identity is always derived from the authenticated Principal."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    delivery_account_id: str = Field(min_length=1, max_length=120)
+
+
 AccessRole = Literal["operator", "reviewer", "admin"]
 
 

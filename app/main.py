@@ -29,6 +29,9 @@ from .models import (
     FollowupTask,
     HumanReviewDecision,
     InboundReply,
+    ManualDeliveryAccount,
+    ManualDeliveryEvent,
+    ManualDeliveryRequest,
     OutreachEmail,
     Product,
     ReferenceMaterial,
@@ -53,6 +56,9 @@ from .schemas import (
     DraftExportCreateIn,
     FailedReviewRetryIn,
     HumanReviewDecisionCreateIn,
+    ManualDeliveryAccountCreateIn,
+    ManualDeliveryAccountDeactivateIn,
+    ManualDeliveryConfirmationCreateIn,
     ProductCreateIn,
     ProductPatchIn,
     ProductReplaceIn,
@@ -63,6 +69,7 @@ from .schemas import (
 )
 from .services import (
     build_followup_context,
+    block_manual_delivery_requests_for_creator,
     create_pending_manual_delivery_request,
     classify_reply_result,
     enqueue_followup_run,
@@ -71,6 +78,9 @@ from .services import (
     is_creator_contact_blocked,
     is_automatic_generation_eligible,
     new_id,
+    manual_delivery_snapshot_is_reliable,
+    reserve_and_queue_manual_delivery_request,
+    transition_manual_delivery_request,
 )
 
 
@@ -450,6 +460,117 @@ def list_access_audit_events(
             for event, department_code in rows
         ],
     }
+
+
+@app.post("/api/followup-agent/manual-delivery-accounts", status_code=201)
+def create_manual_delivery_account(
+    body: ManualDeliveryAccountCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Register a credential-free, owner-bound account for future delivery.
+
+    This is an RBAC directory operation only.  It cannot grant an identity a
+    department role and it stores neither OAuth data nor a Gmail client token.
+    """
+
+    department_code = _normalise_department_code(body.department_code)
+    _require_department_capability(principal, Capability.ACCESS_MANAGE, department_code)
+    actor = _current_auth_user_or_503(db, principal)
+    owner = db.get(AuthUser, body.owner_auth_user_id)
+    if owner is None or not owner.is_active or not _is_delivery_account_owner_eligible(db, owner.id, department_code):
+        raise HTTPException(status_code=409, detail="delivery account owner must be an active reviewer or admin in the department")
+    if db.scalar(select(ManualDeliveryAccount.id).where(ManualDeliveryAccount.email == body.email)) is not None:
+        raise HTTPException(status_code=409, detail="delivery account email already exists")
+
+    account = ManualDeliveryAccount(
+        id=new_id("mda"),
+        department_code=department_code,
+        owner_auth_user_id=owner.id,
+        display_name=body.display_name.strip(),
+        email=body.email,
+        is_active=True,
+    )
+    db.add(account)
+    _append_authorization_audit(
+        db,
+        action="manual_delivery_account_created",
+        actor_auth_user_id=actor.id,
+        target_auth_user_id=owner.id,
+        department_id=_department_id_for_code(db, department_code),
+        after=_manual_delivery_account_snapshot(account),
+    )
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="delivery account email already exists") from exc
+    db.refresh(account)
+    return {"ok": True, "account": _manual_delivery_account_to_dict(account)}
+
+
+@app.get("/api/followup-agent/manual-delivery-accounts")
+def list_manual_delivery_accounts(
+    department_code: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Administrators may read only account-directory entries in their scope."""
+
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    statement = select(ManualDeliveryAccount).where(ManualDeliveryAccount.department_code.in_(allowed_departments))
+    if department_code is not None:
+        statement = statement.where(ManualDeliveryAccount.department_code == _normalise_department_code(department_code))
+    rows = db.scalars(statement.order_by(ManualDeliveryAccount.created_at.asc(), ManualDeliveryAccount.id.asc())).all()
+    return {"items": [_manual_delivery_account_to_dict(account) for account in rows]}
+
+
+@app.get("/api/followup-agent/manual-delivery-accounts/mine")
+def list_my_manual_delivery_accounts(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Return only the authenticated reviewer's enabled accounts in their own scopes."""
+
+    allowed_departments = _allowed_departments(principal, Capability.DELIVERY_CONFIRM)
+    rows = db.scalars(
+        select(ManualDeliveryAccount)
+        .where(
+            ManualDeliveryAccount.owner_auth_user_id == principal.user_id,
+            ManualDeliveryAccount.department_code.in_(allowed_departments),
+            ManualDeliveryAccount.is_active.is_(True),
+        )
+        .order_by(ManualDeliveryAccount.department_code.asc(), ManualDeliveryAccount.email.asc())
+    ).all()
+    return {"items": [_manual_delivery_account_to_dict(account) for account in rows]}
+
+
+@app.post("/api/followup-agent/manual-delivery-accounts/{account_id}/deactivate")
+def deactivate_manual_delivery_account(
+    account_id: str,
+    body: ManualDeliveryAccountDeactivateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Soft-disable one directory account; its historical delivery audit remains intact."""
+
+    account = _managed_manual_delivery_account_or_404(db, account_id, principal)
+    actor = _current_auth_user_or_503(db, principal)
+    if not account.is_active:
+        raise HTTPException(status_code=409, detail="manual delivery account is already inactive")
+    account.is_active = False
+    _append_authorization_audit(
+        db,
+        action="manual_delivery_account_deactivated",
+        actor_auth_user_id=actor.id,
+        target_auth_user_id=account.owner_auth_user_id,
+        department_id=_department_id_for_code(db, account.department_code),
+        before=_manual_delivery_account_snapshot(account, is_active=True),
+        after=_manual_delivery_account_snapshot(account),
+    )
+    db.commit()
+    db.refresh(account)
+    return {"ok": True, "account": _manual_delivery_account_to_dict(account)}
 
 
 @app.post("/api/followup-agent/creators", status_code=201)
@@ -934,6 +1055,12 @@ def approve_dnc_confirmation(
     creator.do_not_contact_reason = confirmation.reason
     creator.do_not_contact_requested_at = creator.do_not_contact_requested_at or confirmation.created_at or reviewed_at
     reply.processing_status = "reviewed"
+    blocked_delivery_request_ids = block_manual_delivery_requests_for_creator(
+        db,
+        creator_id=creator.id,
+        actor_id=principal.user_id,
+        now=reviewed_at,
+    )
     db.add(
         CreatorOutreachEvent(
             id=new_id("oev"),
@@ -960,6 +1087,7 @@ def approve_dnc_confirmation(
         "confirmation": _dnc_confirmation_to_dict(confirmation),
         "creator": _creator_to_dict(creator),
         "reply": _reply_to_dict(reply),
+        "blocked_manual_delivery_request_ids": blocked_delivery_request_ids,
     }
 
 
@@ -1346,6 +1474,141 @@ def get_human_review_decision(
     }
 
 
+@app.get("/api/followup-agent/review-decisions/{decision_id}/delivery-request")
+def get_manual_delivery_request(
+    decision_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Read a local outbox item and its minimal audit trail; never invoke Gmail."""
+
+    allowed_departments = _allowed_departments(principal, Capability.REVIEW_READ)
+    delivery = db.scalar(
+        select(ManualDeliveryRequest)
+        .join(HumanReviewDecision, HumanReviewDecision.id == ManualDeliveryRequest.human_review_decision_id)
+        .where(
+            HumanReviewDecision.id == decision_id,
+            ManualDeliveryRequest.department_code.in_(allowed_departments),
+        )
+    )
+    if delivery is None:
+        raise HTTPException(status_code=404, detail="manual delivery request not found")
+    creator = db.get(Creator, delivery.creator_id)
+    if creator is None:
+        raise HTTPException(status_code=409, detail="manual delivery request has no creator")
+    dnc_blocked = is_creator_contact_blocked(creator)
+    account = db.get(ManualDeliveryAccount, delivery.manual_delivery_account_id) if delivery.manual_delivery_account_id else None
+    events = list(
+        db.scalars(
+            select(ManualDeliveryEvent)
+            .where(ManualDeliveryEvent.manual_delivery_request_id == delivery.id)
+            .order_by(ManualDeliveryEvent.event_at.asc(), ManualDeliveryEvent.id.asc())
+        ).all()
+    )
+    return {
+        "ok": True,
+        "delivery": _manual_delivery_request_to_dict(
+            delivery,
+            account=account,
+            include_snapshot=not dnc_blocked,
+            dnc_blocked=dnc_blocked,
+        ),
+        "events": [_manual_delivery_event_to_dict(event) for event in events],
+    }
+
+
+@app.post("/api/followup-agent/review-decisions/{decision_id}/delivery-confirmations")
+def confirm_manual_delivery_request(
+    decision_id: str,
+    body: ManualDeliveryConfirmationCreateIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict[str, Any]:
+    """Second human confirmation: reserve quota and enter the local queue only."""
+
+    allowed_departments = _allowed_departments(principal, Capability.DELIVERY_CONFIRM)
+    row = db.execute(
+        select(ManualDeliveryRequest, HumanReviewDecision)
+        .join(HumanReviewDecision, HumanReviewDecision.id == ManualDeliveryRequest.human_review_decision_id)
+        .where(
+            HumanReviewDecision.id == decision_id,
+            ManualDeliveryRequest.department_code.in_(allowed_departments),
+        )
+        .with_for_update()
+    ).first()
+    if row is None:
+        # Keep an unapproved or out-of-scope decision indistinguishable from a
+        # missing outbox item to callers without the required department scope.
+        raise HTTPException(status_code=404, detail="manual delivery request not found")
+    delivery, decision = row
+    if decision.outcome != "approve_draft" or not decision.final_draft:
+        raise HTTPException(status_code=409, detail="human review decision has no approved draft")
+    if decision.actor_id != principal.user_id:
+        raise HTTPException(status_code=403, detail="second confirmation must be performed by the approving reviewer")
+
+    creator = db.get(Creator, delivery.creator_id)
+    if creator is None:
+        raise HTTPException(status_code=409, detail="manual delivery request has no creator")
+    now = datetime.utcnow()
+    if is_creator_contact_blocked(creator):
+        if delivery.status in {"pending_second_confirmation", "queued"}:
+            block_manual_delivery_requests_for_creator(
+                db,
+                creator_id=creator.id,
+                actor_id=principal.user_id,
+                now=now,
+            )
+            db.commit()
+        raise HTTPException(status_code=409, detail="do not contact creator cannot enter delivery queue")
+    if delivery.status == "pending_second_confirmation" and delivery.expires_at <= now:
+        transition_manual_delivery_request(
+            db,
+            request=delivery,
+            target_status="expired",
+            actor_id=principal.user_id,
+            now=now,
+            reason="second_confirmation_expired",
+        )
+        db.commit()
+        raise HTTPException(status_code=409, detail="manual delivery request has expired")
+    if delivery.status != "pending_second_confirmation":
+        raise HTTPException(status_code=409, detail="manual delivery request is not awaiting second confirmation")
+    if not manual_delivery_snapshot_is_reliable(delivery):
+        raise HTTPException(status_code=409, detail="manual delivery request lacks reliable reply references")
+
+    account = db.scalar(
+        select(ManualDeliveryAccount).where(ManualDeliveryAccount.id == body.delivery_account_id).with_for_update()
+    )
+    if account is None:
+        raise HTTPException(status_code=404, detail="manual delivery account not found")
+    if account.department_code != delivery.department_code or account.owner_auth_user_id != principal.user_id:
+        raise HTTPException(status_code=403, detail="manual delivery account is not owned by the current reviewer")
+    if not account.is_active:
+        raise HTTPException(status_code=409, detail="manual delivery account is inactive")
+
+    try:
+        reserve_and_queue_manual_delivery_request(
+            db,
+            request=delivery,
+            account=account,
+            actor_id=principal.user_id,
+            now=now,
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="manual delivery request was already confirmed") from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.refresh(delivery)
+    return {
+        "ok": True,
+        "delivery": _manual_delivery_request_to_dict(delivery, account=account, include_snapshot=True, dnc_blocked=False),
+        "message": "delivery was queued locally; no Gmail request was made",
+    }
+
+
 @app.get("/api/followup-agent/review-decisions/{decision_id}/delivery-capability")
 def get_draft_delivery_capability(
     decision_id: str,
@@ -1374,6 +1637,17 @@ def get_draft_delivery_capability(
             "delivery_status": "not_sent_by_system",
             "delivery_mode": "blocked_by_do_not_contact",
             "reason": "do not contact creator cannot receive a draft handoff",
+        }
+    delivery = db.scalar(
+        select(ManualDeliveryRequest).where(ManualDeliveryRequest.human_review_decision_id == decision.id)
+    )
+    if delivery is not None:
+        return {
+            "ok": True,
+            "delivery_available": False,
+            "delivery_status": delivery.status,
+            "delivery_mode": "manual_delivery_outbox",
+            "reason": "a second human confirmation may queue this draft locally; Gmail is not configured",
         }
     return {
         "ok": True,
@@ -1512,6 +1786,52 @@ def _managed_department_or_404(db: Session, department_code: str, principal: Pri
     if department is None:
         raise HTTPException(status_code=404, detail="department not found")
     return department
+
+
+def _managed_manual_delivery_account_or_404(
+    db: Session,
+    account_id: str,
+    principal: Principal,
+) -> ManualDeliveryAccount:
+    allowed_departments = _allowed_departments(principal, Capability.ACCESS_MANAGE)
+    account = db.scalar(
+        select(ManualDeliveryAccount).where(
+            ManualDeliveryAccount.id == account_id,
+            ManualDeliveryAccount.department_code.in_(allowed_departments),
+        )
+    )
+    if account is None:
+        raise HTTPException(status_code=404, detail="manual delivery account not found")
+    return account
+
+
+def _is_delivery_account_owner_eligible(db: Session, auth_user_id: str, department_code: str) -> bool:
+    """An account owner must currently hold a review-capable role in its department."""
+
+    return (
+        db.scalar(
+            select(UserDepartmentMembership.id)
+            .join(Department, Department.id == UserDepartmentMembership.department_id)
+            .join(AuthUser, AuthUser.id == UserDepartmentMembership.auth_user_id)
+            .where(
+                UserDepartmentMembership.auth_user_id == auth_user_id,
+                Department.code == department_code,
+                UserDepartmentMembership.is_active.is_(True),
+                Department.is_active.is_(True),
+                AuthUser.is_active.is_(True),
+                UserDepartmentMembership.role.in_((Role.REVIEWER.value, Role.ADMIN.value)),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _department_id_for_code(db: Session, department_code: str) -> str:
+    department_id = db.scalar(select(Department.id).where(Department.code == department_code))
+    if department_id is None:
+        raise HTTPException(status_code=409, detail="delivery account department is unavailable")
+    return department_id
 
 
 def _managed_auth_user_or_404(
@@ -1848,6 +2168,92 @@ def _auth_user_snapshot(row: AuthUser) -> dict[str, object]:
         "external_subject": row.external_subject,
         "display_name": row.display_name,
         "is_active": bool(row.is_active),
+    }
+
+
+def _manual_delivery_account_snapshot(
+    row: ManualDeliveryAccount,
+    *,
+    is_active: bool | None = None,
+) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "department_code": row.department_code,
+        "owner_auth_user_id": row.owner_auth_user_id,
+        "display_name": row.display_name,
+        "email": row.email,
+        "is_active": bool(row.is_active if is_active is None else is_active),
+        "daily_limit": row.daily_limit,
+    }
+
+
+def _manual_delivery_account_to_dict(row: ManualDeliveryAccount) -> dict[str, object]:
+    return {
+        **_manual_delivery_account_snapshot(row),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _manual_delivery_request_to_dict(
+    row: ManualDeliveryRequest,
+    *,
+    account: ManualDeliveryAccount | None,
+    include_snapshot: bool,
+    dnc_blocked: bool,
+) -> dict[str, object]:
+    effective_status = "blocked_by_dnc" if dnc_blocked else row.status
+    payload: dict[str, object] = {
+        "id": row.id,
+        "human_review_decision_id": row.human_review_decision_id,
+        "creator_id": row.creator_id,
+        "inbound_reply_id": row.inbound_reply_id,
+        "department_code": row.department_code,
+        "status": effective_status,
+        "stored_status": row.status,
+        "status_reason": "do_not_contact" if dnc_blocked else row.status_reason,
+        "dnc_blocked": dnc_blocked,
+        "snapshot_available": include_snapshot,
+        "approved_by_auth_user_id": row.approved_by_auth_user_id,
+        "second_confirmed_by_auth_user_id": row.second_confirmed_by_auth_user_id,
+        "second_confirmed_at": row.second_confirmed_at.isoformat() if row.second_confirmed_at else None,
+        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+        "quota_reserved": bool(row.quota_reserved),
+        "quota_reservation_date": row.quota_reservation_date.isoformat() if row.quota_reservation_date else None,
+        "queued_at": row.queued_at.isoformat() if row.queued_at else None,
+        "sending_started_at": row.sending_started_at.isoformat() if row.sending_started_at else None,
+        "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "account": _manual_delivery_account_to_dict(account) if account is not None else None,
+    }
+    if include_snapshot:
+        payload["snapshot"] = {
+            "draft_content": row.draft_content_snapshot,
+            "draft_sha256": row.draft_sha256,
+            "recipient_email": row.recipient_email_snapshot,
+            "subject": row.subject_snapshot,
+            "gmail_thread_id": row.gmail_thread_id_snapshot,
+            "rfc_message_id": row.rfc_message_id_snapshot,
+            "references": row.references_snapshot,
+            "account_email": row.account_email_snapshot,
+            "account_owner_auth_user_id": row.account_owner_auth_user_id_snapshot,
+        }
+    else:
+        payload["snapshot"] = None
+    return payload
+
+
+def _manual_delivery_event_to_dict(row: ManualDeliveryEvent) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "manual_delivery_request_id": row.manual_delivery_request_id,
+        "department_code": row.department_code,
+        "actor_id": row.actor_id,
+        "event_type": row.event_type,
+        "metadata": _load_json(row.metadata_json) or {},
+        "event_at": row.event_at.isoformat() if row.event_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
 

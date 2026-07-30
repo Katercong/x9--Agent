@@ -627,3 +627,19 @@ def _prevent_manual_delivery_snapshot_mutation(_mapper: object, _connection: obj
     state = inspect(target)
     if any(state.attrs[field].history.has_changes() for field in _MANUAL_DELIVERY_IMMUTABLE_SNAPSHOT_FIELDS):
         raise ValueError("manual delivery request snapshots are immutable")
+    account_history = state.attrs["manual_delivery_account_id"].history
+    if account_history.has_changes() and account_history.deleted and account_history.deleted[0] is not None:
+        raise ValueError("manual delivery confirmation account is immutable")
+    if target.manual_delivery_account_id is not None:
+        confirmation_fields = (
+            "account_email_snapshot",
+            "account_owner_auth_user_id_snapshot",
+            "second_confirmed_by_auth_user_id",
+            "second_confirmed_at",
+        )
+        if any(
+            state.attrs[field].history.has_changes()
+            and any(value is not None for value in state.attrs[field].history.deleted)
+            for field in confirmation_fields
+        ):
+            raise ValueError("manual delivery confirmation account is immutable")

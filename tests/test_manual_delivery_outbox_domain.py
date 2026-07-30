@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from datetime import datetime, timedelta
 
 import pytest
@@ -17,6 +18,8 @@ from app.models import (
     AgentFollowupRun,
     AuthUser,
     Creator,
+    Department,
+    DoNotContactConfirmation,
     HumanReviewDecision,
     InboundReply,
     ManualDeliveryAccount,
@@ -24,6 +27,7 @@ from app.models import (
     ManualDeliveryEvent,
     ManualDeliveryRequest,
     SimulatedOutboundInstruction,
+    UserDepartmentMembership,
 )
 from app.services import (
     MANUAL_DELIVERY_CONFIRMATION_TTL,
@@ -33,22 +37,59 @@ from app.services import (
     expire_due_deliveries,
     manual_delivery_quota_date,
     manual_delivery_snapshot_is_reliable,
+    reserve_and_queue_manual_delivery_request,
     transition_manual_delivery_request,
 )
 
 
 @pytest.fixture
 def client() -> TestClient:
-    app.dependency_overrides[get_current_principal] = lambda: principal_from_memberships(
-        user_id="outbox_reviewer",
-        identity_source="test",
-        external_subject="outbox-reviewer",
-        display_name="Outbox Reviewer",
-        memberships=[DepartmentMembership("cross_border", Role.REVIEWER)],
-    )
+    _set_test_principal("outbox_reviewer", Role.REVIEWER)
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.pop(get_current_principal, None)
+
+
+def _set_test_principal(user_id: str, role: Role, *, department_code: str = "cross_border") -> None:
+    app.dependency_overrides[get_current_principal] = lambda: principal_from_memberships(
+        user_id=user_id,
+        identity_source="test",
+        external_subject=user_id,
+        display_name=user_id,
+        memberships=[DepartmentMembership(department_code, role)],
+    )
+
+
+def _provision_delivery_access(db, *, user_id: str, role: Role, department_code: str = "cross_border") -> AuthUser:
+    department = db.scalar(select(Department).where(Department.code == department_code))
+    if department is None:
+        department = Department(
+            id=f"department_outbox_{department_code}",
+            code=department_code,
+            name=department_code.replace("_", " ").title(),
+        )
+        db.add(department)
+        db.flush()
+    user = AuthUser(
+        id=user_id,
+        identity_source="test",
+        external_subject=user_id,
+        display_name=user_id,
+    )
+    db.add(user)
+    db.flush()
+    db.add(
+        UserDepartmentMembership(
+            id=f"membership_{user_id}_{department_code}",
+            auth_user_id=user.id,
+            department_id=department.id,
+            role=role.value,
+            is_active=True,
+            authorization_source="test",
+        )
+    )
+    db.commit()
+    return user
 
 
 def _reviewable_rows(db, *, suffix: str, metadata: dict[str, object] | None = None) -> tuple[Creator, InboundReply, AgentFollowupRun]:
@@ -161,6 +202,21 @@ def _account_and_reservation(db, *, request: ManualDeliveryRequest, at: datetime
     return quota
 
 
+def _create_account_via_api(client: TestClient, *, email: str = "reviewer@example.test") -> str:
+    _set_test_principal("outbox_admin", Role.ADMIN)
+    response = client.post(
+        "/api/followup-agent/manual-delivery-accounts",
+        json={
+            "department_code": "cross_border",
+            "owner_auth_user_id": "outbox_reviewer",
+            "display_name": "Reviewer Workspace mailbox",
+            "email": email,
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["account"]["id"]
+
+
 def test_approved_draft_creates_one_immutable_pending_outbox_snapshot_and_no_outbound(client: TestClient):
     metadata = {
         "reply_to": "reply@example.creator",
@@ -224,6 +280,369 @@ def test_dnc_at_approval_creates_a_blocked_outbox_audit_record_without_any_exter
         event = db.scalar(select(ManualDeliveryEvent).where(ManualDeliveryEvent.manual_delivery_request_id == request.id))
         assert event is not None
         assert event.event_type == "delivery_blocked_by_dnc"
+        assert db.scalar(select(func.count(SimulatedOutboundInstruction.id))) == 0
+
+
+def test_account_directory_and_second_confirmation_queue_locally_without_gmail(client: TestClient):
+    with SessionLocal() as db:
+        _provision_delivery_access(db, user_id="outbox_admin", role=Role.ADMIN)
+        _provision_delivery_access(db, user_id="outbox_reviewer", role=Role.REVIEWER)
+        _creator, _reply, decision, request = _approved_decision(
+            db,
+            suffix="second-confirmation",
+            metadata={
+                "reply_to": "creator@example.test",
+                "gmail_thread_id": "thread-second-confirmation",
+                "rfc_message_id": "<second-confirmation@example.test>",
+            },
+        )
+        decision_id = decision.id
+        request_id = request.id
+
+    account_id = _create_account_via_api(client)
+    _set_test_principal("outbox_reviewer", Role.REVIEWER)
+    mine = client.get("/api/followup-agent/manual-delivery-accounts/mine")
+    assert mine.status_code == 200, mine.text
+    assert [item["id"] for item in mine.json()["items"]] == [account_id]
+
+    confirmed = client.post(
+        f"/api/followup-agent/review-decisions/{decision_id}/delivery-confirmations",
+        json={"delivery_account_id": account_id},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["message"] == "delivery was queued locally; no Gmail request was made"
+    assert confirmed.json()["delivery"]["status"] == "queued"
+    assert confirmed.json()["delivery"]["account"]["id"] == account_id
+    assert "token" not in json.dumps(confirmed.json()).lower()
+    detail = client.get(f"/api/followup-agent/review-decisions/{decision_id}/delivery-request")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["delivery"]["snapshot"]["draft_content"] == "Thanks for the reply. We will confirm the campaign details before responding."
+    assert [event["event_type"] for event in detail.json()["events"]] == ["delivery_request_created", "delivery_queued"]
+
+    duplicate = client.post(
+        f"/api/followup-agent/review-decisions/{decision_id}/delivery-confirmations",
+        json={"delivery_account_id": account_id},
+    )
+    assert duplicate.status_code == 409
+    with SessionLocal() as db:
+        request = db.get(ManualDeliveryRequest, request_id)
+        assert request is not None
+        assert request.status == "queued"
+        assert request.quota_reserved is True
+        quota = db.scalar(select(ManualDeliveryDailyQuota).where(ManualDeliveryDailyQuota.manual_delivery_account_id == account_id))
+        assert quota is not None and quota.reserved_count == 1
+        assert [event.event_type for event in db.scalars(
+            select(ManualDeliveryEvent)
+            .where(ManualDeliveryEvent.manual_delivery_request_id == request_id)
+            .order_by(ManualDeliveryEvent.event_at.asc(), ManualDeliveryEvent.id.asc())
+        ).all()] == ["delivery_request_created", "delivery_queued"]
+        assert db.scalar(select(func.count(SimulatedOutboundInstruction.id))) == 0
+
+
+def test_second_confirmation_enforces_same_approver_account_owner_dnc_expiry_and_quota(client: TestClient):
+    with SessionLocal() as db:
+        _provision_delivery_access(db, user_id="outbox_admin", role=Role.ADMIN)
+        _provision_delivery_access(db, user_id="outbox_reviewer", role=Role.REVIEWER)
+        _provision_delivery_access(db, user_id="outbox_other_reviewer", role=Role.REVIEWER)
+        _creator, _reply, decision, request = _approved_decision(
+            db,
+            suffix="confirmation-boundaries",
+            metadata={"gmail_thread_id": "thread-boundaries", "rfc_message_id": "<boundaries@example.test>"},
+        )
+        decision_id = decision.id
+        request_id = request.id
+
+    owner_account_id = _create_account_via_api(client)
+    _set_test_principal("outbox_other_reviewer", Role.REVIEWER)
+    assert client.post(
+        f"/api/followup-agent/review-decisions/{decision_id}/delivery-confirmations",
+        json={"delivery_account_id": owner_account_id},
+    ).status_code == 403
+
+    _set_test_principal("outbox_admin", Role.ADMIN)
+    other_account = client.post(
+        "/api/followup-agent/manual-delivery-accounts",
+        json={
+            "department_code": "cross_border",
+            "owner_auth_user_id": "outbox_other_reviewer",
+            "display_name": "Other reviewer mailbox",
+            "email": "other-reviewer@example.test",
+        },
+    )
+    assert other_account.status_code == 201, other_account.text
+    _set_test_principal("outbox_reviewer", Role.REVIEWER)
+    assert client.post(
+        f"/api/followup-agent/review-decisions/{decision_id}/delivery-confirmations",
+        json={"delivery_account_id": other_account.json()["account"]["id"]},
+    ).status_code == 403
+
+    with SessionLocal() as db:
+        request = db.get(ManualDeliveryRequest, request_id)
+        creator = db.get(Creator, request.creator_id if request else "")
+        assert request is not None and creator is not None
+        creator.do_not_contact_status = "confirmed"
+        db.commit()
+    blocked = client.post(
+        f"/api/followup-agent/review-decisions/{decision_id}/delivery-confirmations",
+        json={"delivery_account_id": owner_account_id},
+    )
+    assert blocked.status_code == 409
+    with SessionLocal() as db:
+        request = db.get(ManualDeliveryRequest, request_id)
+        assert request is not None and request.status == "blocked_by_dnc"
+        assert request.quota_reserved is False
+        assert db.scalar(select(func.count(SimulatedOutboundInstruction.id))) == 0
+
+        _creator, _reply, expired_decision, expired_request = _approved_decision(
+            db,
+            suffix="expired-confirmation",
+            metadata={"gmail_thread_id": "thread-expired", "rfc_message_id": "<expired@example.test>"},
+            now=datetime.utcnow() - MANUAL_DELIVERY_CONFIRMATION_TTL - timedelta(seconds=1),
+        )
+        expired_decision_id = expired_decision.id
+        expired_request_id = expired_request.id
+    expired = client.post(
+        f"/api/followup-agent/review-decisions/{expired_decision_id}/delivery-confirmations",
+        json={"delivery_account_id": owner_account_id},
+    )
+    assert expired.status_code == 409
+    with SessionLocal() as db:
+        expired_request = db.get(ManualDeliveryRequest, expired_request_id)
+        assert expired_request is not None and expired_request.status == "expired"
+
+
+def test_account_directory_rejects_operator_owners_allows_admin_deactivation_and_enforces_daily_limit(client: TestClient):
+    with SessionLocal() as db:
+        _provision_delivery_access(db, user_id="outbox_admin", role=Role.ADMIN)
+        _provision_delivery_access(db, user_id="outbox_reviewer", role=Role.REVIEWER)
+        _provision_delivery_access(db, user_id="outbox_operator", role=Role.OPERATOR)
+        _creator, _reply, decision, _request = _approved_decision(
+            db,
+            suffix="quota-limit",
+            metadata={"gmail_thread_id": "thread-quota", "rfc_message_id": "<quota@example.test>"},
+        )
+        decision_id = decision.id
+
+    _set_test_principal("outbox_admin", Role.ADMIN)
+    operator_owner = client.post(
+        "/api/followup-agent/manual-delivery-accounts",
+        json={
+            "department_code": "cross_border",
+            "owner_auth_user_id": "outbox_operator",
+            "display_name": "Operator mailbox",
+            "email": "operator@example.test",
+        },
+    )
+    assert operator_owner.status_code == 409
+    account_id = _create_account_via_api(client, email="quota-owner@example.test")
+
+    with SessionLocal() as db:
+        db.add(
+            ManualDeliveryDailyQuota(
+                id="quota_limit_full",
+                manual_delivery_account_id=account_id,
+                quota_date=manual_delivery_quota_date(datetime.utcnow()),
+                reserved_count=40,
+            )
+        )
+        db.commit()
+    _set_test_principal("outbox_reviewer", Role.REVIEWER)
+    full_quota = client.post(
+        f"/api/followup-agent/review-decisions/{decision_id}/delivery-confirmations",
+        json={"delivery_account_id": account_id},
+    )
+    assert full_quota.status_code == 409
+    assert "daily limit" in full_quota.json()["detail"]
+
+    assert client.post(
+        f"/api/followup-agent/manual-delivery-accounts/{account_id}/deactivate",
+        json={},
+    ).status_code == 403
+    _set_test_principal("outbox_admin", Role.ADMIN)
+    deactivated = client.post(
+        f"/api/followup-agent/manual-delivery-accounts/{account_id}/deactivate",
+        json={},
+    )
+    assert deactivated.status_code == 200, deactivated.text
+    assert deactivated.json()["account"]["is_active"] is False
+    _set_test_principal("outbox_reviewer", Role.REVIEWER)
+    assert client.get("/api/followup-agent/manual-delivery-accounts/mine").json()["items"] == []
+    _set_test_principal("outbox_operator", Role.OPERATOR)
+    assert client.post(
+        f"/api/followup-agent/review-decisions/{decision_id}/delivery-confirmations",
+        json={"delivery_account_id": account_id},
+    ).status_code == 403
+
+
+def test_second_confirmation_rejects_missing_references_and_cross_department_access(client: TestClient):
+    with SessionLocal() as db:
+        _provision_delivery_access(db, user_id="outbox_admin", role=Role.ADMIN)
+        _provision_delivery_access(db, user_id="outbox_reviewer", role=Role.REVIEWER)
+        _creator, _reply, missing_decision, _request = _approved_decision(
+            db,
+            suffix="missing-reference-api",
+            metadata={"reply_to": "creator@example.test"},
+        )
+        missing_decision_id = missing_decision.id
+        _creator, _reply, scoped_decision, _request = _approved_decision(
+            db,
+            suffix="cross-department-api",
+            metadata={"gmail_thread_id": "thread-cross", "rfc_message_id": "<cross@example.test>"},
+        )
+        scoped_decision_id = scoped_decision.id
+
+    account_id = _create_account_via_api(client, email="missing-reference-owner@example.test")
+    _set_test_principal("outbox_reviewer", Role.REVIEWER)
+    missing_reference = client.post(
+        f"/api/followup-agent/review-decisions/{missing_decision_id}/delivery-confirmations",
+        json={"delivery_account_id": account_id},
+    )
+    assert missing_reference.status_code == 409
+    assert "reliable reply references" in missing_reference.json()["detail"]
+
+    _set_test_principal("outbox_foreign_reviewer", Role.REVIEWER, department_code="other_department")
+    cross_department = client.post(
+        f"/api/followup-agent/review-decisions/{scoped_decision_id}/delivery-confirmations",
+        json={"delivery_account_id": account_id},
+    )
+    assert cross_department.status_code == 404
+
+
+def test_dnc_confirmation_endpoint_blocks_queued_outbox_and_releases_reservation(client: TestClient):
+    with SessionLocal() as db:
+        _provision_delivery_access(db, user_id="outbox_admin", role=Role.ADMIN)
+        _provision_delivery_access(db, user_id="outbox_reviewer", role=Role.REVIEWER)
+        creator, _reply, decision, request = _approved_decision(
+            db,
+            suffix="dnc-route",
+            metadata={"gmail_thread_id": "thread-dnc-route", "rfc_message_id": "<dnc-route@example.test>"},
+        )
+        decision_id = decision.id
+        request_id = request.id
+        creator_id = creator.id
+
+    account_id = _create_account_via_api(client, email="dnc-route@example.test")
+    _set_test_principal("outbox_reviewer", Role.REVIEWER)
+    assert client.post(
+        f"/api/followup-agent/review-decisions/{decision_id}/delivery-confirmations",
+        json={"delivery_account_id": account_id},
+    ).status_code == 200
+
+    with SessionLocal() as db:
+        dnc_reply = InboundReply(
+            id="reply_outbox_dnc_route",
+            department_code="cross_border",
+            creator_id=creator_id,
+            channel="simulation",
+            external_message_id="outbox-dnc-route-external",
+            from_email="dnc@example.test",
+            body="Please unsubscribe me.",
+            processing_status="need_ai_review",
+            reply_category="not_interested",
+        )
+        confirmation = DoNotContactConfirmation(
+            id="dnc_outbox_route",
+            department_code="cross_border",
+            creator_id=creator_id,
+            inbound_reply_id=dnc_reply.id,
+            status="pending_confirmation",
+            reason="explicit_opt_out",
+        )
+        creator_row = db.get(Creator, creator_id)
+        assert creator_row is not None
+        creator_row.do_not_contact_status = "pending_confirmation"
+        db.add(dnc_reply)
+        db.flush()
+        db.add(confirmation)
+        db.commit()
+
+    approved = client.post("/api/followup-agent/dnc-confirmations/dnc_outbox_route/approve", json={})
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["blocked_manual_delivery_request_ids"] == [request_id]
+    with SessionLocal() as db:
+        request = db.get(ManualDeliveryRequest, request_id)
+        assert request is not None and request.status == "blocked_by_dnc"
+        quota = db.scalar(select(ManualDeliveryDailyQuota).where(ManualDeliveryDailyQuota.manual_delivery_account_id == account_id))
+        assert quota is not None and quota.reserved_count == 0
+        events = db.scalars(
+            select(ManualDeliveryEvent)
+            .where(ManualDeliveryEvent.manual_delivery_request_id == request_id)
+            .order_by(ManualDeliveryEvent.event_at.asc(), ManualDeliveryEvent.id.asc())
+        ).all()
+        assert events[-1].event_type == "delivery_blocked_by_dnc"
+        assert db.scalar(select(func.count(SimulatedOutboundInstruction.id))) == 0
+    detail = client.get(f"/api/followup-agent/review-decisions/{decision_id}/delivery-request")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["delivery"]["status"] == "blocked_by_dnc"
+    assert detail.json()["delivery"]["snapshot"] is None
+
+
+def test_concurrent_second_confirmation_reserves_only_one_queued_request():
+    with SessionLocal() as db:
+        _provision_delivery_access(db, user_id="outbox_reviewer", role=Role.REVIEWER)
+        _creator, _reply, _decision, request = _approved_decision(
+            db,
+            suffix="concurrent-confirmation",
+            metadata={"gmail_thread_id": "thread-concurrent", "rfc_message_id": "<concurrent@example.test>"},
+        )
+        account = ManualDeliveryAccount(
+            id="account_outbox_concurrent",
+            department_code="cross_border",
+            owner_auth_user_id="outbox_reviewer",
+            display_name="Concurrent mailbox",
+            email="concurrent@example.test",
+        )
+        db.add(account)
+        db.commit()
+        request_id = request.id
+        account_id = account.id
+
+    first_has_locks = threading.Event()
+    release_first = threading.Event()
+    results: list[str] = []
+    result_lock = threading.Lock()
+
+    def confirm(*, wait_before_queue: bool) -> None:
+        with SessionLocal() as db:
+            delivery = db.scalar(select(ManualDeliveryRequest).where(ManualDeliveryRequest.id == request_id).with_for_update())
+            account = db.scalar(select(ManualDeliveryAccount).where(ManualDeliveryAccount.id == account_id).with_for_update())
+            assert delivery is not None and account is not None
+            if wait_before_queue:
+                first_has_locks.set()
+                assert release_first.wait(timeout=10)
+            try:
+                reserve_and_queue_manual_delivery_request(
+                    db,
+                    request=delivery,
+                    account=account,
+                    actor_id="outbox_reviewer",
+                )
+                db.commit()
+                outcome = "queued"
+            except ValueError:
+                db.rollback()
+                outcome = "conflict"
+            with result_lock:
+                results.append(outcome)
+
+    first = threading.Thread(target=confirm, kwargs={"wait_before_queue": True})
+    second = threading.Thread(target=confirm, kwargs={"wait_before_queue": False})
+    first.start()
+    assert first_has_locks.wait(timeout=10)
+    second.start()
+    release_first.set()
+    first.join(timeout=10)
+    second.join(timeout=10)
+    assert not first.is_alive() and not second.is_alive()
+    assert sorted(results) == ["conflict", "queued"]
+    with SessionLocal() as db:
+        request = db.get(ManualDeliveryRequest, request_id)
+        assert request is not None and request.status == "queued"
+        assert db.scalar(
+            select(func.count(ManualDeliveryEvent.id)).where(ManualDeliveryEvent.manual_delivery_request_id == request_id)
+        ) == 2
+        quota = db.scalar(select(ManualDeliveryDailyQuota).where(ManualDeliveryDailyQuota.manual_delivery_account_id == account_id))
+        assert quota is not None and quota.reserved_count == 1
         assert db.scalar(select(func.count(SimulatedOutboundInstruction.id))) == 0
 
 

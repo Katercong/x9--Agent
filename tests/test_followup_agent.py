@@ -2238,9 +2238,9 @@ def test_approved_draft_export_is_audited_and_dnc_blocks_later_export_and_runs()
     assert capability_before_dnc.json() == {
         "ok": True,
         "delivery_available": False,
-        "delivery_status": "not_sent_by_system",
-        "delivery_mode": "manual_copy_or_export_only",
-        "reason": "external delivery channels are not configured",
+        "delivery_status": "pending_second_confirmation",
+        "delivery_mode": "manual_delivery_outbox",
+        "reason": "a second human confirmation may queue this draft locally; Gmail is not configured",
     }
 
     decision = client.get(f"/api/followup-agent/review-decisions/{decision_id}")

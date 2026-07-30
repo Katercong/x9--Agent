@@ -24,6 +24,7 @@ from .models import (
     FollowupTask,
     HumanReviewDecision,
     InboundReply,
+    ManualDeliveryAccount,
     ManualDeliveryDailyQuota,
     ManualDeliveryEvent,
     ManualDeliveryRequest,
@@ -595,6 +596,73 @@ def release_manual_delivery_quota(db: Session, *, request: ManualDeliveryRequest
     quota.reserved_count -= 1
     request.quota_reserved = False
     request.quota_reservation_date = None
+
+
+def reserve_and_queue_manual_delivery_request(
+    db: Session,
+    *,
+    request: ManualDeliveryRequest,
+    account: ManualDeliveryAccount,
+    actor_id: str,
+    now: datetime | None = None,
+) -> None:
+    """Reserve one account-day slot and move an eligible item into ``queued``.
+
+    The API caller must have already locked the request and account rows and
+    checked DNC plus ownership.  This function persists no network work: its
+    only result is a local state transition and an append-only event.
+    """
+
+    if request.status != "pending_second_confirmation":
+        raise ValueError("manual delivery request is not awaiting second confirmation")
+    if request.quota_reserved or request.manual_delivery_account_id is not None:
+        raise ValueError("manual delivery request already has a quota reservation")
+    if not account.is_active:
+        raise ValueError("manual delivery account is inactive")
+    if not manual_delivery_snapshot_is_reliable(request):
+        raise ValueError("manual delivery request lacks reliable reply references")
+    current_time = now or datetime.utcnow()
+    if request.expires_at <= current_time:
+        raise ValueError("manual delivery request has expired")
+
+    quota_date = manual_delivery_quota_date(current_time)
+    quota = db.scalar(
+        select(ManualDeliveryDailyQuota)
+        .where(
+            ManualDeliveryDailyQuota.manual_delivery_account_id == account.id,
+            ManualDeliveryDailyQuota.quota_date == quota_date,
+        )
+        .with_for_update()
+    )
+    if quota is None:
+        quota = ManualDeliveryDailyQuota(
+            id=new_id("mdq"),
+            manual_delivery_account_id=account.id,
+            quota_date=quota_date,
+            reserved_count=0,
+            created_at=current_time,
+        )
+        db.add(quota)
+        db.flush()
+    if quota.reserved_count >= account.daily_limit:
+        raise ValueError("manual delivery account daily limit is exhausted")
+
+    quota.reserved_count += 1
+    request.manual_delivery_account_id = account.id
+    request.account_email_snapshot = account.email
+    request.account_owner_auth_user_id_snapshot = account.owner_auth_user_id
+    request.second_confirmed_by_auth_user_id = actor_id
+    request.second_confirmed_at = current_time
+    request.quota_reserved = True
+    request.quota_reservation_date = quota_date
+    transition_manual_delivery_request(
+        db,
+        request=request,
+        target_status="queued",
+        actor_id=actor_id,
+        now=current_time,
+        metadata={"delivery_account_id": account.id, "quota_date": quota_date.isoformat()},
+    )
 
 
 def _append_manual_delivery_event(
