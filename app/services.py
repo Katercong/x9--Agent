@@ -466,10 +466,14 @@ def manual_delivery_snapshot_is_reliable(request: ManualDeliveryRequest) -> bool
 
 
 def manual_delivery_quota_date(value: datetime) -> date:
-    """Map a UTC-naive persistence timestamp to the product's Shanghai day."""
+    """Map a UTC-naive or aware timestamp to the product's Shanghai day."""
 
-    utc_value = value.replace(tzinfo=timezone.utc)
-    return utc_value.astimezone(MANUAL_DELIVERY_TIMEZONE).date()
+    # Persistence timestamps are UTC-naive, while callers/tests may supply an
+    # actual timezone-aware instant. ``replace`` is only valid for the former:
+    # applying it to an aware value changes the instant and can reserve the
+    # wrong Shanghai calendar day around midnight.
+    normalized_value = value.replace(tzinfo=timezone.utc) if value.tzinfo is None or value.utcoffset() is None else value
+    return normalized_value.astimezone(MANUAL_DELIVERY_TIMEZONE).date()
 
 
 def transition_manual_delivery_request(

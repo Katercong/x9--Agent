@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -215,6 +215,16 @@ def _create_account_via_api(client: TestClient, *, email: str = "reviewer@exampl
     )
     assert response.status_code == 201, response.text
     return response.json()["account"]["id"]
+
+
+def test_manual_delivery_quota_date_preserves_aware_instants_across_shanghai_midnight():
+    # 20:00 on July 30 in UTC+08 is still July 30 in Shanghai. Treating that
+    # wall-clock time as UTC would incorrectly reserve the July 31 quota.
+    assert manual_delivery_quota_date(
+        datetime(2026, 7, 30, 20, 0, tzinfo=timezone(timedelta(hours=8)))
+    ) == date(2026, 7, 30)
+    # Naive persistence timestamps continue to be interpreted as UTC.
+    assert manual_delivery_quota_date(datetime(2026, 7, 30, 16, 0)) == date(2026, 7, 31)
 
 
 def test_approved_draft_creates_one_immutable_pending_outbox_snapshot_and_no_outbound(client: TestClient):
