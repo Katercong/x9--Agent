@@ -19,7 +19,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import create_engine, delete, func, select
+from sqlalchemy import create_engine, delete, func, select, text
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -47,6 +47,7 @@ from app.models import (
     OutreachEmail,
     SimulatedOutboundInstruction,
     UserDepartmentMembership,
+    WorkerRunEvent,
 )
 from app.rbac_bootstrap import bootstrap_admin, main as bootstrap_main
 from app.schemas import (
@@ -322,6 +323,22 @@ def _provision_scoped_read_data() -> None:
         db.flush()
         db.add_all(
             [
+                WorkerRunEvent(
+                    id="worker_event_cross_pending",
+                    agent_followup_run_id="run_cross_pending",
+                    department_code="cross_border",
+                    worker_id="worker_cross_scope",
+                    event_type="claim_acquired",
+                    metadata_json='{"lease_seconds": 120}',
+                ),
+                WorkerRunEvent(
+                    id="worker_event_foreign_pending",
+                    agent_followup_run_id="run_foreign_pending",
+                    department_code="foreign_trade",
+                    worker_id="worker_foreign_scope",
+                    event_type="claim_acquired",
+                    metadata_json='{"lease_seconds": 120}',
+                ),
                 HumanReviewDecision(
                     id="decision_cross",
                     department_code="cross_border",
@@ -607,6 +624,10 @@ def test_read_endpoints_filter_to_authorized_department_and_hide_cross_departmen
 
     own_run = client.get("/api/followup-agent/runs/run_cross_pending", headers=reviewer_headers)
     assert own_run.status_code == 200
+    assert [
+        (event["id"], event["department_code"], event["worker_id"], event["event_type"], event["metadata"])
+        for event in own_run.json()["worker_events"]
+    ] == [("worker_event_cross_pending", "cross_border", "worker_cross_scope", "claim_acquired", {"lease_seconds": 120})]
     assert client.get("/api/followup-agent/runs/run_foreign_pending", headers=reviewer_headers).status_code == 404
 
     runs_response = client.get("/api/followup-agent/runs", headers=reviewer_headers)
@@ -1469,19 +1490,12 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
                 body="Backfill reply",
                 processing_status="need_ai_review",
             )
-            run = AgentFollowupRun(
-                id="backfill_run",
-                department_code="\tDEPT_RUNS\n",
-                creator_id=creator.id,
-                inbound_reply_id=reply.id,
-                execution_status="succeeded",
-            )
             decision = HumanReviewDecision(
                 id="backfill_decision",
                 department_code="dept_decisions",
                 creator_id=creator.id,
                 inbound_reply_id=reply.id,
-                agent_followup_run_id=run.id,
+                agent_followup_run_id="backfill_run",
                 outcome="close_without_draft",
                 actor_id="backfill_actor",
             )
@@ -1489,6 +1503,29 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
                 [
                     creator,
                     reply,
+                ]
+            )
+            db.flush()
+            # This database deliberately stops at the historical RBAC head.
+            # Insert the legacy run with the schema that existed then instead
+            # of using the current ORM model, which now has newer columns.
+            db.execute(
+                text(
+                    """
+                    INSERT INTO agent_followup_runs
+                        (id, department_code, creator_id, inbound_reply_id, llm_status, execution_status)
+                    VALUES
+                        ('backfill_run', :department_code, :creator_id, :inbound_reply_id, 'not_configured', 'succeeded')
+                    """
+                ),
+                {
+                    "department_code": "\tDEPT_RUNS\n",
+                    "creator_id": creator.id,
+                    "inbound_reply_id": reply.id,
+                },
+            )
+            db.add_all(
+                [
                     DoNotContactConfirmation(
                         id="backfill_dnc",
                         department_code="\tDept_Dnc\n",
@@ -1512,7 +1549,6 @@ def test_department_catalog_backfill_migration_preserves_business_scope_and_down
                         creator_id=creator.id,
                         task_type="backfill",
                     ),
-                    run,
                     decision,
                     DraftExportRecord(
                         id="backfill_export",

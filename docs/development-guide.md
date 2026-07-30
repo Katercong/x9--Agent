@@ -53,10 +53,26 @@ python -m app.worker
 python -m app.worker --once
 ```
 
+为多个容器 Worker 指定可审计但不含密钥的身份：
+
+```powershell
+python -m app.worker --worker-id local-worker-a
+```
+
 ### 3. 测试与评测
 
 ```powershell
 python -m pytest -q
+```
+
+PostgreSQL 并发领取集成测试只针对可丢弃的隔离数据库显式执行；不要把日常演示库或生产库填入该变量：
+
+```powershell
+$env:RUN_POSTGRES_INTEGRATION='1'
+$env:POSTGRES_INTEGRATION_DATABASE_URL='<本机隔离 PostgreSQL URL>'
+python -m pytest -q tests/test_postgres_multi_worker_claim.py
+Remove-Item Env:RUN_POSTGRES_INTEGRATION
+Remove-Item Env:POSTGRES_INTEGRATION_DATABASE_URL
 ```
 
 真实模型评测需要显式传入 `--live`，结果只写入被 Git 忽略的 `evaluation_reports/`，不写业务数据库：
@@ -97,6 +113,7 @@ POST /simulate-reply
 | `creators` / `Creator` | 达人档案、当前业务状态和 DNC 状态。 |
 | `inbound_replies` / `InboundReply` | 入站回复、规则分类、处理状态和稳定幂等标识。 |
 | `agent_followup_runs` / `AgentFollowupRun` | 每次模型任务的提示词、上下文、输出、错误、耗时和执行状态。 |
+| `worker_run_events` / `WorkerRunEvent` | 不可变的领取、完成、过期回收和旧结果丢弃事件；不保存 claim token、提示词或消息正文。 |
 | `do_not_contact_confirmations` | 退订/DNC 的确认记录。 |
 | `auth_users` / `departments` / `user_department_memberships` | Agent 本地身份映射、部门目录和按部门角色。 |
 | `authorization_audit_events` | 管理员授权变更的追加式审计。 |
@@ -113,11 +130,12 @@ POST /simulate-reply
 
 ## Worker 可靠性语义
 
-1. Worker 在短事务中将 `queued` run 领取为 `running`，写入 `claim_token` 和 120 秒 `lease_expires_at` 后立即提交。
-2. LLM 调用不持有数据库写锁。完成或失败回写必须同时匹配 run ID、`claim_token` 与 `running` 状态，旧 Worker 的延迟结果不能覆盖新状态。
-3. 每次轮询先回收过期租约：run 记录为 `failed/worker_lost`，回复转入 `need_ai_review`。系统不自动重跑，人工必须显式新建 run。
-4. Provider、JSON、Pydantic 之外的异常会记录为 `worker_unexpected_error`；错误摘要最多 500 字符且不保存堆栈。若异常回写失败，租约回收会作为兜底。
-5. 查询接口可以读取 `block_reason` 和 `lease_expires_at`，但不会暴露 `claim_token`。
+1. PostgreSQL Worker 在短事务中按创建顺序使用 `FOR UPDATE SKIP LOCKED` 原子领取；SQLite 自动化测试保留条件更新回退。领取会写入 `claim_token`、当前 `claimed_by_worker_id` 和 120 秒 `lease_expires_at` 后立即提交。
+2. Worker 身份优先级为 `--worker-id`、`WORKER_ID`、`hostname:pid`。当前身份只在 run 处于 `running` 时保存；终态历史写入不可变 `worker_run_events`。
+3. LLM 调用不持有数据库写锁。完成或失败回写必须同时匹配 run ID、`claim_token`、`running` 和未过期 lease；旧 token、已过期 lease 或已处理 run 只会追加 `claim_result_discarded`，不能覆盖当前状态。
+4. 每次轮询先回收过期租约。PostgreSQL 回收同样使用 `SKIP LOCKED`，只有一个 Worker 能写入 `failed/worker_lost` 与 `lease_expired_recovered`；系统不自动重跑，人工必须显式新建 run。
+5. 运行留痕只记录 `claim_acquired`、`claim_finished`、`lease_expired_recovered` 和 `claim_result_discarded` 的最小元数据，不保存原始 claim token、提示词、邮件正文或模型密钥。单项 `GET /runs/{run_id}` 在既有 `review:read` 部门范围内返回事件；列表和工作台不增加指标查询。
+6. Provider、JSON、Pydantic 之外的异常会记录为 `worker_unexpected_error`；错误摘要最多 500 字符且不保存堆栈。若异常回写失败，租约回收会作为兜底。
 
 ## 主要接口
 

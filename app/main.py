@@ -34,6 +34,7 @@ from .models import (
     ReferenceMaterial,
     SimulatedOutboundInstruction,
     UserDepartmentMembership,
+    WorkerRunEvent,
 )
 from .authorization import Capability, Principal, Role
 from .schemas import (
@@ -761,7 +762,18 @@ def get_run(
     )
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
-    return {"ok": True, "run": _run_to_dict(run)}
+    worker_events = list(
+        db.scalars(
+            select(WorkerRunEvent)
+            .where(WorkerRunEvent.agent_followup_run_id == run.id)
+            .order_by(WorkerRunEvent.event_at.asc(), WorkerRunEvent.id.asc())
+        ).all()
+    )
+    return {
+        "ok": True,
+        "run": _run_to_dict(run),
+        "worker_events": [_worker_run_event_to_dict(event) for event in worker_events],
+    }
 
 
 @app.get("/api/followup-agent/runs")
@@ -1995,6 +2007,21 @@ def _run_to_dict(row: AgentFollowupRun) -> dict[str, Any]:
         "prompt_characters": row.prompt_characters,
         "output_characters": row.output_characters,
         "created_by": row.created_by,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _worker_run_event_to_dict(row: WorkerRunEvent) -> dict[str, Any]:
+    """Expose minimal operational history without returning a claim token or prompt content."""
+
+    return {
+        "id": row.id,
+        "agent_followup_run_id": row.agent_followup_run_id,
+        "department_code": row.department_code,
+        "worker_id": row.worker_id,
+        "event_type": row.event_type,
+        "metadata": _load_json(row.metadata_json) or {},
+        "event_at": row.event_at.isoformat() if row.event_at else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 

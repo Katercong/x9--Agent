@@ -19,7 +19,7 @@ os.environ["SILICONFLOW_API_KEY"] = ""
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
-from sqlalchemy import delete, event, func, select  # noqa: E402
+from sqlalchemy import delete, event, func, inspect, select  # noqa: E402
 from sqlalchemy.dialects import postgresql, sqlite  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 
@@ -37,6 +37,7 @@ from app.models import (  # noqa: E402
     FollowupTask,
     HumanReviewDecision,
     InboundReply,
+    WorkerRunEvent,
 )
 from app import models, services  # noqa: E402
 from app.schemas import AgentSuggestion, DeclineConfirmationApproveIn  # noqa: E402
@@ -2863,6 +2864,63 @@ def test_decline_confirmation_audit_migration_upgrades_and_downgrades_sqlite(tmp
         assert "decline_confirmations" not in tables
 
 
+def test_worker_claim_audit_migration_upgrades_and_downgrades_sqlite(tmp_path):
+    """Worker 身份、事件索引和不可变持久化守卫必须随 revision 完整升级和回退。"""
+
+    root = Path(__file__).resolve().parents[1]
+    database_path = tmp_path / "worker_claim_audit.sqlite"
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = f"sqlite:///{database_path.as_posix()}"
+
+    def run_alembic(*args: str) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", *args],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    run_alembic("upgrade", "head")
+    with sqlite3.connect(database_path) as connection:
+        run_columns = {row[1] for row in connection.execute("PRAGMA table_info('agent_followup_runs')")}
+        assert "claimed_by_worker_id" in run_columns
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "worker_run_events" in tables
+        foreign_keys = connection.execute("PRAGMA foreign_key_list('worker_run_events')").fetchall()
+        assert {(row[3], row[2], row[6]) for row in foreign_keys} == {
+            ("agent_followup_run_id", "agent_followup_runs", "RESTRICT")
+        }
+        indexes = {row[1] for row in connection.execute("PRAGMA index_list('worker_run_events')")}
+        assert {
+            "ix_worker_run_events_run_event_at",
+            "ix_worker_run_events_department_event_at",
+            "ix_worker_run_events_type_event_at",
+        } <= indexes
+        triggers = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+        assert {"trg_worker_run_events_no_update", "trg_worker_run_events_no_delete"} <= triggers
+        connection.execute(
+            """
+            INSERT INTO worker_run_events (id, agent_followup_run_id, department_code, worker_id, event_type)
+            VALUES ('worker_event_immutable_migration', 'legacy_run', 'cross_border', 'worker_migration', 'claim_acquired')
+            """
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            connection.execute(
+                "UPDATE worker_run_events SET event_type = 'tampered' WHERE id = 'worker_event_immutable_migration'"
+            )
+
+    run_alembic("downgrade", "3c4d5e6f7a8b")
+    with sqlite3.connect(database_path) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "worker_run_events" not in tables
+        run_columns = {row[1] for row in connection.execute("PRAGMA table_info('agent_followup_runs')")}
+        assert "claimed_by_worker_id" not in run_columns
+
+
 def test_decline_confirmation_schema_and_serializer_are_audit_only():
     """阶段 1 的确认请求无客户端主体字段，序列化器只返回审计数据。"""
 
@@ -3269,6 +3327,88 @@ def test_worker_process_once_returns_processed_run_id(monkeypatch):
     assert worker.process_once() == queued.json()["run"]["id"]
 
 
+def test_worker_id_uses_cli_then_environment_then_hostname_pid(monkeypatch):
+    """Worker 身份只用于可观测性，且有稳定、可测试的优先级。"""
+
+    import app.worker as worker
+
+    monkeypatch.setenv("WORKER_ID", "environment-worker")
+    monkeypatch.setattr(worker.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(worker.os, "getpid", lambda: 4242)
+
+    assert worker.resolve_worker_id("cli-worker") == "cli-worker"
+    assert worker.resolve_worker_id() == "environment-worker"
+
+    monkeypatch.delenv("WORKER_ID")
+    assert worker.resolve_worker_id() == "test-host:4242"
+    with pytest.raises(ValueError, match="at most 200"):
+        worker.resolve_worker_id("x" * 201)
+
+
+def test_worker_run_events_record_claim_lifecycle_without_claim_token():
+    """运行详情应提供最小 Worker 留痕，而不能泄露领取令牌或提示词。"""
+
+    import app.worker as worker
+
+    client = TestClient(app)
+    _create_creator(client, "creator_worker_event_lifecycle")
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_worker_event_lifecycle", "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert queued.status_code == 200, queued.text
+    run_id = queued.json()["run"]["id"]
+
+    assert worker.process_once(worker_id="worker_lifecycle") == run_id
+
+    completed = client.get(f"/api/followup-agent/runs/{run_id}")
+    assert completed.status_code == 200, completed.text
+    events = completed.json()["worker_events"]
+    assert [(event["event_type"], event["worker_id"]) for event in events] == [
+        ("claim_acquired", "worker_lifecycle"),
+        ("claim_finished", "worker_lifecycle"),
+    ]
+    assert events[0]["metadata"] == {"lease_seconds": services.WORKER_LEASE_SECONDS}
+    assert events[1]["metadata"] == {"execution_status": "succeeded", "llm_status": "not_configured"}
+    serialized_events = json.dumps(events, ensure_ascii=False)
+    assert "claim_token" not in serialized_events
+    assert "claimed_by_worker_id" not in completed.json()["run"]
+    assert "Sounds interesting." not in serialized_events
+
+
+def test_worker_run_events_are_immutable_to_orm_callers():
+    """审计事件既没有写接口，也拒绝 ORM 层更新和删除。"""
+
+    client = TestClient(app)
+    _create_creator(client, "creator_worker_event_immutable")
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_worker_event_immutable", "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert queued.status_code == 200, queued.text
+
+    with SessionLocal() as db:
+        claimed = services.claim_next_queued_run(db, worker_id="worker_immutable")
+        assert claimed is not None
+        db.commit()
+
+    with SessionLocal() as db:
+        event = db.scalar(select(WorkerRunEvent).where(WorkerRunEvent.agent_followup_run_id == claimed.run_id))
+        assert event is not None
+        event.event_type = "tampered"
+        with pytest.raises(ValueError, match="immutable"):
+            db.flush()
+        db.rollback()
+
+    with SessionLocal() as db:
+        event = db.scalar(select(WorkerRunEvent).where(WorkerRunEvent.agent_followup_run_id == claimed.run_id))
+        assert event is not None
+        db.delete(event)
+        with pytest.raises(ValueError, match="immutable"):
+            db.flush()
+        db.rollback()
+
+
 def test_worker_commits_running_claim_before_blocking_provider_call(monkeypatch):
     """Worker 调用 Provider 前必须让其他会话可见 running 租约。"""
 
@@ -3321,6 +3461,81 @@ def test_worker_commits_running_claim_before_blocking_provider_call(monkeypatch)
     assert not thread.is_alive()
 
 
+def test_postgresql_claim_statement_uses_skip_locked_and_returning():
+    """PostgreSQL workers must skip another worker's uncommitted claim."""
+
+    statement = services._postgres_claim_next_queued_run_statement(
+        claim_token="claim_test",
+        worker_id="postgres_compile_worker",
+        claimed_at=datetime(2026, 7, 29, 12, 0, 0),
+        lease_expires_at=datetime(2026, 7, 29, 12, 2, 0),
+    )
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert "FOR UPDATE SKIP LOCKED" in compiled.upper()
+    assert "RETURNING" in compiled.upper()
+    assert "ORDER BY agent_followup_runs.created_at ASC, agent_followup_runs.id ASC" in compiled
+
+
+def test_postgresql_expired_recovery_statement_uses_skip_locked():
+    """过期回收也必须跳过另一个 PostgreSQL Worker 已锁定的 run。"""
+
+    statement = services._postgres_expired_running_runs_statement(now=datetime(2026, 7, 29, 12, 0, 0))
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert "FOR UPDATE SKIP LOCKED" in compiled.upper()
+    assert "ORDER BY agent_followup_runs.lease_expires_at ASC" in compiled
+
+
+def test_sqlite_claim_fallback_claims_distinct_queued_runs():
+    """SQLite keeps compare-and-swap semantics while PostgreSQL owns the lock-aware path."""
+
+    client = TestClient(app)
+    _create_creator(client, "creator_sqlite_claim_first")
+    _create_creator(client, "creator_sqlite_claim_second")
+    first = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_sqlite_claim_first", "body": "Sounds interesting.", "run_agent": True},
+    )
+    second = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_sqlite_claim_second", "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+    with SessionLocal() as db:
+        first_claim = services.claim_next_queued_run(db)
+        assert first_claim is not None
+        db.commit()
+    with SessionLocal() as db:
+        second_claim = services.claim_next_queued_run(db)
+        assert second_claim is not None
+        db.commit()
+
+    assert {first_claim.run_id, second_claim.run_id} == {first.json()["run"]["id"], second.json()["run"]["id"]}
+    assert first_claim.run_id != second_claim.run_id
+
+
+def test_sqlite_claim_fallback_does_not_claim_one_run_twice():
+    """已提交的单条领取不能被第二个 SQLite Worker 重复取得。"""
+
+    client = TestClient(app)
+    _create_creator(client, "creator_sqlite_single_claim")
+    created = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_sqlite_single_claim", "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert created.status_code == 200, created.text
+
+    with SessionLocal() as db:
+        first_claim = services.claim_next_queued_run(db)
+        assert first_claim is not None
+        db.commit()
+    with SessionLocal() as db:
+        assert services.claim_next_queued_run(db) is None
+
+
 def test_expired_running_run_is_failed_without_automatic_retry():
     """过期租约必须转人工处理，不能回到 queued 或再次调用模型。"""
 
@@ -3336,6 +3551,7 @@ def test_expired_running_run_is_failed_without_automatic_retry():
         assert run is not None
         run.execution_status = "running"
         run.claim_token = "lost-worker-claim"
+        run.claimed_by_worker_id = "worker_expired_lease"
         run.lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
         db.commit()
 
@@ -3350,6 +3566,14 @@ def test_expired_running_run_is_failed_without_automatic_retry():
     assert run["llm_status"] == "worker_lost"
     assert run["validation_error"] == "worker lease expired before completion"
     assert run["lease_expires_at"] is None
+    assert "claimed_by_worker_id" not in run
+    with SessionLocal() as db:
+        persisted = db.get(AgentFollowupRun, run_id)
+        assert persisted is not None and persisted.claimed_by_worker_id is None
+    events = completed.json()["worker_events"]
+    assert [(event["event_type"], event["worker_id"]) for event in events] == [
+        ("lease_expired_recovered", "worker_expired_lease")
+    ]
 
 
 def test_stale_worker_claim_cannot_overwrite_current_run_state():
@@ -3363,7 +3587,7 @@ def test_stale_worker_claim_cannot_overwrite_current_run_state():
     )
     run_id = queued.json()["run"]["id"]
     with SessionLocal() as db:
-        claimed = services.claim_next_queued_run(db)
+        claimed = services.claim_next_queued_run(db, worker_id="worker_stale_claim")
         assert claimed is not None
         db.commit()
     with SessionLocal() as db:
@@ -3378,6 +3602,154 @@ def test_stale_worker_claim_cannot_overwrite_current_run_state():
         assert run is not None
         assert run.execution_status == "running"
         assert run.claim_token == "newer-worker-claim"
+    completed = client.get(f"/api/followup-agent/runs/{run_id}")
+    assert completed.status_code == 200
+    assert [event["event_type"] for event in completed.json()["worker_events"]] == [
+        "claim_acquired",
+        "claim_result_discarded",
+    ]
+    assert "claim_token" not in json.dumps(completed.json())
+
+
+def test_expired_worker_claim_is_discarded_without_model_call_or_state_overwrite(monkeypatch):
+    """lease 已过期但尚未回收时，旧 Worker 也绝不能再写入结果。"""
+
+    client = TestClient(app)
+    _create_creator(client, "creator_expired_claim_discard")
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_expired_claim_discard", "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert queued.status_code == 200, queued.text
+    run_id = queued.json()["run"]["id"]
+
+    with SessionLocal() as db:
+        claimed = services.claim_next_queued_run(db, worker_id="worker_expired_discard")
+        assert claimed is not None
+        db.commit()
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, run_id)
+        assert run is not None
+        run.lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
+        db.commit()
+
+    monkeypatch.setattr(
+        services,
+        "generate_raw_followup_output",
+        lambda *_args: pytest.fail("expired claim must not call the model"),
+    )
+    assert services.process_claimed_run(claimed) is None
+
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, run_id)
+        assert run is not None
+        assert run.execution_status == "running"
+        assert run.claim_token == claimed.claim_token
+        assert db.scalar(select(func.count()).select_from(models.SimulatedOutboundInstruction)) == 0
+    completed = client.get(f"/api/followup-agent/runs/{run_id}")
+    assert completed.status_code == 200
+    assert completed.json()["worker_events"][-1]["event_type"] == "claim_result_discarded"
+    assert completed.json()["worker_events"][-1]["metadata"] == {"reason": "lease_expired"}
+
+
+def test_completion_write_discards_claim_when_lease_expires_after_precheck(monkeypatch):
+    """最终 UPDATE 必须再次验证 lease，封住预检查与写回之间的竞态窗口。"""
+
+    client = TestClient(app)
+    _create_creator(client, "creator_completion_lease_write_race")
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_completion_lease_write_race", "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert queued.status_code == 200, queued.text
+    run_id = queued.json()["run"]["id"]
+    with SessionLocal() as db:
+        claimed = services.claim_next_queued_run(db, worker_id="worker_completion_lease_race")
+        assert claimed is not None
+        context = services.build_followup_context(db, claimed.inbound_reply_id)
+        db.commit()
+    prompt_package = services.build_prompt_package(context)
+
+    original_discard_reason = services._claim_discard_reason
+
+    def expire_lease_after_precheck(run, current_claimed, *, now):
+        reason = original_discard_reason(run, current_claimed, now=now)
+        if reason is None:
+            assert run is not None
+            run.lease_expires_at = now - timedelta(seconds=1)
+            session = inspect(run).session
+            assert session is not None
+            session.flush()
+        return reason
+
+    monkeypatch.setattr(services, "_claim_discard_reason", expire_lease_after_precheck)
+
+    assert (
+        services._complete_claimed_run(
+            claimed,
+            context=context,
+            prompt_package=prompt_package,
+            suggestion=None,
+            raw_output="{}",
+            llm_status="invalid_json",
+            execution_status="failed",
+            validation_error="test completion race",
+        )
+        is None
+    )
+
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, run_id)
+        assert run is not None
+        assert run.execution_status == "running"
+        assert run.claim_token == claimed.claim_token
+    completed = client.get(f"/api/followup-agent/runs/{run_id}")
+    assert completed.status_code == 200
+    assert completed.json()["worker_events"][-1]["event_type"] == "claim_result_discarded"
+    assert completed.json()["worker_events"][-1]["metadata"] == {"reason": "conditional_completion_write_lost"}
+
+
+def test_unexpected_error_write_discards_claim_when_lease_expires_after_precheck(monkeypatch):
+    """异常回写也必须使用同一 lease 条件，不能把过期任务写为最终失败。"""
+
+    client = TestClient(app)
+    _create_creator(client, "creator_unexpected_lease_write_race")
+    queued = client.post(
+        "/api/followup-agent/simulate-reply",
+        json={"creator_id": "creator_unexpected_lease_write_race", "body": "Sounds interesting.", "run_agent": True},
+    )
+    assert queued.status_code == 200, queued.text
+    run_id = queued.json()["run"]["id"]
+    with SessionLocal() as db:
+        claimed = services.claim_next_queued_run(db, worker_id="worker_unexpected_lease_race")
+        assert claimed is not None
+        db.commit()
+
+    original_discard_reason = services._claim_discard_reason
+
+    def expire_lease_after_precheck(run, current_claimed, *, now):
+        reason = original_discard_reason(run, current_claimed, now=now)
+        if reason is None:
+            assert run is not None
+            run.lease_expires_at = now - timedelta(seconds=1)
+            session = inspect(run).session
+            assert session is not None
+            session.flush()
+        return reason
+
+    monkeypatch.setattr(services, "_claim_discard_reason", expire_lease_after_precheck)
+
+    assert services.persist_unexpected_claim_error(claimed, RuntimeError("test unexpected race")) is None
+
+    with SessionLocal() as db:
+        run = db.get(AgentFollowupRun, run_id)
+        assert run is not None
+        assert run.execution_status == "running"
+        assert run.claim_token == claimed.claim_token
+    completed = client.get(f"/api/followup-agent/runs/{run_id}")
+    assert completed.status_code == 200
+    assert completed.json()["worker_events"][-1]["event_type"] == "claim_result_discarded"
+    assert completed.json()["worker_events"][-1]["metadata"] == {"reason": "conditional_unexpected_error_write_lost"}
 
 
 def test_worker_persists_unexpected_context_error_without_waiting_for_lease(monkeypatch):

@@ -26,6 +26,7 @@ from .models import (
     OutreachEmail,
     Product,
     ReferenceMaterial,
+    WorkerRunEvent,
 )
 from .prompts import PromptPackage, build_prompt_package
 from .schemas import AgentSuggestion, REPLY_CATEGORIES, ReplyClassification
@@ -41,6 +42,7 @@ class ClaimedRun:
     run_id: str
     inbound_reply_id: str
     claim_token: str
+    worker_id: str
 
 
 def new_id(prefix: str) -> str:
@@ -332,52 +334,196 @@ def is_creator_contact_blocked(creator: Creator | None) -> bool:
     return creator is not None and creator.do_not_contact_status in {"pending_confirmation", "confirmed"}
 
 
-def claim_next_queued_run(db: Session) -> ClaimedRun | None:
-    """原子领取最早 queued 任务；调用方必须在模型调用前立即提交。"""
+def claim_next_queued_run(db: Session, *, worker_id: str = "manual") -> ClaimedRun | None:
+    """领取最早 queued 任务；调用方必须在模型调用前立即提交。"""
 
-    run_id = db.scalar(
-        select(AgentFollowupRun.id)
-        .where(AgentFollowupRun.execution_status == "queued")
-        .order_by(AgentFollowupRun.created_at.asc())
-        .limit(1)
-    )
-    if run_id is None:
-        return None
+    worker_id = _validate_worker_id(worker_id)
     claim_token = new_id("claim")
+    claimed_at = datetime.utcnow()
+    lease_expires_at = claimed_at + timedelta(seconds=WORKER_LEASE_SECONDS)
+
+    if db.get_bind().dialect.name == "postgresql":
+        row = db.execute(
+            _postgres_claim_next_queued_run_statement(
+                claim_token=claim_token,
+                worker_id=worker_id,
+                claimed_at=claimed_at,
+                lease_expires_at=lease_expires_at,
+            )
+        ).mappings().one_or_none()
+        if row is None or not row["inbound_reply_id"] or not row["department_code"]:
+            return None
+        claimed = ClaimedRun(
+            run_id=str(row["run_id"]),
+            inbound_reply_id=str(row["inbound_reply_id"]),
+            claim_token=claim_token,
+            worker_id=worker_id,
+        )
+        _append_worker_run_event(
+            db,
+            run_id=claimed.run_id,
+            department_code=str(row["department_code"]),
+            worker_id=worker_id,
+            event_type="claim_acquired",
+            event_at=claimed_at,
+            metadata={"lease_seconds": WORKER_LEASE_SECONDS},
+        )
+        return claimed
+
+    # SQLite has no row-level SKIP LOCKED equivalent.  Keep the existing
+    # compare-and-swap fallback for unit tests and the local MVP: only the
+    # session that changes queued -> running owns the generated claim token.
+    candidate = db.execute(
+        select(AgentFollowupRun.id, AgentFollowupRun.inbound_reply_id, AgentFollowupRun.department_code)
+        .where(AgentFollowupRun.execution_status == "queued")
+        .order_by(AgentFollowupRun.created_at.asc(), AgentFollowupRun.id.asc())
+        .limit(1)
+    ).mappings().one_or_none()
+    if candidate is None or not candidate["inbound_reply_id"] or not candidate["department_code"]:
+        return None
     claimed = db.execute(
         update(AgentFollowupRun)
-        .where(AgentFollowupRun.id == run_id)
+        .where(AgentFollowupRun.id == candidate["id"])
         .where(AgentFollowupRun.execution_status == "queued")
         .values(
             execution_status="running",
-            started_at=datetime.utcnow(),
+            started_at=claimed_at,
             claim_token=claim_token,
-            lease_expires_at=datetime.utcnow() + timedelta(seconds=WORKER_LEASE_SECONDS),
+            claimed_by_worker_id=worker_id,
+            lease_expires_at=lease_expires_at,
         )
     )
     if claimed.rowcount != 1:
         return None
-    run = db.get(AgentFollowupRun, run_id)
-    if run is None or not run.inbound_reply_id:
-        return None
-    return ClaimedRun(run_id=run.id, inbound_reply_id=run.inbound_reply_id, claim_token=claim_token)
+    claimed_run = ClaimedRun(
+        run_id=str(candidate["id"]),
+        inbound_reply_id=str(candidate["inbound_reply_id"]),
+        claim_token=claim_token,
+        worker_id=worker_id,
+    )
+    _append_worker_run_event(
+        db,
+        run_id=claimed_run.run_id,
+        department_code=str(candidate["department_code"]),
+        worker_id=worker_id,
+        event_type="claim_acquired",
+        event_at=claimed_at,
+        metadata={"lease_seconds": WORKER_LEASE_SECONDS},
+    )
+    return claimed_run
+
+
+def _postgres_claim_next_queued_run_statement(
+    *,
+    claim_token: str,
+    worker_id: str,
+    claimed_at: datetime,
+    lease_expires_at: datetime,
+):
+    """Build one PostgreSQL statement that skips rows claimed by other workers."""
+
+    next_queued_run = (
+        select(
+            AgentFollowupRun.id.label("run_id"),
+            AgentFollowupRun.department_code,
+        )
+        .where(AgentFollowupRun.execution_status == "queued")
+        .order_by(AgentFollowupRun.created_at.asc(), AgentFollowupRun.id.asc())
+        .limit(1)
+        .with_for_update(skip_locked=True)
+        .cte("next_queued_run")
+    )
+    return (
+        update(AgentFollowupRun)
+        .where(AgentFollowupRun.id == next_queued_run.c.run_id)
+        .where(AgentFollowupRun.execution_status == "queued")
+        .values(
+            execution_status="running",
+            started_at=claimed_at,
+            claim_token=claim_token,
+            claimed_by_worker_id=worker_id,
+            lease_expires_at=lease_expires_at,
+        )
+        .returning(
+            AgentFollowupRun.id.label("run_id"),
+            AgentFollowupRun.inbound_reply_id,
+            AgentFollowupRun.department_code,
+        )
+    )
+
+
+def _validate_worker_id(value: str) -> str:
+    worker_id = value.strip()
+    if not worker_id:
+        raise ValueError("worker_id must not be empty")
+    if len(worker_id) > 200:
+        raise ValueError("worker_id must be at most 200 characters")
+    return worker_id
+
+
+def _append_worker_run_event(
+    db: Session,
+    *,
+    run_id: str,
+    department_code: str,
+    worker_id: str,
+    event_type: str,
+    event_at: datetime,
+    metadata: dict[str, Any] | None = None,
+) -> WorkerRunEvent:
+    """Append minimal operational telemetry without persisting credentials or message content."""
+
+    event = WorkerRunEvent(
+        id=new_id("worker_event"),
+        agent_followup_run_id=run_id,
+        department_code=department_code,
+        worker_id=_validate_worker_id(worker_id),
+        event_type=event_type,
+        metadata_json=json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
+        event_at=event_at,
+    )
+    db.add(event)
+    return event
+
+
+def _append_claim_result_discarded_event(
+    db: Session,
+    *,
+    claimed: ClaimedRun,
+    reason: str,
+    event_at: datetime,
+) -> None:
+    """Record a stale worker's discarded result, while never storing its secret claim token."""
+
+    run = db.get(AgentFollowupRun, claimed.run_id)
+    if run is None:
+        return
+    _append_worker_run_event(
+        db,
+        run_id=run.id,
+        department_code=run.department_code,
+        worker_id=claimed.worker_id,
+        event_type="claim_result_discarded",
+        event_at=event_at,
+        metadata={"reason": reason},
+    )
 
 
 def recover_expired_runs(db: Session) -> int:
     """将过期 running 任务标为 worker_lost，保留给人工处理且不自动重跑。"""
 
     now = datetime.utcnow()
+    if db.get_bind().dialect.name == "postgresql":
+        statement = _postgres_expired_running_runs_statement(now=now)
+    else:
+        statement = _sqlite_expired_running_runs_statement(now=now)
     runs = list(
-        db.scalars(
-            select(AgentFollowupRun)
-            .where(AgentFollowupRun.execution_status == "running")
-            .where(AgentFollowupRun.lease_expires_at.is_not(None))
-            .where(AgentFollowupRun.lease_expires_at <= now)
-        ).all()
+        db.scalars(statement).all()
     )
     recovered = 0
     for run in runs:
         duration_ms = int((now - run.started_at).total_seconds() * 1000) if run.started_at else 0
+        claimed_worker_id = run.claimed_by_worker_id or "unknown"
         updated = db.execute(
             update(AgentFollowupRun)
             .where(AgentFollowupRun.id == run.id)
@@ -392,21 +538,51 @@ def recover_expired_runs(db: Session) -> int:
                 finished_at=now,
                 duration_ms=duration_ms,
                 claim_token=None,
+                claimed_by_worker_id=None,
                 lease_expires_at=None,
             )
         )
         if updated.rowcount != 1:
             continue
         _update_reply_processing_status(db, run.inbound_reply_id or "", suggestion=None, requires_manual_review=True)
+        _append_worker_run_event(
+            db,
+            run_id=run.id,
+            department_code=run.department_code,
+            worker_id=claimed_worker_id,
+            event_type="lease_expired_recovered",
+            event_at=now,
+            metadata={"execution_status": "failed", "llm_status": "worker_lost"},
+        )
         recovered += 1
     db.flush()
     return recovered
 
 
-def process_next_queued_run(db: Session) -> AgentFollowupRun | None:
+def _sqlite_expired_running_runs_statement(*, now: datetime):
+    return (
+        select(AgentFollowupRun)
+        .where(AgentFollowupRun.execution_status == "running")
+        .where(AgentFollowupRun.lease_expires_at.is_not(None))
+        .where(AgentFollowupRun.lease_expires_at <= now)
+        .order_by(
+            AgentFollowupRun.lease_expires_at.asc(),
+            AgentFollowupRun.created_at.asc(),
+            AgentFollowupRun.id.asc(),
+        )
+    )
+
+
+def _postgres_expired_running_runs_statement(*, now: datetime):
+    """Lock only recoverable PostgreSQL rows so concurrent workers skip each other."""
+
+    return _sqlite_expired_running_runs_statement(now=now).with_for_update(skip_locked=True)
+
+
+def process_next_queued_run(db: Session, *, worker_id: str = "manual") -> AgentFollowupRun | None:
     """兼容现有手工调用：提交领取后再由独立会话完成处理。"""
 
-    claimed = claim_next_queued_run(db)
+    claimed = claim_next_queued_run(db, worker_id=worker_id)
     if claimed is None:
         return None
     db.commit()
@@ -418,7 +594,15 @@ def process_claimed_run(claimed: ClaimedRun) -> AgentFollowupRun | None:
 
     with SessionLocal() as db:
         run = db.get(AgentFollowupRun, claimed.run_id)
-        if not _is_current_claim(run, claimed):
+        discard_reason = _claim_discard_reason(run, claimed, now=datetime.utcnow())
+        if discard_reason is not None:
+            _append_claim_result_discarded_event(
+                db,
+                claimed=claimed,
+                reason=discard_reason,
+                event_at=datetime.utcnow(),
+            )
+            db.commit()
             return None
         context = build_followup_context(db, claimed.inbound_reply_id)
         prompt_package = build_prompt_package(context)
@@ -482,15 +666,27 @@ def process_claimed_run(claimed: ClaimedRun) -> AgentFollowupRun | None:
     )
 
 
-def _is_current_claim(run: AgentFollowupRun | None, claimed: ClaimedRun) -> bool:
-    """确认 run 仍由当前 Worker 持有，避免旧 Worker 覆盖后来状态。"""
+def _claim_discard_reason(
+    run: AgentFollowupRun | None,
+    claimed: ClaimedRun,
+    *,
+    now: datetime,
+) -> str | None:
+    """Explain why a delayed worker result must not mutate the current run."""
 
-    return bool(
-        run
-        and run.execution_status == "running"
-        and run.claim_token == claimed.claim_token
-        and run.inbound_reply_id == claimed.inbound_reply_id
-    )
+    if run is None:
+        return "run_not_found"
+    if run.inbound_reply_id != claimed.inbound_reply_id:
+        return "inbound_reply_not_current"
+    if run.execution_status != "running":
+        return "run_not_running"
+    if run.claim_token != claimed.claim_token:
+        return "claim_not_current"
+    if run.lease_expires_at is None:
+        return "lease_missing"
+    if run.lease_expires_at <= now:
+        return "lease_expired"
+    return None
 
 
 def _complete_claimed_run(
@@ -506,7 +702,7 @@ def _complete_claimed_run(
     block_reason: str | None = None,
     context_warnings: list[str] | None = None,
 ) -> AgentFollowupRun | None:
-    """以 id、claim_token 和 running 条件原子写回一次已领取任务的结果。"""
+    """以 id、claim_token、running 和有效 lease 条件原子写回一次已领取任务的结果。"""
 
     if suggestion is not None:
         review_reasons = list(dict.fromkeys([*suggestion.review_reasons, *(context_warnings or []), "human_approval_required"]))
@@ -520,7 +716,15 @@ def _complete_claimed_run(
     now = datetime.utcnow()
     with SessionLocal() as db:
         run = db.get(AgentFollowupRun, claimed.run_id)
-        if not _is_current_claim(run, claimed):
+        discard_reason = _claim_discard_reason(run, claimed, now=now)
+        if discard_reason is not None:
+            _append_claim_result_discarded_event(
+                db,
+                claimed=claimed,
+                reason=discard_reason,
+                event_at=now,
+            )
+            db.commit()
             return None
         output = suggestion.model_dump() if suggestion else {"raw_output": raw_output}
         duration_ms = int((now - run.started_at).total_seconds() * 1000) if run.started_at else 0
@@ -529,6 +733,8 @@ def _complete_claimed_run(
             .where(AgentFollowupRun.id == claimed.run_id)
             .where(AgentFollowupRun.execution_status == "running")
             .where(AgentFollowupRun.claim_token == claimed.claim_token)
+            .where(AgentFollowupRun.lease_expires_at.is_not(None))
+            .where(AgentFollowupRun.lease_expires_at > now)
             .values(
                 reply_category=suggestion.reply_category if suggestion else str(context.get("reply_category") or "unclear"),
                 suggested_status=suggestion.suggested_status if suggestion else None,
@@ -550,17 +756,34 @@ def _complete_claimed_run(
                 finished_at=now,
                 duration_ms=duration_ms,
                 claim_token=None,
+                claimed_by_worker_id=None,
                 lease_expires_at=None,
             )
         )
         if updated.rowcount != 1:
             db.rollback()
+            _append_claim_result_discarded_event(
+                db,
+                claimed=claimed,
+                reason="conditional_completion_write_lost",
+                event_at=now,
+            )
+            db.commit()
             return None
         db.execute(
             update(InboundReply)
             .where(InboundReply.id == claimed.inbound_reply_id)
             .where(InboundReply.processing_status != "ignored")
             .values(processing_status="need_ai_review")
+        )
+        _append_worker_run_event(
+            db,
+            run_id=claimed.run_id,
+            department_code=run.department_code,
+            worker_id=claimed.worker_id,
+            event_type="claim_finished",
+            event_at=now,
+            metadata={"execution_status": execution_status, "llm_status": llm_status},
         )
         db.commit()
         return db.get(AgentFollowupRun, claimed.run_id)
@@ -573,7 +796,15 @@ def persist_unexpected_claim_error(claimed: ClaimedRun, error: Exception) -> Age
     now = datetime.utcnow()
     with SessionLocal() as db:
         run = db.get(AgentFollowupRun, claimed.run_id)
-        if not _is_current_claim(run, claimed):
+        discard_reason = _claim_discard_reason(run, claimed, now=now)
+        if discard_reason is not None:
+            _append_claim_result_discarded_event(
+                db,
+                claimed=claimed,
+                reason=discard_reason,
+                event_at=now,
+            )
+            db.commit()
             return None
         duration_ms = int((now - run.started_at).total_seconds() * 1000) if run.started_at else 0
         updated = db.execute(
@@ -581,6 +812,8 @@ def persist_unexpected_claim_error(claimed: ClaimedRun, error: Exception) -> Age
             .where(AgentFollowupRun.id == claimed.run_id)
             .where(AgentFollowupRun.execution_status == "running")
             .where(AgentFollowupRun.claim_token == claimed.claim_token)
+            .where(AgentFollowupRun.lease_expires_at.is_not(None))
+            .where(AgentFollowupRun.lease_expires_at > now)
             .values(
                 llm_status="worker_unexpected_error",
                 execution_status="failed",
@@ -589,17 +822,34 @@ def persist_unexpected_claim_error(claimed: ClaimedRun, error: Exception) -> Age
                 finished_at=now,
                 duration_ms=duration_ms,
                 claim_token=None,
+                claimed_by_worker_id=None,
                 lease_expires_at=None,
             )
         )
         if updated.rowcount != 1:
             db.rollback()
+            _append_claim_result_discarded_event(
+                db,
+                claimed=claimed,
+                reason="conditional_unexpected_error_write_lost",
+                event_at=now,
+            )
+            db.commit()
             return None
         db.execute(
             update(InboundReply)
             .where(InboundReply.id == claimed.inbound_reply_id)
             .where(InboundReply.processing_status != "ignored")
             .values(processing_status="need_ai_review")
+        )
+        _append_worker_run_event(
+            db,
+            run_id=claimed.run_id,
+            department_code=run.department_code,
+            worker_id=claimed.worker_id,
+            event_type="claim_finished",
+            event_at=now,
+            metadata={"execution_status": "failed", "llm_status": "worker_unexpected_error"},
         )
         db.commit()
         return db.get(AgentFollowupRun, claimed.run_id)
