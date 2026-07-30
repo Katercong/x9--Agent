@@ -492,6 +492,11 @@ def transition_manual_delivery_request(
         raise ValueError("unknown manual delivery status")
     if target_status not in MANUAL_DELIVERY_TRANSITIONS[request.status]:
         raise ValueError(f"manual delivery cannot transition from {request.status} to {target_status}")
+    # This is the domain-level delivery boundary, not merely an API concern.
+    # A request without a locked single-recipient thread reference must never
+    # become queueable through another future caller or worker path.
+    if target_status == "queued" and not manual_delivery_snapshot_is_reliable(request):
+        raise ValueError("manual delivery request lacks reliable reply references")
     current_time = now or datetime.utcnow()
     previous_status = request.status
     request.status = target_status

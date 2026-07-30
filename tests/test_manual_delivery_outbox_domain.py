@@ -265,6 +265,21 @@ def test_missing_reliable_thread_reference_remains_pending_and_cannot_be_misrepr
         _creator, _reply, _decision, request = _approved_decision(db, suffix="missing-reference", metadata={"reply_to": "creator@example.test"})
         assert request.status == "pending_second_confirmation"
         assert manual_delivery_snapshot_is_reliable(request) is False
+        event_count_before = db.scalar(
+            select(func.count(ManualDeliveryEvent.id)).where(ManualDeliveryEvent.manual_delivery_request_id == request.id)
+        )
+        with pytest.raises(ValueError, match="reliable reply references"):
+            transition_manual_delivery_request(
+                db,
+                request=request,
+                target_status="queued",
+                actor_id="outbox_reviewer",
+            )
+        db.flush()
+        assert request.status == "pending_second_confirmation"
+        assert db.scalar(
+            select(func.count(ManualDeliveryEvent.id)).where(ManualDeliveryEvent.manual_delivery_request_id == request.id)
+        ) == event_count_before
         assert db.scalar(select(func.count(SimulatedOutboundInstruction.id))) == 0
 
 
