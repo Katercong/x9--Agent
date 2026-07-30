@@ -13,8 +13,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.NamedTemporaryFile(delete=False, suffix='.db').name}"
-
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient

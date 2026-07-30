@@ -1,0 +1,22 @@
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      # Dedicated fake credentials for a disposable local test container only.
+      POSTGRES_DB: postgres
+      POSTGRES_USER: x9_test
+      POSTGRES_PASSWORD: x9_test_only
+    ports:
+      - "127.0.0.1:${POSTGRES_TEST_PORT:-55432}:5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+volumes:
+  postgres_test_data:
