@@ -80,7 +80,7 @@ python -m pytest -q -m "not postgres_integration"
 .\scripts\run-postgres-tests.ps1
 ```
 
-`run-postgres-tests.ps1` 只启动 `compose.postgres-test.yaml` 中的专用 PostgreSQL 服务（默认 loopback 端口 `55432`），再调用 `scripts/run_postgres_tests.py`。运行器仅接受该服务的 `postgres` 控制库 URL，创建随机 `x9_replychat_test_*` 数据库、先执行 `alembic upgrade head`，再将生成的数据库 URL 传给带 `postgres_integration` marker 的测试。无论成功或失败，都会断开连接并删除本次数据库；PowerShell 包装器还会删除测试容器、网络和 volume。
+`run-postgres-tests.ps1` 每次执行使用 `x9-replychat-test-$PID` 的 Compose 项目名；未显式传入 `-Port` 时会动态选择空闲的 loopback 端口（直接手动运行 Compose 时仍可使用配置文件默认的 `55432`）。因此并行终端或 worktree 的测试容器、网络、volume 和端口彼此隔离。运行器再调用 `scripts/run_postgres_tests.py`，仅接受该服务的 `postgres` 控制库 URL，创建随机 `x9_replychat_test_*` 数据库、先执行 `alembic upgrade head`，再将生成的数据库 URL 传给带 `postgres_integration` marker 的测试。无论成功或失败，都会断开连接并删除本次数据库；PowerShell 包装器只会删除本次成功启动的测试容器、网络和 volume。
 
 该过程不读取 `.env`、不使用开发/演示数据库、不启动 API/Worker、不调用模型，也不创建任何出站指令。请勿直接运行 `pytest -m postgres_integration`：没有专用运行器时测试会明确失败，避免误指向非测试数据库后静默通过。GitHub Actions 使用同一 Python 运行器配合独立 `postgres:16-alpine` service 和公开的测试专用凭据。
 

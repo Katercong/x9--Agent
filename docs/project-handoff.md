@@ -5,8 +5,8 @@
 ## 代码基线
 
 - 已合并的 `main` 基线为 `527c08d Feat/postgres multi worker claim (#9)`，其中包含 V2/V3.2 默认配置、集合 SQL 审核队列、React 工作台、DNC/明确拒绝审核、人工导出交接、Dockerfile/Compose `migrate`/API/Worker profile、前端静态托管、受控 demo seed、RBAC Foundation，以及 PostgreSQL 原子多 Worker 领取与不可变事件留痕。
-- PostgreSQL 测试基础将 SQLite 快速回归与真实 PostgreSQL 核心套件分离：前者由统一 fixture 使用临时 SQLite 文件；后者只经 `scripts/run-postgres-tests.ps1` 或 `scripts/run_postgres_tests.py` 创建随机 `x9_replychat_test_*` 数据库、执行 Alembic 并在结束时删除。没有运行器时显式 marker 测试会失败，不会误用 `.env`、开发或演示库。
-- 最近验证：SQLite 快速回归为 `150 passed, 8 deselected`；真实 PostgreSQL 核心套件为 `8 passed`，覆盖完整/历史 Alembic 路径、部分唯一索引、不可变审计触发器、跨部门终态边界与多 Worker 竞争/回收/旧结果丢弃。PowerShell 入口还覆盖 Docker 启动失败即中止，既不连接指定端口也不清理非本次成功启动的容器。GitHub Actions 将两者分 job 执行。前端 Vitest 基线为 `12 passed`，`npm run build` 已通过。已用隔离 Compose 项目完成迁移到 `4d5e6f7a8b9c`、API 健康检查、`/operator-workbench/` 静态资源、demo 身份、六类队列、成功确认拒绝，以及模拟出站指令数保持 `0`。demo seed 也验证可在旧库已有同码部门目录时复用该目录项、补齐缺失本地映射而不覆盖数据。
+- PostgreSQL 测试基础将 SQLite 快速回归与真实 PostgreSQL 核心套件分离：前者由统一 fixture 使用临时 SQLite 文件；后者只经 `scripts/run-postgres-tests.ps1` 或 `scripts/run_postgres_tests.py` 创建随机 `x9_replychat_test_*` 数据库、执行 Alembic 并在结束时删除。PowerShell 入口为每次执行生成独立 Compose 项目名和动态 loopback 端口，避免并行本机/worktree 测试互相关闭容器或删除 volume。没有运行器时显式 marker 测试会失败，不会误用 `.env`、开发或演示库。
+- 最近验证：SQLite 快速回归为 `151 passed, 8 deselected`；真实 PostgreSQL 核心套件为 `8 passed`，覆盖完整/历史 Alembic 路径、部分唯一索引、不可变审计触发器、跨部门终态边界与多 Worker 竞争/回收/旧结果丢弃。PowerShell 入口还覆盖 Docker 启动失败即中止，既不连接指定端口也不清理非本次成功启动的容器，并覆盖进程隔离的 Compose 项目与动态端口。GitHub Actions 将两者分 job 执行。前端 Vitest 基线为 `12 passed`，`npm run build` 已通过。已用隔离 Compose 项目完成迁移到 `4d5e6f7a8b9c`、API 健康检查、`/operator-workbench/` 静态资源、demo 身份、六类队列、成功确认拒绝，以及模拟出站指令数保持 `0`。demo seed 也验证可在旧库已有同码部门目录时复用该目录项、补齐缺失本地映射而不覆盖数据。
 - 本地数据库：Docker Compose 管理 PostgreSQL。默认服务为 PostgreSQL、一次性 `migrate` 和 API；`worker` 与 `demo-seed` 是显式 profile。`.env.example` 的 Docker 默认值只启用 loopback demo Fake Adapter，且未配置 X9 HMAC 密钥时传入有效空 JSON；生产必须改为 X9 签名断言和受管密钥。SQLite 只用于自动化测试和可丢弃的本地 MVP 数据。
 
 ## 当前系统能力

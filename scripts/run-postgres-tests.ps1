@@ -1,12 +1,28 @@
 [CmdletBinding()]
 param(
-    [string]$Port = "55432",
+    [ValidateRange(1, 65535)]
+    [int]$Port,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$PytestArgs
 )
 
 $ErrorActionPreference = "Stop"
-$projectName = "x9-replychat-test"
+function Get-AvailableLoopbackPort {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    try {
+        $listener.Start()
+        return ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+    }
+    finally {
+        $listener.Stop()
+    }
+}
+
+if (-not $PSBoundParameters.ContainsKey("Port")) {
+    $Port = Get-AvailableLoopbackPort
+}
+
+$projectName = "x9-replychat-test-$PID"
 $composeFile = "compose.postgres-test.yaml"
 $previousAdminUrl = $env:POSTGRES_TEST_ADMIN_URL
 $hadPreviousAdminUrl = Test-Path Env:POSTGRES_TEST_ADMIN_URL
