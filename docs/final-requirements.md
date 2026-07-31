@@ -55,8 +55,9 @@
 - 保留达人、入站回复、产品、参考资料、Agent run、DNC、跟进待办、出站指令和沟通事件等领域数据。
 - 所有审计关联外键使用 `RESTRICT`/`NO ACTION` 语义，禁止以 `ON DELETE CASCADE` 删除审计记录。
 - `inbound_replies.external_message_id` 非空；`agent_followup_runs.creator_id` 与 `inbound_reply_id` 非空并受外键约束；同一回复在 `queued` 或 `running` 状态最多一条 run。
-- 待建设 Gmail 授权账号、X9 creator/mailbox 映射、X9 webhook 收据、可靠线程引用、人工确认投递请求、不可变投递事件、按账号每日计数与 X9 发送审计回写；这些均不得复用或修改历史 migration。
-- 权限模型至少包含运营、审核、管理员；用户只能访问获授权部门的数据。身份提供方尚未选定，但必须预留企业身份集成边界。
+- 已实现本地人工确认 Outbox 数据能力：批准草稿生成唯一的不可变草稿、收件人/主题/线程/RFC 引用快照与投递事件；无凭据账号目录绑定部门和账号所有者，按账号上海自然日预占额度，并由同一 reviewer/admin 的二次确认推进到本地 `queued`。这些能力不保存 OAuth 凭据、不调用外部渠道，也不得复用或修改历史 migration。
+- 仍待建设 Gmail OAuth 授权与受管加密 Token、X9 creator/mailbox 映射、验签 webhook 收据/防重放、来自真实入站的可靠线程引用、Gmail Delivery Worker，以及签名、幂等的 X9 发送审计回写。
+- 权限模型至少包含运营、审核、管理员；用户只能访问获授权部门的数据。身份集成边界已确定为 X9 在完成 Session 验证后提供短期签名断言；Agent 不接收 X9 Cookie、不读取 X9 数据库，真实 X9 签名断言出口与受管密钥尚未交付。
 - 部门码必须使用 PostgreSQL 中可重现的 ASCII slug（小写字母、数字、`-`、`_`）；迁移发现历史非 ASCII 或非法部门码时必须失败，不得依赖数据库 Unicode 大小写规则继续运行。
 - 消息正文、AI run 和普通审计默认保留 24 个月，可按部门配置；已确认 DNC 永久保留。
 

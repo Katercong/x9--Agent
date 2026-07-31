@@ -22,6 +22,7 @@ class Capability(str, Enum):
     RUN_ENQUEUE = "run:enqueue"
     RUN_RETRY = "run:retry"
     DNC_DECIDE = "dnc:decide"
+    DELIVERY_CONFIRM = "delivery:confirm"
     CREATOR_MANAGE = "creator:manage"
     CATALOG_MANAGE = "catalog:manage"
     SIMULATION_WRITE = "simulation:write"
@@ -42,6 +43,7 @@ _REVIEWER_CAPABILITIES = _OPERATOR_CAPABILITIES | frozenset(
         Capability.RUN_ENQUEUE,
         Capability.RUN_RETRY,
         Capability.DNC_DECIDE,
+        Capability.DELIVERY_CONFIRM,
     }
 )
 _ADMIN_CAPABILITIES = _REVIEWER_CAPABILITIES | frozenset(

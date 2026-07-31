@@ -447,6 +447,7 @@ def test_x9_signed_identity_resolves_local_principal_and_auth_me(monkeypatch: py
         "departments": [{"code": "cross_border", "role": "reviewer"}],
         "capabilities": [
             "catalog:read",
+            "delivery:confirm",
             "dnc:decide",
             "draft:export",
             "review:decide",

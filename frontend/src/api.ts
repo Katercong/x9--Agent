@@ -1,4 +1,18 @@
-import type { CurrentPrincipal, DeclineConfirmationResponse, DncConfirmationApproveResponse, DncConfirmationRejectResponse, DraftExportResponse, FailedReviewRetryResponse, ReviewDecisionResponse, ReviewFilter, ReviewItemDetail, ReviewQueueResponse } from "./types";
+import type {
+  CurrentPrincipal,
+  DeclineConfirmationResponse,
+  DncConfirmationApproveResponse,
+  DncConfirmationRejectResponse,
+  DraftExportResponse,
+  FailedReviewRetryResponse,
+  ManualDeliveryAccountListResponse,
+  ManualDeliveryConfirmationResponse,
+  ManualDeliveryRequestResponse,
+  ReviewDecisionResponse,
+  ReviewFilter,
+  ReviewItemDetail,
+  ReviewQueueResponse,
+} from "./types";
 
 const API_ROOT = "/api/followup-agent";
 
@@ -82,4 +96,25 @@ export function retryFailedReviewItem(replyId: string): Promise<FailedReviewRetr
     method: "POST",
     body: JSON.stringify({}),
   });
+}
+
+export function getManualDeliveryRequest(decisionId: string): Promise<ManualDeliveryRequestResponse> {
+  return request<ManualDeliveryRequestResponse>(`/review-decisions/${encodeURIComponent(decisionId)}/delivery-request`);
+}
+
+export function getMyManualDeliveryAccounts(): Promise<ManualDeliveryAccountListResponse> {
+  return request<ManualDeliveryAccountListResponse>("/manual-delivery-accounts/mine");
+}
+
+export function confirmManualDeliveryRequest(
+  decisionId: string,
+  deliveryAccountId: string,
+): Promise<ManualDeliveryConfirmationResponse> {
+  return request<ManualDeliveryConfirmationResponse>(
+    `/review-decisions/${encodeURIComponent(decisionId)}/delivery-confirmations`,
+    {
+      method: "POST",
+      body: JSON.stringify({ delivery_account_id: deliveryAccountId }),
+    },
+  );
 }

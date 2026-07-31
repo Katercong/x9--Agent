@@ -9,6 +9,7 @@ import {
   Input,
   List,
   Popconfirm,
+  Select,
   Skeleton,
   Space,
   Tag,
@@ -33,16 +34,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   approveDncConfirmation,
+  confirmManualDeliveryRequest,
   confirmDeclineReviewItem,
   createDraftExportRecord,
   getCurrentPrincipal,
+  getManualDeliveryRequest,
+  getMyManualDeliveryAccounts,
   getReviewItem,
   getReviewQueue,
   rejectDncConfirmation,
   retryFailedReviewItem,
   submitReviewDecision,
 } from "./api";
-import type { AgentRun, CurrentPrincipal, DepartmentRole, ReviewContext, ReviewFilter, ReviewQueueItem, ReviewType } from "./types";
+import type { AgentRun, CurrentPrincipal, DepartmentRole, ManualDeliveryStatus, ReviewContext, ReviewFilter, ReviewQueueItem, ReviewType } from "./types";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -99,6 +103,41 @@ const typeLabels: Record<ReviewType, string> = {
   dnc_confirmation: "DNC 待确认",
   dnc_blocked: "DNC 已阻断",
 };
+
+const manualDeliveryStatusLabels: Record<ManualDeliveryStatus, string> = {
+  pending_second_confirmation: "待二次确认投递",
+  queued: "已进入本地投递队列",
+  sending: "投递处理中",
+  sent: "已投递",
+  failed: "投递失败，需人工处理",
+  unknown: "投递结果未知，需人工核验",
+  expired: "二次确认已过期",
+  blocked_by_dnc: "DNC 已阻断投递",
+};
+
+function manualDeliveryStatusColor(status: ManualDeliveryStatus): string {
+  if (status === "queued" || status === "sent") return "success";
+  if (status === "sending") return "processing";
+  if (status === "failed" || status === "unknown" || status === "blocked_by_dnc") return "error";
+  if (status === "expired") return "warning";
+  return "gold";
+}
+
+function deliveryHasExpired(expiresAt: string | null, now: number): boolean {
+  if (!expiresAt) return false;
+  const expiresAtMs = new Date(expiresAt).getTime();
+  return Number.isFinite(expiresAtMs) && expiresAtMs <= now;
+}
+
+function deliveryExpiryText(expiresAt: string | null, now: number): string {
+  if (!expiresAt) return "未提供过期时间";
+  const remainingMs = new Date(expiresAt).getTime() - now;
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return "已过期";
+  const totalMinutes = Math.ceil(remainingMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours > 0 ? `约 ${hours} 小时 ${minutes} 分钟后过期` : `约 ${minutes} 分钟后过期`;
+}
 
 const suggestedActionLabels: Record<string, string> = {
   send_campaign_details: "整理合作资料，待人工确认",
@@ -330,6 +369,8 @@ export function OperatorWorkbench() {
   const [filter, setFilter] = useState<Exclude<ReviewFilter, "all">>("reply_ready");
   const [selectedReplyId, setSelectedReplyId] = useState<string>();
   const [draft, setDraft] = useState("");
+  const [selectedDeliveryAccountId, setSelectedDeliveryAccountId] = useState<string>();
+  const [deliveryNow, setDeliveryNow] = useState(() => Date.now());
   const [messageApi, messageContext] = message.useMessage();
   const queryClient = useQueryClient();
   const authQuery = useQuery({
@@ -449,6 +490,100 @@ export function OperatorWorkbench() {
   const canDeclineDecide = hasDepartmentRole(principal, currentDepartmentCode, "reviewer");
   const hasLockedDraft = Boolean(!dncBlocked && approvedDraft && detailItem?.decision?.outcome === "approve_draft" && detailItem.decision.final_draft);
   const canHandoff = hasLockedDraft && hasDepartmentRole(principal, currentDepartmentCode, "operator");
+  const lockedDecisionId = hasLockedDraft ? detailItem?.decision?.id : undefined;
+  const hasDeliveryConfirmationCapability = Boolean(
+    lockedDecisionId
+      && principal?.capabilities.includes("delivery:confirm")
+      && hasDepartmentRole(principal, currentDepartmentCode, "reviewer"),
+  );
+  const deliveryQuery = useQuery({
+    queryKey: ["manual-delivery-request", lockedDecisionId],
+    queryFn: () => getManualDeliveryRequest(lockedDecisionId!),
+    enabled: Boolean(lockedDecisionId && canReadReview),
+  });
+  const delivery = deliveryQuery.data?.delivery;
+  useEffect(() => {
+    if (delivery?.status !== "pending_second_confirmation" || !delivery.expires_at) return;
+
+    const refreshDeliveryNow = () => setDeliveryNow(Date.now());
+    refreshDeliveryNow();
+    const intervalId = window.setInterval(refreshDeliveryNow, 60_000);
+    return () => window.clearInterval(intervalId);
+  }, [delivery?.expires_at, delivery?.status]);
+
+  const deliveryExpired = Boolean(
+    delivery?.status === "pending_second_confirmation" && deliveryHasExpired(delivery.expires_at, deliveryNow),
+  );
+  const canConfirmThisDelivery = Boolean(
+    hasDeliveryConfirmationCapability
+      && delivery?.status === "pending_second_confirmation"
+      && delivery.approved_by_auth_user_id === principal?.user_id,
+  );
+  const deliveryAccountsQuery = useQuery({
+    queryKey: ["my-manual-delivery-accounts", currentDepartmentCode],
+    queryFn: getMyManualDeliveryAccounts,
+    enabled: Boolean(hasDeliveryConfirmationCapability && delivery?.status === "pending_second_confirmation"),
+  });
+  const deliveryAccounts = deliveryAccountsQuery.data?.items ?? [];
+  const eligibleDeliveryAccounts = deliveryAccounts.filter((account) => account.department_code === currentDepartmentCode);
+  const deliveryConfirmationMutation = useMutation({
+    mutationFn: ({ decisionId, deliveryAccountId }: { decisionId: string; deliveryAccountId: string }) => (
+      confirmManualDeliveryRequest(decisionId, deliveryAccountId)
+    ),
+    onSuccess: (response, variables) => {
+      messageApi.success(response.message);
+      void queryClient.invalidateQueries({ queryKey: ["manual-delivery-request", variables.decisionId] });
+      void queryClient.invalidateQueries({ queryKey: ["review-item"] });
+      void queryClient.invalidateQueries({ queryKey: ["review-queue"] });
+    },
+    onError: (error) => messageApi.error(error instanceof Error ? error.message : "二次确认投递失败；未发送任何消息。"),
+  });
+
+  useEffect(() => {
+    if (!canConfirmThisDelivery) {
+      setSelectedDeliveryAccountId(undefined);
+      return;
+    }
+    if (!eligibleDeliveryAccounts.some((account) => account.id === selectedDeliveryAccountId)) {
+      setSelectedDeliveryAccountId(eligibleDeliveryAccounts[0]?.id);
+    }
+  }, [canConfirmThisDelivery, eligibleDeliveryAccounts, selectedDeliveryAccountId]);
+
+  const snapshotHasReliableReferences = Boolean(
+    delivery?.snapshot_available
+      && delivery.snapshot?.recipient_email
+      && delivery.snapshot?.gmail_thread_id
+      && delivery.snapshot?.rfc_message_id
+      && delivery.snapshot?.references,
+  );
+  const quotaErrorForSelectedAccount = Boolean(
+    deliveryConfirmationMutation?.variables?.deliveryAccountId === selectedDeliveryAccountId
+      && deliveryConfirmationMutation.error instanceof Error
+      && /daily limit|额度/i.test(deliveryConfirmationMutation.error.message),
+  );
+  const deliveryConfirmationDisabledReason = !delivery
+    ? "正在读取本地投递单。"
+    : delivery.status !== "pending_second_confirmation"
+      ? `当前状态为“${manualDeliveryStatusLabels[delivery.status]}”，不能再次确认。`
+      : delivery.dnc_blocked
+        ? "DNC 已阻断该投递单。"
+        : deliveryExpired
+          ? "二次确认窗口已过期，不能进入投递队列。"
+        : !snapshotHasReliableReferences
+          ? "缺少锁定的收件人或可靠线程引用，不能进入投递队列。"
+          : !hasDeliveryConfirmationCapability
+            ? "当前身份没有二次确认投递权限。"
+            : delivery.approved_by_auth_user_id !== principal?.user_id
+              ? "只有锁定该草稿的审核人本人可以完成二次确认。"
+              : deliveryAccountsQuery.isLoading
+                ? "正在读取本人可用账号。"
+                : eligibleDeliveryAccounts.length === 0
+                  ? "当前部门没有你本人名下的启用投递账号。"
+                  : quotaErrorForSelectedAccount
+                    ? "所选账号今日投递额度已满，请选择另一个本人账号。"
+                    : !selectedDeliveryAccountId
+                      ? "请选择一个本人名下的投递账号。"
+                      : null;
   const conversation = useMemo(() => (detail ? buildTimeline(detail.context) : []), [detail]);
   const displayTitle = detailItem?.reply.subject || detailItem?.reply.body.slice(0, 72) || "选择一条待处理回复";
 
@@ -485,7 +620,7 @@ export function OperatorWorkbench() {
             </Space>
           )}
         </Space>
-        <Tag color="blue">仅复制 / 下载交接，不提供发送能力</Tag>
+        <Tag color="blue">二次确认仅进入本地投递队列，不调用 Gmail</Tag>
       </header>
 
       <main className="workbench-grid">
@@ -666,14 +801,113 @@ export function OperatorWorkbench() {
                       <Tag color="success">人工批准</Tag>
                     </Space>
                     <Paragraph className="locked-draft-content">{detailItem.decision.final_draft}</Paragraph>
-                    <Text type="secondary">复制或下载会记录审计快照；系统不会把此草稿发送到任何渠道。</Text>
+                    <Text type="secondary">复制或下载会记录交接审计快照；不会调用 Gmail 或任何外部渠道。</Text>
                     <Space wrap>
                       <Button disabled={!canHandoff} icon={<CopyOutlined />} loading={handoffMutation.isPending} onClick={() => handoffMutation.mutate({ action: "copy", content: detailItem.decision!.final_draft!, decisionId: detailItem.decision!.id })}>复制草稿</Button>
                       <Button disabled={!canHandoff} icon={<DownloadOutlined />} loading={handoffMutation.isPending} onClick={() => handoffMutation.mutate({ action: "download", content: detailItem.decision!.final_draft!, decisionId: detailItem.decision!.id })}>下载 .txt</Button>
-                      <Tooltip title="外部发送渠道尚未接入。请复制或下载草稿后，由 BD 在外部沟通工具中手动完成发送。">
-                        <span><Button disabled>发送（暂未接入）</Button></span>
-                      </Tooltip>
                     </Space>
+                    {deliveryQuery.isLoading && <Text type="secondary">正在读取本地投递二次确认信息…</Text>}
+                    {deliveryQuery.isError && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message="暂时无法读取本地投递单"
+                        description="草稿仍可复制或下载；当前不会发生任何外部发送。"
+                      />
+                    )}
+                    {delivery && (
+                      <Card className="manual-delivery-card" size="small">
+                        <Space direction="vertical" className="full-width" size="middle">
+                          <Space wrap>
+                            <SafetyCertificateOutlined className="manual-delivery-icon" />
+                            <Text strong>本地投递二次确认</Text>
+                            <Tag color={manualDeliveryStatusColor(delivery.status)}>{manualDeliveryStatusLabels[delivery.status]}</Tag>
+                          </Space>
+                          {delivery.dnc_blocked ? (
+                            <Alert type="error" showIcon message="DNC 已阻断投递" description="草稿、账号和线程快照均不会在此显示，也不能进入投递队列。" />
+                          ) : (
+                            <>
+                              <Descriptions className="manual-delivery-details" column={1} size="small">
+                                <Descriptions.Item label="收件人">{delivery.snapshot?.recipient_email || "缺失"}</Descriptions.Item>
+                                <Descriptions.Item label="主题">{delivery.snapshot?.subject || "缺失"}</Descriptions.Item>
+                                <Descriptions.Item label="Gmail 线程">{delivery.snapshot?.gmail_thread_id || "缺失"}</Descriptions.Item>
+                                <Descriptions.Item label="RFC 引用">{delivery.snapshot?.rfc_message_id || "缺失"}</Descriptions.Item>
+                                <Descriptions.Item label="确认窗口">{delivery.status === "pending_second_confirmation" ? deliveryExpiryText(delivery.expires_at, deliveryNow) : formatDate(delivery.expires_at)}</Descriptions.Item>
+                                <Descriptions.Item label="最早批准人">{delivery.approved_by_auth_user_id}</Descriptions.Item>
+                                {delivery.account && <Descriptions.Item label="已选账号">{delivery.account.display_name} · {delivery.account.email}</Descriptions.Item>}
+                                {delivery.second_confirmed_at && <Descriptions.Item label="二次确认时间">{formatDate(delivery.second_confirmed_at)}</Descriptions.Item>}
+                                {delivery.queued_at && <Descriptions.Item label="入队时间">{formatDate(delivery.queued_at)}</Descriptions.Item>}
+                                {delivery.sending_started_at && <Descriptions.Item label="开始投递时间">{formatDate(delivery.sending_started_at)}</Descriptions.Item>}
+                                {delivery.completed_at && <Descriptions.Item label="完成时间">{formatDate(delivery.completed_at)}</Descriptions.Item>}
+                              </Descriptions>
+                              {delivery.status === "pending_second_confirmation" && (
+                                <>
+                                  {deliveryExpired && (
+                                    <Alert type="warning" showIcon message="二次确认窗口已过期" description="该草稿不能再进入投递队列；当前版本不会调用 Gmail 或其他外部渠道。" />
+                                  )}
+                                  {!snapshotHasReliableReferences && (
+                                    <Alert type="warning" showIcon message="缺少可靠线程引用" description="该草稿缺少锁定的收件人、Gmail 线程或 RFC 引用，按规则不能进入投递队列。" />
+                                  )}
+                                  {!hasDeliveryConfirmationCapability && (
+                                    <Alert type="info" showIcon message="当前身份仅可查看" description="二次确认需要该部门 reviewer 或 admin 的 delivery:confirm 权限。" />
+                                  )}
+                                  {hasDeliveryConfirmationCapability && delivery.approved_by_auth_user_id !== principal?.user_id && (
+                                    <Alert type="info" showIcon message="需要原审核人二次确认" description="只有锁定这份草稿的 reviewer/admin 本人可以选择其账号并确认投递。" />
+                                  )}
+                                  {canConfirmThisDelivery && (
+                                    <Space direction="vertical" className="full-width" size="small">
+                                      <Text strong>选择本人名下的投递账号</Text>
+                                      <Select
+                                        aria-label="本人投递账号"
+                                        disabled={Boolean(deliveryConfirmationDisabledReason)}
+                                        options={eligibleDeliveryAccounts.map((account) => ({
+                                          label: `${account.display_name} · ${account.email}`,
+                                          value: account.id,
+                                        }))}
+                                        placeholder="选择本人账号"
+                                        value={selectedDeliveryAccountId}
+                                        onChange={setSelectedDeliveryAccountId}
+                                      />
+                                      <Tooltip title={deliveryConfirmationDisabledReason || "仅写入本地 Outbox 队列；当前不会调用 Gmail。"}>
+                                        <span>
+                                          <Popconfirm
+                                            cancelText="取消"
+                                            description="该操作只预占本地额度并进入投递队列；当前版本不会调用 Gmail 或其他外部渠道。"
+                                            disabled={Boolean(deliveryConfirmationDisabledReason)}
+                                            okText="确认入队"
+                                            title="确认进入本地投递队列？"
+                                            onConfirm={() => {
+                                              if (selectedDeliveryAccountId) {
+                                                deliveryConfirmationMutation.mutate({
+                                                  decisionId: detailItem.decision!.id,
+                                                  deliveryAccountId: selectedDeliveryAccountId,
+                                                });
+                                              }
+                                            }}
+                                          >
+                                            <Button
+                                              type="primary"
+                                              disabled={Boolean(deliveryConfirmationDisabledReason)}
+                                              loading={deliveryConfirmationMutation.isPending}
+                                            >
+                                              确认进入投递队列
+                                            </Button>
+                                          </Popconfirm>
+                                        </span>
+                                      </Tooltip>
+                                      {deliveryConfirmationDisabledReason && <Text type="secondary">{deliveryConfirmationDisabledReason}</Text>}
+                                    </Space>
+                                  )}
+                                </>
+                              )}
+                              {delivery.status !== "pending_second_confirmation" && (
+                                <Text type="secondary">投递状态和审计时间仅供追踪；此界面不会调用 Gmail，也不提供外部发送按钮。</Text>
+                              )}
+                            </>
+                          )}
+                        </Space>
+                      </Card>
+                    )}
                   </Space>
                 </Card>
               )}
