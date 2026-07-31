@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConfigProvider } from "antd";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OperatorWorkbench } from "./OperatorWorkbench";
@@ -259,6 +259,7 @@ describe("OperatorWorkbench", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     cleanup();
     vi.unstubAllGlobals();
   });
@@ -448,6 +449,36 @@ describe("OperatorWorkbench", () => {
     expect(fetchMock.mock.calls.some(([url]) => /gmail|send/i.test(String(url)))).toBe(false);
   });
 
+  it("shows the minimum audit start time while a local delivery is sending", async () => {
+    const sendingStartedAt = "2026-07-22T12:06:00";
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 1, items: [approvedDraftItem] });
+      if (url.includes("/review-items/reply_approved")) return jsonResponse(detailFor(approvedDraftItem));
+      if (url.endsWith("/review-decisions/decision_approved/delivery-request")) {
+        return jsonResponse(manualDeliveryResponse({
+          status: "sending",
+          stored_status: "sending",
+          account: ownDeliveryAccount,
+          second_confirmed_by_auth_user_id: "auth_user_demo_admin",
+          second_confirmed_at: "2026-07-22T12:05:00",
+          queued_at: "2026-07-22T12:05:00",
+          sending_started_at: sendingStartedAt,
+          quota_reserved: true,
+          quota_reservation_date: "2026-07-22",
+        }));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderWorkbench();
+
+    expect(await screen.findByText("投递处理中")).toBeInTheDocument();
+    expect(screen.getByText("开始投递时间")).toBeInTheDocument();
+    expect(screen.getByText(new Date(sendingStartedAt).toLocaleString("zh-CN", { hour12: false }))).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "确认进入投递队列" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => /gmail|send/i.test(String(url)))).toBe(false);
+  });
+
   it("disables local queue confirmation when the locked snapshot lacks reliable thread references", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -464,6 +495,34 @@ describe("OperatorWorkbench", () => {
     renderWorkbench();
 
     expect(await screen.findByText("缺少可靠线程引用")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认进入投递队列" })).toBeDisabled();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("delivery-confirmations"))).toBe(false);
+  });
+
+  it("refreshes second-confirmation expiry at minute intervals and disables local queue confirmation", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2099-07-30T12:00:00.000Z"));
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("review_type=reply_ready")) return jsonResponse({ ok: true, total: 1, items: [approvedDraftItem] });
+      if (url.includes("/review-items/reply_approved")) return jsonResponse(detailFor(approvedDraftItem));
+      if (url.endsWith("/manual-delivery-accounts/mine")) return jsonResponse({ items: [ownDeliveryAccount] });
+      if (url.endsWith("/review-decisions/decision_approved/delivery-request")) {
+        return jsonResponse(manualDeliveryResponse({ expires_at: "2099-07-30T12:00:30.000Z" }));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderWorkbench();
+
+    const queueButton = await screen.findByRole("button", { name: "确认进入投递队列" });
+    await waitFor(() => expect(queueButton).toBeEnabled());
+    expect(screen.getByText("约 1 分钟后过期")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(await screen.findByText("二次确认窗口已过期")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "确认进入投递队列" })).toBeDisabled();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("delivery-confirmations"))).toBe(false);
   });

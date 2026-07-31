@@ -123,9 +123,15 @@ function manualDeliveryStatusColor(status: ManualDeliveryStatus): string {
   return "gold";
 }
 
-function deliveryExpiryText(expiresAt: string | null): string {
+function deliveryHasExpired(expiresAt: string | null, now: number): boolean {
+  if (!expiresAt) return false;
+  const expiresAtMs = new Date(expiresAt).getTime();
+  return Number.isFinite(expiresAtMs) && expiresAtMs <= now;
+}
+
+function deliveryExpiryText(expiresAt: string | null, now: number): string {
   if (!expiresAt) return "未提供过期时间";
-  const remainingMs = new Date(expiresAt).getTime() - Date.now();
+  const remainingMs = new Date(expiresAt).getTime() - now;
   if (!Number.isFinite(remainingMs) || remainingMs <= 0) return "已过期";
   const totalMinutes = Math.ceil(remainingMs / 60_000);
   const hours = Math.floor(totalMinutes / 60);
@@ -364,6 +370,7 @@ export function OperatorWorkbench() {
   const [selectedReplyId, setSelectedReplyId] = useState<string>();
   const [draft, setDraft] = useState("");
   const [selectedDeliveryAccountId, setSelectedDeliveryAccountId] = useState<string>();
+  const [deliveryNow, setDeliveryNow] = useState(() => Date.now());
   const [messageApi, messageContext] = message.useMessage();
   const queryClient = useQueryClient();
   const authQuery = useQuery({
@@ -495,6 +502,18 @@ export function OperatorWorkbench() {
     enabled: Boolean(lockedDecisionId && canReadReview),
   });
   const delivery = deliveryQuery.data?.delivery;
+  useEffect(() => {
+    if (delivery?.status !== "pending_second_confirmation" || !delivery.expires_at) return;
+
+    const refreshDeliveryNow = () => setDeliveryNow(Date.now());
+    refreshDeliveryNow();
+    const intervalId = window.setInterval(refreshDeliveryNow, 60_000);
+    return () => window.clearInterval(intervalId);
+  }, [delivery?.expires_at, delivery?.status]);
+
+  const deliveryExpired = Boolean(
+    delivery?.status === "pending_second_confirmation" && deliveryHasExpired(delivery.expires_at, deliveryNow),
+  );
   const canConfirmThisDelivery = Boolean(
     hasDeliveryConfirmationCapability
       && delivery?.status === "pending_second_confirmation"
@@ -548,6 +567,8 @@ export function OperatorWorkbench() {
       ? `当前状态为“${manualDeliveryStatusLabels[delivery.status]}”，不能再次确认。`
       : delivery.dnc_blocked
         ? "DNC 已阻断该投递单。"
+        : deliveryExpired
+          ? "二次确认窗口已过期，不能进入投递队列。"
         : !snapshotHasReliableReferences
           ? "缺少锁定的收件人或可靠线程引用，不能进入投递队列。"
           : !hasDeliveryConfirmationCapability
@@ -811,15 +832,19 @@ export function OperatorWorkbench() {
                                 <Descriptions.Item label="主题">{delivery.snapshot?.subject || "缺失"}</Descriptions.Item>
                                 <Descriptions.Item label="Gmail 线程">{delivery.snapshot?.gmail_thread_id || "缺失"}</Descriptions.Item>
                                 <Descriptions.Item label="RFC 引用">{delivery.snapshot?.rfc_message_id || "缺失"}</Descriptions.Item>
-                                <Descriptions.Item label="确认窗口">{delivery.status === "pending_second_confirmation" ? deliveryExpiryText(delivery.expires_at) : formatDate(delivery.expires_at)}</Descriptions.Item>
+                                <Descriptions.Item label="确认窗口">{delivery.status === "pending_second_confirmation" ? deliveryExpiryText(delivery.expires_at, deliveryNow) : formatDate(delivery.expires_at)}</Descriptions.Item>
                                 <Descriptions.Item label="最早批准人">{delivery.approved_by_auth_user_id}</Descriptions.Item>
                                 {delivery.account && <Descriptions.Item label="已选账号">{delivery.account.display_name} · {delivery.account.email}</Descriptions.Item>}
                                 {delivery.second_confirmed_at && <Descriptions.Item label="二次确认时间">{formatDate(delivery.second_confirmed_at)}</Descriptions.Item>}
                                 {delivery.queued_at && <Descriptions.Item label="入队时间">{formatDate(delivery.queued_at)}</Descriptions.Item>}
+                                {delivery.sending_started_at && <Descriptions.Item label="开始投递时间">{formatDate(delivery.sending_started_at)}</Descriptions.Item>}
                                 {delivery.completed_at && <Descriptions.Item label="完成时间">{formatDate(delivery.completed_at)}</Descriptions.Item>}
                               </Descriptions>
                               {delivery.status === "pending_second_confirmation" && (
                                 <>
+                                  {deliveryExpired && (
+                                    <Alert type="warning" showIcon message="二次确认窗口已过期" description="该草稿不能再进入投递队列；当前版本不会调用 Gmail 或其他外部渠道。" />
+                                  )}
                                   {!snapshotHasReliableReferences && (
                                     <Alert type="warning" showIcon message="缺少可靠线程引用" description="该草稿缺少锁定的收件人、Gmail 线程或 RFC 引用，按规则不能进入投递队列。" />
                                   )}
